@@ -1,0 +1,76 @@
+{
+  "artifact_sha256": {
+    "fixtures/valid/canonical-tensor.content-id": "26053941d8cd73fd0e0650447bfab1c9e22afaab8eae814cf8876c7b6da177ae",
+    "fixtures/valid/canonical-tensor.json": "2ba56e1485fe3d3d1b271184d66bf6a6bb7389985928681e497e2954c8d1562a",
+    "schema/abir-semantic-v1.schema.json": "cf625a20408fb9fad009431e7081ffd90aa99ac600259a131453a46dc077d76d",
+    "spec/semantic-v1.manifest.json": "8c5ce914c7cd813312123694d9cb761e85188cf9c2c08639a5342581165999b6"
+  },
+  "collected_at": "2026-07-20T21:15:58.950769+00:00",
+  "commands": [
+    "ABIR_BENCH_ITERS=100000 cargo run -q -p abir-conformance --release --bin measure_semantic_core",
+    "/tmp/abir-venv-20260720a/bin/python -c <import-timer>",
+    "/tmp/abir-venv-20260720a/bin/python -c <zero-copy-probe>"
+  ],
+  "host": {
+    "machine": "x86_64",
+    "platform": "Linux-7.1.3-2-cachyos-x86_64-with-glibc2.43",
+    "python": "Python 3.14.6",
+    "rustc": "rustc 1.81.0 (eeb90cda1 2024-09-04)"
+  },
+  "python": {
+    "import_seconds": {
+      "maximum": 0.0014587719924747944,
+      "mean": 0.0009554765827488154,
+      "samples": [
+        0.0007191600161604583,
+        0.0014587719924747944,
+        0.0013454349827952683,
+        0.0010713429655879736,
+        0.0012553779524751008,
+        0.0009165419614873827,
+        0.0008875110070221126,
+        0.0006821889546699822,
+        0.0007169129676185548,
+        0.0005015230271965265
+      ]
+    },
+    "zero_copy": {
+      "content_id": "20386a5e09c2e607e332c73cbc8cdfca61c54ebb01a457b3f1681752fb81f9e4",
+      "dtype": "int16",
+      "pointer_identity": true,
+      "shape": [
+        4
+      ]
+    }
+  },
+  "regression_policy": {
+    "performance_ceiling": "trusted-baseline-only-until-multi-host-samples",
+    "structural_limits": "enforced-now"
+  },
+  "revision": "8861bac12d9b36cea12d24d94185c40f70d370d7",
+  "rust": {
+    "iterations": 100000,
+    "logical_hash": {
+      "hashes_per_second": 101102.22505119728,
+      "seconds": 0.989097915
+    },
+    "metadata": {
+      "canonical_debug_bytes": 1173,
+      "note": "Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist.",
+      "root_inline_bytes": 304
+    },
+    "schema_version": 1,
+    "validation": {
+      "datasets_per_second": 1600025.4724055205,
+      "seconds": 0.062499005
+    },
+    "view": {
+      "nanoseconds_per_lease": 11.25767,
+      "pointer_identity": true,
+      "seconds": 0.001125767
+    }
+  },
+  "schema_version": 1,
+  "stage": "semantic-core",
+  "status": "BASELINE"
+}
