@@ -103,7 +103,7 @@
         { "type": "object", "additionalProperties": false, "required": ["kind", "device_id", "sensor_id"], "properties": { "kind": { "const": "device-sensor" }, "device_id": { "$ref": "#/$defs/object_id" }, "sensor_id": { "$ref": "#/$defs/object_id" } } },
         { "type": "object", "additionalProperties": false, "required": ["kind", "sensor_id", "channel_id"], "properties": { "kind": { "const": "sensor-channel" }, "sensor_id": { "$ref": "#/$defs/object_id" }, "channel_id": { "$ref": "#/$defs/object_id" } } },
         { "type": "object", "additionalProperties": false, "required": ["kind", "acquisition_id", "recording_id"], "properties": { "kind": { "const": "acquisition-recording" }, "acquisition_id": { "$ref": "#/$defs/object_id" }, "recording_id": { "$ref": "#/$defs/object_id" } } },
-        { "type": "object", "additionalProperties": false, "required": ["kind", "channel_id", "basis_id", "position"], "properties": { "kind": { "const": "channel-basis-member" }, "channel_id": { "$ref": "#/$defs/object_id" }, "basis_id": { "$ref": "#/$defs/object_id" }, "position": { "type": "integer", "minimum": 0 } } }
+        { "type": "object", "additionalProperties": false, "required": ["kind", "channel_id", "basis_id", "position"], "properties": { "kind": { "const": "channel-basis-member" }, "channel_id": { "$ref": "#/$defs/object_id" }, "basis_id": { "$ref": "#/$defs/object_id" }, "position": { "type": "integer", "minimum": 0, "maximum": 4294967295 } } }
       ]
     },
     "recording": {
@@ -133,7 +133,7 @@
       "required": ["content_id", "logical_bytes", "element", "byte_order", "layout", "shape", "encoding", "media_type"],
       "properties": {
         "content_id": { "$ref": "#/$defs/content_id" },
-        "logical_bytes": { "type": "integer", "minimum": 0 },
+        "logical_bytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
         "element": { "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"] },
         "byte_order": { "enum": ["little", "big", "not-applicable"] },
         "layout": {
@@ -143,14 +143,14 @@
               "type": "object", "additionalProperties": false, "required": ["ragged"],
               "properties": { "ragged": {
                 "type": "object", "additionalProperties": false, "required": ["rows", "offsets"],
-                "properties": { "rows": { "type": "integer", "minimum": 1 }, "offsets": { "$ref": "#/$defs/content_id" } }
+                "properties": { "rows": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "offsets": { "$ref": "#/$defs/content_id" } }
               } }
             },
             {
               "type": "object", "additionalProperties": false, "required": ["sparse-coo"],
               "properties": { "sparse-coo": {
                 "type": "object", "additionalProperties": false, "required": ["nonzero", "indices"],
-                "properties": { "nonzero": { "type": "integer", "minimum": 0 }, "indices": { "$ref": "#/$defs/content_id" } }
+                "properties": { "nonzero": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }, "indices": { "$ref": "#/$defs/content_id" } }
               } }
             },
             {
@@ -158,7 +158,7 @@
               "properties": { "sparse-csr": {
                 "type": "object", "additionalProperties": false, "required": ["nonzero", "indptr", "indices"],
                 "properties": {
-                  "nonzero": { "type": "integer", "minimum": 0 },
+                  "nonzero": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
                   "indptr": { "$ref": "#/$defs/content_id" },
                   "indices": { "$ref": "#/$defs/content_id" }
                 }
@@ -169,7 +169,7 @@
               "properties": { "bfp": {
                 "type": "object", "additionalProperties": false, "required": ["block_len", "mantissa_bits", "scales"],
                 "properties": {
-                  "block_len": { "type": "integer", "minimum": 1 },
+                  "block_len": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
                   "mantissa_bits": { "type": "integer", "minimum": 1, "maximum": 32 },
                   "scales": { "$ref": "#/$defs/content_id" }
                 }
@@ -177,7 +177,7 @@
             }
           ]
         },
-        "shape": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "shape": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 } },
         "encoding": { "oneOf": [{ "$ref": "#/$defs/concept" }, { "type": "null" }] },
         "media_type": { "oneOf": [{ "type": "string", "pattern": "^[^/\\s]+/[^\\s]+$" }, { "type": "null" }] }
       }
@@ -196,7 +196,7 @@
       "required": ["semantic", "extent"],
       "properties": {
         "semantic": { "$ref": "#/$defs/concept" },
-        "extent": { "type": "integer", "minimum": 1 }
+        "extent": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
       }
     },
     "decoded_semantics": {
@@ -205,7 +205,7 @@
       "properties": {
         "atom_kind": { "$ref": "#/$defs/concept" },
         "element": { "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"] },
-        "shape": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 } }
+        "shape": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
       }
     },
     "blob_integrity": {
@@ -254,7 +254,7 @@
       "properties": {
         "start": { "$ref": "#/$defs/rational" },
         "rate": { "$ref": "#/$defs/rational" },
-        "samples": { "type": "integer", "minimum": 1 }
+        "samples": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
       }
     },
     "time_axis": {
@@ -273,7 +273,7 @@
             "type": "object", "additionalProperties": false, "required": ["timestamps", "count"],
             "properties": {
               "timestamps": { "$ref": "#/$defs/content_id" },
-              "count": { "type": "integer", "minimum": 1 }
+              "count": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
             }
           } }
         }

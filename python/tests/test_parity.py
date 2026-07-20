@@ -138,3 +138,11 @@ def test_schema_rejects_contradictory_atom_fields_and_empty_rational():
     fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
     del fixture["clocks"][0]["rate"]
     assert list(validator.iter_errors(fixture))
+
+    fixture = json.loads((ROOT / "fixtures/valid/semantic-matrix.json").read_text())
+    fixture["source_relationships"][-1]["position"] = 2**32
+    assert list(validator.iter_errors(fixture))
+
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+    fixture["atoms"][0]["payload"]["logical_bytes"] = 2**64
+    assert list(validator.iter_errors(fixture))

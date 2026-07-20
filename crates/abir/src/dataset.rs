@@ -1343,6 +1343,81 @@ fn is_integer(element: crate::ElementType) -> bool {
 macro_rules! metadata_bytes {
     ($draft:expr) => {{
         let draft = $draft;
+        let mut variable_metadata_bytes = 0_usize;
+        let mut retain = |count: usize, width: usize| {
+            variable_metadata_bytes =
+                variable_metadata_bytes.checked_add(count.checked_mul(width)?)?;
+            Some(())
+        };
+        for value in &draft.subjects {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for value in &draft.patients {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for value in &draft.sessions {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for value in &draft.acquisitions {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for value in &draft.devices {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for value in &draft.sensors {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for value in &draft.channels {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for value in &draft.concept_dictionaries {
+            retain(value.source_keys().len(), 48)?;
+        }
+        for recording in &draft.recordings {
+            retain(recording.streams().len(), 16)?;
+            retain(recording.source_keys().len(), 48)?;
+        }
+        for stream in &draft.streams {
+            retain(stream.atoms().len(), 16)?;
+        }
+        for atom in &draft.atoms {
+            if let Some(payload) = atom.payload() {
+                retain(payload.shape().len(), 8)?;
+            }
+            match atom {
+                Atom::SignalBlock(block) => {
+                    if let TimeAxis::Piecewise(segments) = block.time_axis() {
+                        retain(segments.len(), 48)?;
+                    }
+                }
+                Atom::TemporalTable(table) => retain(table.columns().len(), 32)?,
+                Atom::Table(table) => retain(table.columns().len(), 32)?,
+                Atom::Tensor(tensor) => retain(tensor.axes().len(), 32)?,
+                Atom::EncodedBlock(block) => {
+                    retain(block.decoded_semantics().shape().len(), 8)?;
+                }
+                Atom::BlobRef(_) => {}
+            }
+        }
+        for frame in &draft.coordinate_frames {
+            if frame.transform().is_some() {
+                retain(16, 32)?;
+            }
+        }
+        retain(draft.frame_transforms.len().checked_mul(16)?, 32)?;
+        for basis in &draft.channel_bases {
+            retain(basis.channels().len(), 80)?;
+            for channel in basis.channels() {
+                retain(channel.source_keys().len(), 48)?;
+            }
+        }
+        for policy in &draft.policies {
+            retain(policy.restrictions().len(), 24)?;
+        }
+        for derivation in &draft.derivations {
+            retain(derivation.inputs().len(), 32)?;
+            retain(derivation.outputs().len(), 32)?;
+        }
         let mut bytes = 0_usize;
         let mut add = |value: usize| {
             bytes = bytes.checked_add(value)?;
@@ -1507,6 +1582,7 @@ macro_rules! metadata_bytes {
         .into_iter()
         .try_fold(0_usize, usize::checked_add)?;
         add(record_count.checked_mul(64)?)?;
+        add(variable_metadata_bytes)?;
         Some(bytes)
     }};
 }

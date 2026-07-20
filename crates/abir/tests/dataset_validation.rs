@@ -99,6 +99,44 @@ fn valid_mixed_rate_dataset_becomes_immutable_root() {
 }
 
 #[test]
+fn metadata_limit_counts_repeated_reference_storage() {
+    let recording_id = id::<RecordingTag>(2);
+    let stream_id = id::<StreamTag>(3);
+    let atom_id = id::<AtomTag>(4);
+    let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
+    draft.add_recording(Recording::new(recording_id, vec![stream_id]));
+    draft.add_stream(Stream::new(
+        stream_id,
+        recording_id,
+        ConceptId::new("abir:modality/eeg").unwrap(),
+        vec![atom_id; 1_024],
+        None,
+        None,
+        None,
+    ));
+    draft.add_atom(Atom::Table(Table::new(
+        atom_id,
+        Presence::AbsentAtSource,
+        None,
+        vec![TableColumn::new(
+            ConceptId::new("abir:column/value").unwrap(),
+            ElementType::I16,
+            false,
+        )],
+    )));
+
+    let report = draft
+        .validate(ValidationLimits {
+            max_metadata_bytes: 4_096,
+            ..ValidationLimits::default()
+        })
+        .unwrap_err();
+    assert!(report.failures().iter().any(|failure| {
+        failure.failure_code() == FailureCode::StructuralLimit && failure.path() == "metadata_bytes"
+    }));
+}
+
+#[test]
 fn invalid_time_segments_are_unconstructible() {
     assert!(TimeSegment::new(
         Rational::new(0, 1).unwrap(),
