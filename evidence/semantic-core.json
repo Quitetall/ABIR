@@ -1,15 +1,17 @@
 {
   "artifact_sha256": {
-    "fixtures/valid/canonical-tensor.content-id": "26053941d8cd73fd0e0650447bfab1c9e22afaab8eae814cf8876c7b6da177ae",
-    "fixtures/valid/canonical-tensor.json": "2ba56e1485fe3d3d1b271184d66bf6a6bb7389985928681e497e2954c8d1562a",
-    "schema/abir-semantic-v1.schema.json": "cf625a20408fb9fad009431e7081ffd90aa99ac600259a131453a46dc077d76d",
-    "spec/semantic-v1.manifest.json": "8c5ce914c7cd813312123694d9cb761e85188cf9c2c08639a5342581165999b6"
+    "fixtures/valid/canonical-tensor.content-id": "6c1c8db2383f5b86f44be4edb15fd7d0a5f13579bd29ff35ee3bb1f2b5ead98c",
+    "fixtures/valid/canonical-tensor.json": "14a559ecfd31c9ad06053f0703da778c2a910b36b3b53048f7be26b34f638f85",
+    "fixtures/valid/semantic-matrix.content-id": "2ae21ce92bda23e719744489d3f2304c82eb980d43f1026851b2e2f5310c4667",
+    "fixtures/valid/semantic-matrix.json": "c5512d106382b5e4d1143c3ef05ed8b8af2ba0f1487fcad24738033f5360709c",
+    "schema/abir-semantic-v1.schema.json": "1b163fc106b93a48af7403a2f6bcd8ca0d3bbc88313dc524e8e13c96388fb950",
+    "spec/semantic-v1.manifest.json": "8d7b39832eaa2c8fd8bdee39bc399e42a5c68a2630d3b0c451d39c7a9888149e"
   },
-  "collected_at": "2026-07-20T21:15:58.950769+00:00",
+  "collected_at": "2026-07-20T22:38:36.980333+00:00",
   "commands": [
     "ABIR_BENCH_ITERS=100000 cargo run -q -p abir-conformance --release --bin measure_semantic_core",
-    "/tmp/abir-venv-20260720a/bin/python -c <import-timer>",
-    "/tmp/abir-venv-20260720a/bin/python -c <zero-copy-probe>"
+    "/tmp/abir-semantic-venv-0140/bin/python -c <import-timer>",
+    "/tmp/abir-semantic-venv-0140/bin/python -c <zero-copy-probe>"
   ],
   "host": {
     "machine": "x86_64",
@@ -19,23 +21,23 @@
   },
   "python": {
     "import_seconds": {
-      "maximum": 0.0014587719924747944,
-      "mean": 0.0009554765827488154,
+      "maximum": 0.0015573569689877331,
+      "mean": 0.0010510458960197866,
       "samples": [
-        0.0007191600161604583,
-        0.0014587719924747944,
-        0.0013454349827952683,
-        0.0010713429655879736,
-        0.0012553779524751008,
-        0.0009165419614873827,
-        0.0008875110070221126,
-        0.0006821889546699822,
-        0.0007169129676185548,
-        0.0005015230271965265
+        0.0013805999769829214,
+        0.0005852429894730449,
+        0.0012865560129284859,
+        0.0008710779948160052,
+        0.000827640003990382,
+        0.0015573569689877331,
+        0.0010593230254016817,
+        0.0008933449862524867,
+        0.0007652560016140342,
+        0.001284060999751091
       ]
     },
     "zero_copy": {
-      "content_id": "20386a5e09c2e607e332c73cbc8cdfca61c54ebb01a457b3f1681752fb81f9e4",
+      "content_id": "6f8244472204b5ed25ebd67a1abd88e24f2addd6b152bb1857b27b78e7d02ebe",
       "dtype": "int16",
       "pointer_identity": true,
       "shape": [
@@ -47,27 +49,27 @@
     "performance_ceiling": "trusted-baseline-only-until-multi-host-samples",
     "structural_limits": "enforced-now"
   },
-  "revision": "8861bac12d9b36cea12d24d94185c40f70d370d7",
+  "revision": "7a7432b240b0266fa933f62655c4d876b14871fb",
   "rust": {
     "iterations": 100000,
     "logical_hash": {
-      "hashes_per_second": 101102.22505119728,
-      "seconds": 0.989097915
+      "hashes_per_second": 87058.7010982483,
+      "seconds": 1.148650264
     },
     "metadata": {
-      "canonical_debug_bytes": 1173,
+      "canonical_debug_bytes": 1419,
       "note": "Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist.",
-      "root_inline_bytes": 304
+      "root_inline_bytes": 616
     },
     "schema_version": 1,
     "validation": {
-      "datasets_per_second": 1600025.4724055205,
-      "seconds": 0.062499005
+      "datasets_per_second": 1559634.7316742803,
+      "seconds": 0.064117577
     },
     "view": {
-      "nanoseconds_per_lease": 11.25767,
+      "nanoseconds_per_lease": 8.30163,
       "pointer_identity": true,
-      "seconds": 0.001125767
+      "seconds": 0.000830163
     }
   },
   "schema_version": 1,
