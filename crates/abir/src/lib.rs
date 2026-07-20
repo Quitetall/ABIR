@@ -14,6 +14,8 @@ mod dataset;
 mod exact;
 #[cfg(feature = "alloc")]
 mod failure;
+#[cfg(feature = "alloc")]
+mod governance;
 mod id;
 mod limits;
 #[cfg(feature = "alloc")]
@@ -36,9 +38,14 @@ pub use dataset::{AbirDataset, DatasetDraft};
 pub use exact::{ExactNumber, Rational, RationalError};
 #[cfg(feature = "alloc")]
 pub use failure::{FailureCode, Severity, ValidationFailure, ValidationReport};
+#[cfg(feature = "alloc")]
+pub use governance::{
+    Derivation, ExecutionRecord, Fidelity, FidelityKind, Policy, Proof, SourceCapsule,
+};
 pub use id::{
     AtomTag, ChannelBasisTag, ClockTag, ContentId, CoordinateFrameTag, DatasetTag, DerivationTag,
-    Handle, ObjectId, PolicyTag, ProofTag, RecordingTag, StorageId, StreamTag,
+    Handle, ObjectId, ObjectKind, PolicyTag, ProofTag, RecordingTag, SemanticRef, SemanticTag,
+    StorageId, StreamTag,
 };
 pub use limits::ValidationLimits;
 #[cfg(feature = "alloc")]

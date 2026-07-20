@@ -93,6 +93,9 @@ impl Stream {
     pub const fn policy_id(&self) -> Option<ObjectId<PolicyTag>> {
         self.policy_id
     }
+    pub fn set_policy_id(&mut self, policy_id: Option<ObjectId<PolicyTag>>) {
+        self.policy_id = policy_id;
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,6 +1,7 @@
 use crate::{
-    Atom, ChannelBasis, Clock, ContentId, CoordinateFrame, DatasetTag, FailureCode, ObjectId,
-    Recording, Stream, ValidationFailure, ValidationLimits, ValidationReport,
+    Atom, ChannelBasis, Clock, ContentId, CoordinateFrame, DatasetTag, Derivation, ExecutionRecord,
+    FailureCode, Fidelity, FidelityKind, ObjectId, ObjectKind, Policy, Proof, Recording,
+    SemanticRef, SourceCapsule, Stream, ValidationFailure, ValidationLimits, ValidationReport,
 };
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -15,6 +16,12 @@ pub struct DatasetDraft {
     clocks: Vec<Clock>,
     coordinate_frames: Vec<CoordinateFrame>,
     channel_bases: Vec<ChannelBasis>,
+    policies: Vec<Policy>,
+    proofs: Vec<Proof>,
+    derivations: Vec<Derivation>,
+    fidelity: Vec<Fidelity>,
+    source_capsules: Vec<SourceCapsule>,
+    observed_execution: Vec<ExecutionRecord>,
 }
 
 impl DatasetDraft {
@@ -27,6 +34,12 @@ impl DatasetDraft {
             clocks: Vec::new(),
             coordinate_frames: Vec::new(),
             channel_bases: Vec::new(),
+            policies: Vec::new(),
+            proofs: Vec::new(),
+            derivations: Vec::new(),
+            fidelity: Vec::new(),
+            source_capsules: Vec::new(),
+            observed_execution: Vec::new(),
         }
     }
 
@@ -47,6 +60,24 @@ impl DatasetDraft {
     }
     pub fn add_channel_basis(&mut self, value: ChannelBasis) {
         self.channel_bases.push(value);
+    }
+    pub fn add_policy(&mut self, value: Policy) {
+        self.policies.push(value);
+    }
+    pub fn add_proof(&mut self, value: Proof) {
+        self.proofs.push(value);
+    }
+    pub fn add_derivation(&mut self, value: Derivation) {
+        self.derivations.push(value);
+    }
+    pub fn add_fidelity(&mut self, value: Fidelity) {
+        self.fidelity.push(value);
+    }
+    pub fn add_source_capsule(&mut self, value: SourceCapsule) {
+        self.source_capsules.push(value);
+    }
+    pub fn add_observed_execution(&mut self, value: ExecutionRecord) {
+        self.observed_execution.push(value);
     }
     pub fn recordings(&self) -> &[Recording] {
         &self.recordings
@@ -103,6 +134,17 @@ impl DatasetDraft {
             &mut report,
             self.channel_bases.iter().map(ChannelBasis::id),
             "channel_bases",
+        );
+        let policy_ids = unique_ids(
+            &mut report,
+            self.policies.iter().map(Policy::id),
+            "policies",
+        );
+        let _proof_ids = unique_ids(&mut report, self.proofs.iter().map(Proof::id), "proofs");
+        let _derivation_ids = unique_ids(
+            &mut report,
+            self.derivations.iter().map(Derivation::id),
+            "derivations",
         );
 
         for (index, recording) in self.recordings.iter().enumerate() {
@@ -176,6 +218,18 @@ impl DatasetDraft {
                             format!("streams[{index}].channel_basis_id"),
                         )
                         .with_related_object(basis_id.to_bytes()),
+                    );
+                }
+            }
+            if let Some(policy_id) = stream.policy_id() {
+                if !policy_ids.contains(&policy_id) {
+                    push(
+                        &mut report,
+                        ValidationFailure::error(
+                            FailureCode::DanglingReference,
+                            format!("streams[{index}].policy_id"),
+                        )
+                        .with_related_object(policy_id.to_bytes()),
                     );
                 }
             }
@@ -272,6 +326,99 @@ impl DatasetDraft {
             }
         }
 
+        validate_policies(&mut report, &self.policies, limits);
+
+        let mut semantic_refs = BTreeSet::new();
+        semantic_refs.insert(SemanticRef::of(self.id));
+        semantic_refs.extend(
+            self.recordings
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(self.streams.iter().map(|value| SemanticRef::of(value.id())));
+        semantic_refs.extend(self.atoms.iter().map(|value| SemanticRef::of(value.id())));
+        semantic_refs.extend(self.clocks.iter().map(|value| SemanticRef::of(value.id())));
+        semantic_refs.extend(
+            self.coordinate_frames
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.channel_bases
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.policies
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(self.proofs.iter().map(|value| SemanticRef::of(value.id())));
+        semantic_refs.extend(
+            self.derivations
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+
+        for (index, proof) in self.proofs.iter().enumerate() {
+            if !semantic_refs.contains(&proof.subject()) {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::DanglingReference,
+                        format!("proofs[{index}].subject"),
+                    ),
+                );
+            } else if proof_kind_misused(proof) {
+                push(
+                    &mut report,
+                    ValidationFailure::error(FailureCode::ProofMisuse, format!("proofs[{index}]")),
+                );
+            }
+        }
+
+        for (index, derivation) in self.derivations.iter().enumerate() {
+            for reference in derivation.inputs().iter().chain(derivation.outputs()) {
+                if !semantic_refs.contains(reference) {
+                    push(
+                        &mut report,
+                        ValidationFailure::error(
+                            FailureCode::DanglingReference,
+                            format!("derivations[{index}]"),
+                        ),
+                    );
+                }
+            }
+        }
+
+        for (index, statement) in self.fidelity.iter().enumerate() {
+            if !semantic_refs.contains(&statement.subject()) {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::DanglingReference,
+                        format!("fidelity[{index}].subject"),
+                    ),
+                );
+            }
+            let shape_valid = match statement.kind() {
+                FidelityKind::Exact => statement.metric().is_none() && statement.bound().is_none(),
+                FidelityKind::Bounded => {
+                    statement.metric().is_some() && statement.bound().is_some()
+                }
+                FidelityKind::Transformed => statement.metric().is_some(),
+            };
+            if !shape_valid {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::InvalidShapeOrExtent,
+                        format!("fidelity[{index}]"),
+                    ),
+                );
+            }
+        }
+
         if let Some(report) = report {
             return Err(report);
         }
@@ -283,6 +430,12 @@ impl DatasetDraft {
             clocks: self.clocks,
             coordinate_frames: self.coordinate_frames,
             channel_bases: self.channel_bases,
+            policies: self.policies,
+            proofs: self.proofs,
+            derivations: self.derivations,
+            fidelity: self.fidelity,
+            source_capsules: self.source_capsules,
+            observed_execution: self.observed_execution,
         })
     }
 }
@@ -296,6 +449,12 @@ pub struct AbirDataset {
     clocks: Vec<Clock>,
     coordinate_frames: Vec<CoordinateFrame>,
     channel_bases: Vec<ChannelBasis>,
+    policies: Vec<Policy>,
+    proofs: Vec<Proof>,
+    derivations: Vec<Derivation>,
+    fidelity: Vec<Fidelity>,
+    source_capsules: Vec<SourceCapsule>,
+    observed_execution: Vec<ExecutionRecord>,
 }
 
 impl AbirDataset {
@@ -319,6 +478,24 @@ impl AbirDataset {
     }
     pub fn channel_bases(&self) -> &[ChannelBasis] {
         &self.channel_bases
+    }
+    pub fn policies(&self) -> &[Policy] {
+        &self.policies
+    }
+    pub fn proofs(&self) -> &[Proof] {
+        &self.proofs
+    }
+    pub fn derivations(&self) -> &[Derivation] {
+        &self.derivations
+    }
+    pub fn fidelity(&self) -> &[Fidelity] {
+        &self.fidelity
+    }
+    pub fn source_capsules(&self) -> &[SourceCapsule] {
+        &self.source_capsules
+    }
+    pub fn observed_execution(&self) -> &[ExecutionRecord] {
+        &self.observed_execution
     }
     pub fn payload_content_ids(&self) -> Vec<ContentId> {
         self.atoms
@@ -440,5 +617,87 @@ fn validate_frame_ancestry(
                 .find(|candidate| candidate.id() == id)
                 .and_then(CoordinateFrame::parent_id);
         }
+    }
+}
+
+fn validate_policies(
+    report: &mut Option<ValidationReport>,
+    policies: &[Policy],
+    limits: ValidationLimits,
+) {
+    let ids: BTreeSet<_> = policies.iter().map(Policy::id).collect();
+    for (index, policy) in policies.iter().enumerate() {
+        if let Some(parent_id) = policy.parent_id() {
+            let Some(parent) = policies
+                .iter()
+                .find(|candidate| candidate.id() == parent_id)
+            else {
+                push(
+                    report,
+                    ValidationFailure::error(
+                        FailureCode::DanglingReference,
+                        format!("policies[{index}].parent_id"),
+                    )
+                    .with_related_object(parent_id.to_bytes()),
+                );
+                continue;
+            };
+            if !parent
+                .restrictions()
+                .iter()
+                .all(|restriction| policy.restrictions().contains(restriction))
+            {
+                push(
+                    report,
+                    ValidationFailure::error(
+                        FailureCode::PolicyRelaxation,
+                        format!("policies[{index}].restrictions"),
+                    ),
+                );
+            }
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut current = Some(policy.id());
+        let mut depth = 0_usize;
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                push(
+                    report,
+                    ValidationFailure::error(
+                        FailureCode::PolicyRelaxation,
+                        format!("policies[{index}].ancestry_cycle"),
+                    ),
+                );
+                break;
+            }
+            depth += 1;
+            if depth > limits.max_nesting_depth {
+                push(
+                    report,
+                    ValidationFailure::error(
+                        FailureCode::StructuralLimit,
+                        format!("policies[{index}].ancestry_depth"),
+                    ),
+                );
+                break;
+            }
+            current = policies
+                .iter()
+                .find(|candidate| candidate.id() == id)
+                .and_then(Policy::parent_id);
+            if current.is_some_and(|parent| !ids.contains(&parent)) {
+                break;
+            }
+        }
+    }
+}
+
+fn proof_kind_misused(proof: &Proof) -> bool {
+    match proof.kind().as_str() {
+        "abir:proof/derivation" => proof.subject().kind() != ObjectKind::Derivation,
+        "abir:proof/policy-attestation" => proof.subject().kind() != ObjectKind::Policy,
+        "abir:proof/content-integrity" | "abir:proof/fidelity-bound" => false,
+        _ => false,
     }
 }

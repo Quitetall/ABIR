@@ -23,6 +23,74 @@ semantic_tags!(
     DerivationTag,
 );
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ObjectKind {
+    Dataset,
+    Recording,
+    Stream,
+    Atom,
+    Clock,
+    CoordinateFrame,
+    ChannelBasis,
+    Policy,
+    Proof,
+    Derivation,
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub trait SemanticTag: sealed::Sealed {
+    const KIND: ObjectKind;
+}
+
+macro_rules! tag_kinds {
+    ($($tag:ty => $kind:ident),+ $(,)?) => {
+        $(
+            impl sealed::Sealed for $tag {}
+            impl SemanticTag for $tag {
+                const KIND: ObjectKind = ObjectKind::$kind;
+            }
+        )+
+    };
+}
+
+tag_kinds!(
+    DatasetTag => Dataset,
+    RecordingTag => Recording,
+    StreamTag => Stream,
+    AtomTag => Atom,
+    ClockTag => Clock,
+    CoordinateFrameTag => CoordinateFrame,
+    ChannelBasisTag => ChannelBasis,
+    PolicyTag => Policy,
+    ProofTag => Proof,
+    DerivationTag => Derivation,
+);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SemanticRef {
+    kind: ObjectKind,
+    bytes: [u8; 16],
+}
+
+impl SemanticRef {
+    pub fn of<T: SemanticTag>(id: ObjectId<T>) -> Self {
+        Self {
+            kind: T::KIND,
+            bytes: id.to_bytes(),
+        }
+    }
+
+    pub const fn kind(self) -> ObjectKind {
+        self.kind
+    }
+    pub const fn bytes(self) -> [u8; 16] {
+        self.bytes
+    }
+}
+
 /// Typed 128-bit semantic identity.
 pub struct ObjectId<T> {
     bytes: [u8; 16],

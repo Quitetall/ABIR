@@ -1,9 +1,9 @@
 use abir::{
     Atom, AtomTag, ByteOrder, Calibration, ChannelBasis, ChannelBasisTag, ChannelSpec, Clock,
     ClockTag, ConceptId, ContentId, CoordinateFrame, CoordinateFrameTag, DatasetDraft, DatasetTag,
-    ElementType, FailureCode, Layout, ObjectId, PayloadDescriptor, Presence, Rational, Recording,
-    RecordingTag, ReferenceKind, SignalBlock, Stream, StreamTag, TimeAxis, TimeSegment,
-    ValidationLimits,
+    Derivation, DerivationTag, ElementType, FailureCode, Layout, ObjectId, PayloadDescriptor,
+    Policy, PolicyTag, Presence, Proof, ProofTag, Rational, Recording, RecordingTag, ReferenceKind,
+    SemanticRef, SignalBlock, Stream, StreamTag, TimeAxis, TimeSegment, ValidationLimits,
 };
 
 fn id<T>(value: u8) -> ObjectId<T> {
@@ -98,6 +98,22 @@ fn valid_mixed_rate_dataset_becomes_immutable_root() {
 }
 
 #[test]
+fn invalid_time_segments_are_unconstructible() {
+    assert!(TimeSegment::new(
+        Rational::new(0, 1).unwrap(),
+        Rational::new(-1, 1).unwrap(),
+        1,
+    )
+    .is_err());
+    assert!(TimeSegment::new(
+        Rational::new(0, 1).unwrap(),
+        Rational::new(1, 1).unwrap(),
+        0,
+    )
+    .is_err());
+}
+
+#[test]
 fn dangling_and_duplicate_ids_fail_closed() {
     let mut draft = eeg_dataset();
     let recording = draft.recordings()[0].clone();
@@ -187,4 +203,44 @@ fn clock_and_coordinate_cycles_are_rejected() {
         .failures()
         .iter()
         .any(|failure| { failure.failure_code() == FailureCode::UnresolvedCoordinateFrame }));
+}
+
+#[test]
+fn policy_relaxation_proof_misuse_and_dangling_derivation_fail() {
+    let mut draft = eeg_dataset();
+    let parent_id = id::<PolicyTag>(50);
+    let child_id = id::<PolicyTag>(51);
+    draft.add_policy(Policy::new(
+        parent_id,
+        None,
+        vec![ConceptId::new("abir:policy/research-only").unwrap()],
+    ));
+    draft.add_policy(Policy::new(child_id, Some(parent_id), vec![]));
+
+    draft.add_proof(Proof::new(
+        id::<ProofTag>(52),
+        ConceptId::new("abir:proof/policy-attestation").unwrap(),
+        SemanticRef::of(id::<AtomTag>(6)),
+        ContentId::from_bytes([52; 32]),
+    ));
+    draft.add_derivation(Derivation::new(
+        id::<DerivationTag>(53),
+        ConceptId::new("abir:operation/filter").unwrap(),
+        vec![SemanticRef::of(id::<AtomTag>(99))],
+        vec![SemanticRef::of(id::<AtomTag>(6))],
+    ));
+
+    let report = draft.validate(ValidationLimits::default()).unwrap_err();
+    assert!(report
+        .failures()
+        .iter()
+        .any(|failure| failure.failure_code() == FailureCode::PolicyRelaxation));
+    assert!(report
+        .failures()
+        .iter()
+        .any(|failure| failure.failure_code() == FailureCode::ProofMisuse));
+    assert!(report
+        .failures()
+        .iter()
+        .any(|failure| failure.failure_code() == FailureCode::DanglingReference));
 }
