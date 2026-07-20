@@ -4,14 +4,17 @@
     "fixtures/valid/canonical-tensor.json": "14a559ecfd31c9ad06053f0703da778c2a910b36b3b53048f7be26b34f638f85",
     "fixtures/valid/semantic-matrix.content-id": "2ae21ce92bda23e719744489d3f2304c82eb980d43f1026851b2e2f5310c4667",
     "fixtures/valid/semantic-matrix.json": "c5512d106382b5e4d1143c3ef05ed8b8af2ba0f1487fcad24738033f5360709c",
-    "schema/abir-semantic-v1.schema.json": "1b163fc106b93a48af7403a2f6bcd8ca0d3bbc88313dc524e8e13c96388fb950",
-    "spec/semantic-v1.manifest.json": "8d7b39832eaa2c8fd8bdee39bc399e42a5c68a2630d3b0c451d39c7a9888149e"
+    "fuzz/corpus/dataset_draft.sha256": "852aeb5f6898728676d4a445232136954bbf37fc3ed050e690e810fc0b79d9fb",
+    "schema/abir-semantic-v1.schema.json": "96fd46a306ca566f13468538ce071c331b8d9cb9773613e0d9c051ebd3689f69",
+    "spec/semantic-v1.manifest.json": "dd87e3649cb46c0e1812b796a4a4c53f0a0ce7c79f442a8d7e634171d54d991c"
   },
-  "collected_at": "2026-07-20T22:38:36.980333+00:00",
+  "collected_at": "2026-07-20T22:52:05.985504+00:00",
   "commands": [
     "ABIR_BENCH_ITERS=100000 cargo run -q -p abir-conformance --release --bin measure_semantic_core",
-    "/tmp/abir-semantic-venv-0140/bin/python -c <import-timer>",
-    "/tmp/abir-semantic-venv-0140/bin/python -c <zero-copy-probe>"
+    "/tmp/abir-semantic-venv-0140/bin/python -m venv --system-site-packages <temporary-venv>",
+    "<temporary-venv>/bin/python -m pip install --no-index --no-deps /tmp/abir-dist-0140-final/abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
+    "<temporary-venv>/bin/python -c <import-timer>",
+    "<temporary-venv>/bin/python -c <zero-copy-probe>"
   ],
   "host": {
     "machine": "x86_64",
@@ -21,20 +24,26 @@
   },
   "python": {
     "import_seconds": {
-      "maximum": 0.0015573569689877331,
-      "mean": 0.0010510458960197866,
+      "maximum": 0.0010856129811145365,
+      "mean": 0.0006785185949411243,
       "samples": [
-        0.0013805999769829214,
-        0.0005852429894730449,
-        0.0012865560129284859,
-        0.0008710779948160052,
-        0.000827640003990382,
-        0.0015573569689877331,
-        0.0010593230254016817,
-        0.0008933449862524867,
-        0.0007652560016140342,
-        0.001284060999751091
+        0.0008968340116553009,
+        0.0008542449795641005,
+        0.0010856129811145365,
+        0.000483764975797385,
+        0.000639097997918725,
+        0.0005082159768790007,
+        0.0005389840225689113,
+        0.0005282419733703136,
+        0.0005102439899928868,
+        0.0007399450405500829
       ]
+    },
+    "wheel": {
+      "distribution_version": "0.1.0",
+      "filename": "abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
+      "module_path": "/tmp/abir-evidence-python-8_xe_2h8/venv/lib/python3.14/site-packages/abir/__init__.py",
+      "sha256": "f793701056a7b446f9bb3e5cd5d7de7ee8e662c6eb7da168a42c805bc004155a"
     },
     "zero_copy": {
       "content_id": "6f8244472204b5ed25ebd67a1abd88e24f2addd6b152bb1857b27b78e7d02ebe",
@@ -49,27 +58,29 @@
     "performance_ceiling": "trusted-baseline-only-until-multi-host-samples",
     "structural_limits": "enforced-now"
   },
-  "revision": "7a7432b240b0266fa933f62655c4d876b14871fb",
+  "revision": "63f10465bb7cd63e280d5947a37543e2712a55fe",
   "rust": {
     "iterations": 100000,
     "logical_hash": {
-      "hashes_per_second": 87058.7010982483,
-      "seconds": 1.148650264
+      "hashes_per_second": 84684.96579604718,
+      "seconds": 1.180847144
     },
     "metadata": {
       "canonical_debug_bytes": 1419,
+      "estimated_retained_bytes": 323,
+      "estimator": "UTF-8 semantic text plus 64 bytes per record; payload bytes excluded",
       "note": "Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist.",
       "root_inline_bytes": 616
     },
     "schema_version": 1,
     "validation": {
-      "datasets_per_second": 1559634.7316742803,
-      "seconds": 0.064117577
+      "datasets_per_second": 1224594.2013211313,
+      "seconds": 0.081659704
     },
     "view": {
-      "nanoseconds_per_lease": 8.30163,
+      "nanoseconds_per_lease": 7.5542,
       "pointer_identity": true,
-      "seconds": 0.000830163
+      "seconds": 0.00075542
     }
   },
   "schema_version": 1,
