@@ -20,6 +20,8 @@ mod id;
 mod limits;
 #[cfg(feature = "alloc")]
 mod time;
+#[cfg(feature = "alloc")]
+mod view;
 
 #[cfg(feature = "alloc")]
 pub use atom::{
@@ -50,6 +52,11 @@ pub use id::{
 pub use limits::ValidationLimits;
 #[cfg(feature = "alloc")]
 pub use time::{TimeAxis, TimeError, TimeSegment};
+#[cfg(feature = "alloc")]
+pub use view::{
+    BlockView, BorrowedPayload, BorrowedPayloadAccess, InMemoryPayloadAccess, OpenedDataset,
+    PayloadAccess, PayloadAccessError, PayloadLease, RecordingView, StreamView, TensorView,
+};
 
 /// Package version. This is not the semantic schema version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

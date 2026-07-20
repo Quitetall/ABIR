@@ -140,12 +140,16 @@ impl DatasetDraft {
             self.policies.iter().map(Policy::id),
             "policies",
         );
-        let _proof_ids = unique_ids(&mut report, self.proofs.iter().map(Proof::id), "proofs");
-        let _derivation_ids = unique_ids(
+        drop(unique_ids(
+            &mut report,
+            self.proofs.iter().map(Proof::id),
+            "proofs",
+        ));
+        drop(unique_ids(
             &mut report,
             self.derivations.iter().map(Derivation::id),
             "derivations",
-        );
+        ));
 
         for (index, recording) in self.recordings.iter().enumerate() {
             for stream_id in recording.streams() {
