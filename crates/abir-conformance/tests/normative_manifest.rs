@@ -16,7 +16,10 @@ fn normative_manifest_hashes_match() {
     )
     .expect("parse manifest");
 
-    for artifact in manifest["artifacts"].as_array().expect("artifact array") {
+    for artifact in manifest["artifacts"]
+        .as_array()
+        .expect("manifest.artifacts must be an array")
+    {
         let path = artifact["path"].as_str().expect("artifact path");
         let expected = artifact["sha256"].as_str().expect("artifact digest");
         let actual = format!(

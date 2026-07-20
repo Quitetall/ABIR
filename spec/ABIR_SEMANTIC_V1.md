@@ -39,6 +39,9 @@ references and carry clock, channel-basis, modality, and policy semantics.
 
 Catalog references are explicit. Unknown registered concepts are preserved as
 opaque namespaced concept identifiers and are not silently coerced.
+Canonical concept namespaces begin with a lowercase ASCII letter and contain
+only lowercase ASCII letters, digits, period, or hyphen before the colon. This
+restriction is intentional so identity does not depend on case folding.
 
 ## 4. Atomic data forms
 
