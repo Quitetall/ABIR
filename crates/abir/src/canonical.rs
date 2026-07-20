@@ -1,6 +1,7 @@
 use crate::{
     AbirDataset, Atom, ByteOrder, CatalogRecord, ElementType, ExactNumber, FidelityKind, Layout,
-    ObjectKind, Presence, Rational, SemanticRef, SemanticTag, TableColumn, TimeAxis,
+    ObjectKind, Presence, Rational, SemanticRef, SemanticTag, SourceRelationship, TableColumn,
+    TimeAxis,
 };
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -52,6 +53,8 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
     dictionaries.sort_by_key(|value| value.id());
     let mut clock_relations: Vec<_> = dataset.clock_relations().iter().collect();
     clock_relations.sort_by_key(|value| value.id());
+    let mut source_relationships: Vec<_> = dataset.source_relationships().iter().collect();
+    source_relationships.sort();
     let mut frame_transforms: Vec<_> = dataset.frame_transforms().iter().collect();
     frame_transforms.sort_by_key(|value| value.id());
     let mut events: Vec<_> = dataset.events().iter().collect();
@@ -141,6 +144,15 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
         Value::Array(dictionaries.into_iter().map(catalog_record_value).collect()),
     );
     root.insert(
+        "source_relationships".into(),
+        Value::Array(
+            source_relationships
+                .into_iter()
+                .map(source_relationship_value)
+                .collect(),
+        ),
+    );
+    root.insert(
         "clock_relations".into(),
         Value::Array(
             clock_relations
@@ -153,7 +165,10 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
                         "offset": rational_value(relation.offset()),
                         "rate": rational_value(relation.rate()),
                         "uncertainty": rational_value(relation.uncertainty()),
-                        "method": relation.method().as_str()
+                        "method": relation.method().as_str(),
+                        "validity_start": rational_value(relation.validity_start()),
+                        "validity_end": relation.validity_end().map(rational_value),
+                        "provenance": relation.provenance().to_string()
                     })
                 })
                 .collect(),
@@ -512,6 +527,75 @@ fn catalog_record_value<T: SemanticTag>(record: &CatalogRecord<T>) -> Value {
             "namespace": key.namespace(), "value": key.value()
         })).collect::<Vec<_>>()
     })
+}
+
+fn source_relationship_value(relationship: &SourceRelationship) -> Value {
+    match relationship {
+        SourceRelationship::PatientSubject {
+            patient_id,
+            subject_id,
+        } => json!({
+            "kind": "patient-subject", "patient_id": patient_id.to_string(),
+            "subject_id": subject_id.to_string()
+        }),
+        SourceRelationship::SessionSubject {
+            session_id,
+            subject_id,
+        } => json!({
+            "kind": "session-subject", "session_id": session_id.to_string(),
+            "subject_id": subject_id.to_string()
+        }),
+        SourceRelationship::SessionPatient {
+            session_id,
+            patient_id,
+        } => json!({
+            "kind": "session-patient", "session_id": session_id.to_string(),
+            "patient_id": patient_id.to_string()
+        }),
+        SourceRelationship::AcquisitionSession {
+            acquisition_id,
+            session_id,
+        } => json!({
+            "kind": "acquisition-session", "acquisition_id": acquisition_id.to_string(),
+            "session_id": session_id.to_string()
+        }),
+        SourceRelationship::AcquisitionDevice {
+            acquisition_id,
+            device_id,
+        } => json!({
+            "kind": "acquisition-device", "acquisition_id": acquisition_id.to_string(),
+            "device_id": device_id.to_string()
+        }),
+        SourceRelationship::DeviceSensor {
+            device_id,
+            sensor_id,
+        } => json!({
+            "kind": "device-sensor", "device_id": device_id.to_string(),
+            "sensor_id": sensor_id.to_string()
+        }),
+        SourceRelationship::SensorChannel {
+            sensor_id,
+            channel_id,
+        } => json!({
+            "kind": "sensor-channel", "sensor_id": sensor_id.to_string(),
+            "channel_id": channel_id.to_string()
+        }),
+        SourceRelationship::AcquisitionRecording {
+            acquisition_id,
+            recording_id,
+        } => json!({
+            "kind": "acquisition-recording", "acquisition_id": acquisition_id.to_string(),
+            "recording_id": recording_id.to_string()
+        }),
+        SourceRelationship::ChannelBasisMember {
+            channel_id,
+            basis_id,
+            position,
+        } => json!({
+            "kind": "channel-basis-member", "channel_id": channel_id.to_string(),
+            "basis_id": basis_id.to_string(), "position": position
+        }),
+    }
 }
 
 fn table_column_value(column: &TableColumn) -> Value {

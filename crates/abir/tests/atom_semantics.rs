@@ -27,6 +27,28 @@ fn payload(content_id: ContentId, shape: Vec<u64>, layout: Layout) -> PayloadDes
     )
 }
 
+fn companion_payload(
+    content_id: ContentId,
+    element: ElementType,
+    shape: Vec<u64>,
+) -> PayloadDescriptor {
+    let width = match element {
+        ElementType::I64 | ElementType::U64 | ElementType::F64 => 8,
+        ElementType::I32 | ElementType::U32 | ElementType::F32 => 4,
+        _ => 2,
+    };
+    PayloadDescriptor::new(
+        content_id,
+        shape.iter().product::<u64>() * width,
+        element,
+        ByteOrder::Little,
+        shape,
+        Layout::DenseRowMajor,
+        Some(ConceptId::new("abir:encoding/raw").unwrap()),
+        None,
+    )
+}
+
 fn validates(atom: Atom) -> bool {
     let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
     if let Atom::TemporalTable(table) = &atom {
@@ -39,31 +61,91 @@ fn validates(atom: Atom) -> bool {
             Rational::new(0, 1).unwrap(),
         ));
     }
-    let companions = atom
+    let mut companions = atom
         .payload()
         .map(|payload| match payload.layout() {
             Layout::DenseRowMajor | Layout::DenseColumnMajor => Vec::new(),
-            Layout::Ragged { offsets, .. } => vec![*offsets],
-            Layout::SparseCoo { indices, .. } => vec![*indices],
+            Layout::Ragged { rows, offsets } => {
+                vec![(*offsets, ElementType::U32, vec![rows + 1])]
+            }
+            Layout::SparseCoo { nonzero, indices } => vec![(
+                *indices,
+                ElementType::U32,
+                vec![*nonzero, payload.shape().len() as u64],
+            )],
             Layout::SparseCsr {
-                indptr, indices, ..
-            } => vec![*indptr, *indices],
-            Layout::BlockFloatingPoint { scales, .. } => vec![*scales],
+                nonzero,
+                indptr,
+                indices,
+            } => vec![
+                (*indptr, ElementType::U32, vec![payload.shape()[0] + 1]),
+                (*indices, ElementType::U32, vec![*nonzero]),
+            ],
+            Layout::BlockFloatingPoint {
+                block_len, scales, ..
+            } => {
+                let elements = payload.shape().iter().product::<u64>();
+                let blocks = elements.div_ceil(u64::from(*block_len));
+                vec![(*scales, ElementType::F32, vec![blocks])]
+            }
         })
         .unwrap_or_default();
+    if let Atom::SignalBlock(block) = &atom {
+        if let abir::TimeAxis::Explicit { timestamps, count } = block.time_axis() {
+            companions.push((*timestamps, ElementType::I64, vec![*count]));
+        }
+    }
     draft.add_atom(atom);
-    for (index, content_id) in companions.into_iter().enumerate() {
+    for (index, (content_id, element, shape)) in companions.into_iter().enumerate() {
+        let axes = shape
+            .iter()
+            .copied()
+            .map(|extent| SemanticAxis::new(ConceptId::new("abir:axis/companion").unwrap(), extent))
+            .collect();
         draft.add_atom(Atom::Tensor(Tensor::new(
             id::<AtomTag>(100 + index as u8),
             Presence::Present,
-            Some(payload(content_id, vec![1], Layout::DenseRowMajor)),
-            vec![SemanticAxis::new(
-                ConceptId::new("abir:axis/companion").unwrap(),
-                1,
-            )],
+            Some(companion_payload(content_id, element, shape)),
+            axes,
         )));
     }
     draft.validate(ValidationLimits::default()).is_ok()
+}
+
+#[test]
+fn malformed_composite_companion_is_rejected() {
+    let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
+    draft.add_atom(Atom::Tensor(Tensor::new(
+        id::<AtomTag>(1),
+        Presence::Present,
+        Some(payload(
+            content(1),
+            vec![2, 2],
+            Layout::SparseCoo {
+                nonzero: 1,
+                indices: content(2),
+            },
+        )),
+        vec![
+            SemanticAxis::new(ConceptId::new("abir:axis/row").unwrap(), 2),
+            SemanticAxis::new(ConceptId::new("abir:axis/column").unwrap(), 2),
+        ],
+    )));
+    draft.add_atom(Atom::Tensor(Tensor::new(
+        id::<AtomTag>(2),
+        Presence::Present,
+        Some(companion_payload(content(2), ElementType::F32, vec![1])),
+        vec![SemanticAxis::new(
+            ConceptId::new("abir:axis/companion").unwrap(),
+            1,
+        )],
+    )));
+
+    let error = draft.validate(ValidationLimits::default()).unwrap_err();
+    assert!(error.failures().iter().any(|failure| {
+        failure.failure_code() == abir::FailureCode::PayloadMismatch
+            && failure.path() == "atoms[0].payload.companion"
+    }));
 }
 
 #[test]

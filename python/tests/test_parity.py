@@ -34,6 +34,34 @@ def test_python_preserves_full_rust_semantic_matrix():
     assert dataset.semantic_family_counts == (7, 1, 1, 1, 1, 1)
 
 
+def test_python_deserializes_full_semantic_matrix_without_semantic_drift():
+    canonical = (ROOT / "fixtures/valid/semantic-matrix.json").read_bytes()
+    expected_content_id = (
+        ROOT / "fixtures/valid/semantic-matrix.content-id"
+    ).read_text().strip()
+
+    def reverse_member_order(value):
+        if isinstance(value, dict):
+            return {
+                key: reverse_member_order(member)
+                for key, member in reversed(list(value.items()))
+            }
+        if isinstance(value, list):
+            return [reverse_member_order(member) for member in value]
+        return value
+
+    reordered = json.dumps(
+        reverse_member_order(json.loads(canonical)),
+        separators=(",", ":"),
+    ).encode()
+    dataset = abir.Dataset.from_canonical_json(reordered)
+
+    assert dataset.canonical_json() == canonical
+    assert dataset.content_id() == expected_content_id
+    assert dataset.atom_count == 17
+    assert dataset.semantic_family_counts == (7, 1, 1, 1, 1, 1)
+
+
 def test_numpy_view_is_zero_copy_over_original_python_bytes():
     payload = bytes(range(8))
     dataset = abir.Dataset.canonical_fixture(payload)
@@ -63,9 +91,10 @@ def test_python_builder_uses_rust_validation_boundary():
 
 def test_rust_fixture_conforms_to_normative_json_schema():
     schema = json.loads((ROOT / "schema/abir-semantic-v1.schema.json").read_text())
-    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
     jsonschema.Draft202012Validator.check_schema(schema)
-    jsonschema.validate(fixture, schema)
+    for name in ["canonical-tensor.json", "semantic-matrix.json"]:
+        fixture = json.loads((ROOT / "fixtures/valid" / name).read_text())
+        jsonschema.validate(fixture, schema)
 
 
 def test_schema_negative_corpus_is_rejected():
@@ -74,3 +103,18 @@ def test_schema_negative_corpus_is_rejected():
     for path in sorted((ROOT / "fixtures/invalid/schema").glob("*.json")):
         instance = json.loads(path.read_text())
         assert list(validator.iter_errors(instance)), f"negative fixture passed: {path.name}"
+
+
+def test_schema_rejects_contradictory_atom_fields_and_empty_rational():
+    schema = json.loads((ROOT / "schema/abir-semantic-v1.schema.json").read_text())
+    validator = jsonschema.Draft202012Validator(schema)
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+
+    fixture["atoms"][0]["columns"] = [
+        {"semantic": "abir:column/value", "element": "i16", "nullable": False}
+    ]
+    assert list(validator.iter_errors(fixture))
+
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+    fixture["clocks"][0]["offset"] = {"$rational": []}
+    assert list(validator.iter_errors(fixture))

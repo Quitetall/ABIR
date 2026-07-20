@@ -4,8 +4,8 @@ use crate::{
     DatasetTag, Derivation, DerivedArtifact, DerivedArtifactTag, Device, DeviceTag, Event,
     EventTag, ExecutionRecord, FailureCode, Fidelity, FidelityKind, FrameTransform,
     FrameTransformTag, Layout, ObjectId, ObjectKind, Patient, PatientTag, Policy, Proof, Recording,
-    SemanticRef, Sensor, SensorTag, Session, SessionTag, SourceCapsule, Stream, Subject,
-    SubjectTag, TimeAxis, ValidationFailure, ValidationLimits, ValidationReport,
+    SemanticRef, Sensor, SensorTag, Session, SessionTag, SourceCapsule, SourceRelationship, Stream,
+    Subject, SubjectTag, TimeAxis, ValidationFailure, ValidationLimits, ValidationReport,
 };
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -38,6 +38,7 @@ pub struct DatasetDraft {
     events: Vec<Event>,
     concept_dictionaries: Vec<ConceptDictionary>,
     derived_artifacts: Vec<DerivedArtifact>,
+    source_relationships: Vec<SourceRelationship>,
 }
 
 impl DatasetDraft {
@@ -68,6 +69,7 @@ impl DatasetDraft {
             events: Vec::new(),
             concept_dictionaries: Vec::new(),
             derived_artifacts: Vec::new(),
+            source_relationships: Vec::new(),
         }
     }
 
@@ -142,6 +144,9 @@ impl DatasetDraft {
     }
     pub fn add_derived_artifact(&mut self, value: DerivedArtifact) {
         self.derived_artifacts.push(value);
+    }
+    pub fn add_source_relationship(&mut self, value: SourceRelationship) {
+        self.source_relationships.push(value);
     }
     pub fn recordings(&self) -> &[Recording] {
         &self.recordings
@@ -241,6 +246,9 @@ impl DatasetDraft {
     pub fn derived_artifact(&self, id: ObjectId<DerivedArtifactTag>) -> Option<&DerivedArtifact> {
         self.derived_artifacts.iter().find(|value| value.id() == id)
     }
+    pub fn source_relationships(&self) -> &[SourceRelationship] {
+        &self.source_relationships
+    }
 
     pub fn validate(self, limits: ValidationLimits) -> Result<AbirDataset, ValidationReport> {
         let mut report = None;
@@ -257,6 +265,47 @@ impl DatasetDraft {
             "streams",
         );
         check_limit(&mut report, self.atoms.len(), limits.max_atoms, "atoms");
+        let catalog_records = [
+            self.subjects.len(),
+            self.patients.len(),
+            self.sessions.len(),
+            self.acquisitions.len(),
+            self.devices.len(),
+            self.sensors.len(),
+            self.channels.len(),
+            self.concept_dictionaries.len(),
+        ]
+        .into_iter()
+        .try_fold(0_usize, usize::checked_add)
+        .unwrap_or(usize::MAX);
+        check_limit(
+            &mut report,
+            catalog_records,
+            limits.max_catalog_records,
+            "catalog_records",
+        );
+        check_limit(
+            &mut report,
+            self.source_relationships.len(),
+            limits.max_relationships,
+            "source_relationships",
+        );
+        let governance_records = [
+            self.policies.len(),
+            self.proofs.len(),
+            self.derivations.len(),
+            self.fidelity.len(),
+            self.source_capsules.len(),
+        ]
+        .into_iter()
+        .try_fold(0_usize, usize::checked_add)
+        .unwrap_or(usize::MAX);
+        check_limit(
+            &mut report,
+            governance_records,
+            limits.max_governance_records,
+            "governance_records",
+        );
 
         let recording_ids = unique_ids(
             &mut report,
@@ -291,41 +340,33 @@ impl DatasetDraft {
             self.derivations.iter().map(Derivation::id),
             "derivations",
         );
-        drop(unique_ids(
+        let subject_ids = unique_ids(
             &mut report,
             self.subjects.iter().map(Subject::id),
             "subjects",
-        ));
-        drop(unique_ids(
+        );
+        let patient_ids = unique_ids(
             &mut report,
             self.patients.iter().map(Patient::id),
             "patients",
-        ));
-        drop(unique_ids(
+        );
+        let session_ids = unique_ids(
             &mut report,
             self.sessions.iter().map(Session::id),
             "sessions",
-        ));
-        drop(unique_ids(
+        );
+        let acquisition_ids = unique_ids(
             &mut report,
             self.acquisitions.iter().map(Acquisition::id),
             "acquisitions",
-        ));
-        drop(unique_ids(
-            &mut report,
-            self.devices.iter().map(Device::id),
-            "devices",
-        ));
-        drop(unique_ids(
-            &mut report,
-            self.sensors.iter().map(Sensor::id),
-            "sensors",
-        ));
-        drop(unique_ids(
+        );
+        let device_ids = unique_ids(&mut report, self.devices.iter().map(Device::id), "devices");
+        let sensor_ids = unique_ids(&mut report, self.sensors.iter().map(Sensor::id), "sensors");
+        let channel_ids = unique_ids(
             &mut report,
             self.channels.iter().map(Channel::id),
             "channels",
-        ));
+        );
         drop(unique_ids(
             &mut report,
             self.clock_relations.iter().map(ClockRelation::id),
@@ -351,6 +392,67 @@ impl DatasetDraft {
             self.derived_artifacts.iter().map(DerivedArtifact::id),
             "derived_artifacts",
         ));
+
+        for (index, relationship) in self.source_relationships.iter().enumerate() {
+            let resolved = match relationship {
+                SourceRelationship::PatientSubject {
+                    patient_id,
+                    subject_id,
+                } => patient_ids.contains(patient_id) && subject_ids.contains(subject_id),
+                SourceRelationship::SessionSubject {
+                    session_id,
+                    subject_id,
+                } => session_ids.contains(session_id) && subject_ids.contains(subject_id),
+                SourceRelationship::SessionPatient {
+                    session_id,
+                    patient_id,
+                } => session_ids.contains(session_id) && patient_ids.contains(patient_id),
+                SourceRelationship::AcquisitionSession {
+                    acquisition_id,
+                    session_id,
+                } => acquisition_ids.contains(acquisition_id) && session_ids.contains(session_id),
+                SourceRelationship::AcquisitionDevice {
+                    acquisition_id,
+                    device_id,
+                } => acquisition_ids.contains(acquisition_id) && device_ids.contains(device_id),
+                SourceRelationship::DeviceSensor {
+                    device_id,
+                    sensor_id,
+                } => device_ids.contains(device_id) && sensor_ids.contains(sensor_id),
+                SourceRelationship::SensorChannel {
+                    sensor_id,
+                    channel_id,
+                } => sensor_ids.contains(sensor_id) && channel_ids.contains(channel_id),
+                SourceRelationship::AcquisitionRecording {
+                    acquisition_id,
+                    recording_id,
+                } => {
+                    acquisition_ids.contains(acquisition_id) && recording_ids.contains(recording_id)
+                }
+                SourceRelationship::ChannelBasisMember {
+                    channel_id,
+                    basis_id,
+                    position,
+                } => {
+                    channel_ids.contains(channel_id)
+                        && basis_ids.contains(basis_id)
+                        && self.channel_bases.iter().any(|basis| {
+                            basis.id() == *basis_id
+                                && usize::try_from(*position)
+                                    .is_ok_and(|position| position < basis.channels().len())
+                        })
+                }
+            };
+            if !resolved {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::DanglingReference,
+                        format!("source_relationships[{index}]"),
+                    ),
+                );
+            }
+        }
 
         for (index, recording) in self.recordings.iter().enumerate() {
             for stream_id in recording.streams() {
@@ -469,8 +571,11 @@ impl DatasetDraft {
                     );
                 }
             }
-            for content_id in atom_companion_content_ids(atom) {
+            let companion_ids = atom_companion_content_ids(atom);
+            let mut companions_resolve = true;
+            for content_id in companion_ids {
                 if !payload_content_ids.contains(&content_id) {
+                    companions_resolve = false;
                     push(
                         &mut report,
                         ValidationFailure::error(
@@ -480,6 +585,16 @@ impl DatasetDraft {
                         .with_evidence(alloc::vec![content_id]),
                     );
                 }
+            }
+            if companions_resolve && !atom_companion_semantics_are_valid(atom, &self.atoms) {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::PayloadMismatch,
+                        format!("atoms[{index}].payload.companion"),
+                    )
+                    .with_related_object(atom.id().to_bytes()),
+                );
             }
         }
 
@@ -558,6 +673,18 @@ impl DatasetDraft {
                     ),
                 );
             }
+            if relation
+                .validity_end()
+                .is_some_and(|end| rational_order(end, relation.validity_start()).is_lt())
+            {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::InvalidExactNumber,
+                        format!("clock_relations[{index}].validity"),
+                    ),
+                );
+            }
         }
 
         for (index, transform) in self.frame_transforms.iter().enumerate() {
@@ -600,7 +727,7 @@ impl DatasetDraft {
             }
             if !matches!(
                 rational_order(event.end(), event.start()),
-                Some(core::cmp::Ordering::Equal | core::cmp::Ordering::Greater)
+                core::cmp::Ordering::Equal | core::cmp::Ordering::Greater
             ) || event.uncertainty().parts().0 < 0
             {
                 push(
@@ -839,6 +966,7 @@ impl DatasetDraft {
             events: self.events,
             concept_dictionaries: self.concept_dictionaries,
             derived_artifacts: self.derived_artifacts,
+            source_relationships: self.source_relationships,
         })
     }
 }
@@ -870,6 +998,7 @@ pub struct AbirDataset {
     events: Vec<Event>,
     concept_dictionaries: Vec<ConceptDictionary>,
     derived_artifacts: Vec<DerivedArtifact>,
+    source_relationships: Vec<SourceRelationship>,
 }
 
 impl AbirDataset {
@@ -989,6 +1118,9 @@ impl AbirDataset {
     pub fn derived_artifact(&self, id: ObjectId<DerivedArtifactTag>) -> Option<&DerivedArtifact> {
         self.derived_artifacts.iter().find(|value| value.id() == id)
     }
+    pub fn source_relationships(&self) -> &[SourceRelationship] {
+        &self.source_relationships
+    }
     pub fn payload_content_ids(&self) -> Vec<ContentId> {
         self.atoms
             .iter()
@@ -1005,14 +1137,61 @@ fn push(report: &mut Option<ValidationReport>, failure: ValidationFailure) {
     }
 }
 
-fn rational_order(left: crate::Rational, right: crate::Rational) -> Option<core::cmp::Ordering> {
+fn rational_order(left: crate::Rational, right: crate::Rational) -> core::cmp::Ordering {
     let (left_numerator, left_denominator) = left.parts();
     let (right_numerator, right_denominator) = right.parts();
-    Some(
-        left_numerator
-            .checked_mul(right_denominator)?
-            .cmp(&right_numerator.checked_mul(left_denominator)?),
-    )
+    match (left_numerator.is_negative(), right_numerator.is_negative()) {
+        (true, false) => core::cmp::Ordering::Less,
+        (false, true) => core::cmp::Ordering::Greater,
+        (false, false) => compare_unsigned_fractions(
+            left_numerator as u128,
+            left_denominator as u128,
+            right_numerator as u128,
+            right_denominator as u128,
+        ),
+        (true, true) => compare_unsigned_fractions(
+            left_numerator.unsigned_abs(),
+            left_denominator as u128,
+            right_numerator.unsigned_abs(),
+            right_denominator as u128,
+        )
+        .reverse(),
+    }
+}
+
+fn compare_unsigned_fractions(
+    mut left_numerator: u128,
+    mut left_denominator: u128,
+    mut right_numerator: u128,
+    mut right_denominator: u128,
+) -> core::cmp::Ordering {
+    let mut reverse = false;
+    loop {
+        let quotient_order =
+            (left_numerator / left_denominator).cmp(&(right_numerator / right_denominator));
+        if quotient_order != core::cmp::Ordering::Equal {
+            return if reverse {
+                quotient_order.reverse()
+            } else {
+                quotient_order
+            };
+        }
+        let left_remainder = left_numerator % left_denominator;
+        let right_remainder = right_numerator % right_denominator;
+        if left_remainder == 0 || right_remainder == 0 {
+            let remainder_order = left_remainder.cmp(&right_remainder);
+            return if reverse {
+                remainder_order.reverse()
+            } else {
+                remainder_order
+            };
+        }
+        left_numerator = left_denominator;
+        left_denominator = left_remainder;
+        right_numerator = right_denominator;
+        right_denominator = right_remainder;
+        reverse = !reverse;
+    }
 }
 
 fn atom_companion_content_ids(atom: &Atom) -> Vec<ContentId> {
@@ -1037,6 +1216,114 @@ fn atom_companion_content_ids(atom: &Atom) -> Vec<ContentId> {
         }
     }
     ids
+}
+
+fn atom_companion_semantics_are_valid(atom: &Atom, atoms: &[Atom]) -> bool {
+    let descriptor_matches =
+        |content_id: ContentId, predicate: &dyn Fn(&crate::PayloadDescriptor) -> bool| {
+            let mut found = false;
+            let all_match = atoms
+                .iter()
+                .filter_map(Atom::payload)
+                .filter(|payload| payload.content_id() == content_id)
+                .all(|payload| {
+                    found = true;
+                    predicate(payload)
+                });
+            found && all_match
+        };
+
+    if let Atom::SignalBlock(block) = atom {
+        if let TimeAxis::Explicit { timestamps, count } = block.time_axis() {
+            if !descriptor_matches(*timestamps, &|payload| {
+                is_dense(payload.layout())
+                    && payload.element() == crate::ElementType::I64
+                    && payload.shape() == [*count]
+            }) {
+                return false;
+            }
+        }
+    }
+
+    let Some(payload) = atom.payload() else {
+        return true;
+    };
+    match payload.layout() {
+        Layout::DenseRowMajor | Layout::DenseColumnMajor => true,
+        Layout::Ragged { rows, offsets } => rows.checked_add(1).is_some_and(|extent| {
+            descriptor_matches(*offsets, &|companion| {
+                is_dense(companion.layout())
+                    && is_integer(companion.element())
+                    && companion.shape() == [extent]
+            })
+        }),
+        Layout::SparseCoo { nonzero, indices } => {
+            let rank = u64::try_from(payload.shape().len()).ok();
+            rank.is_some_and(|rank| {
+                descriptor_matches(*indices, &|companion| {
+                    is_dense(companion.layout())
+                        && is_integer(companion.element())
+                        && companion.shape() == [*nonzero, rank]
+                })
+            })
+        }
+        Layout::SparseCsr {
+            nonzero,
+            indptr,
+            indices,
+        } => payload.shape().first().copied().is_some_and(|rows| {
+            rows.checked_add(1).is_some_and(|indptr_extent| {
+                descriptor_matches(*indptr, &|companion| {
+                    is_dense(companion.layout())
+                        && is_integer(companion.element())
+                        && companion.shape() == [indptr_extent]
+                }) && descriptor_matches(*indices, &|companion| {
+                    is_dense(companion.layout())
+                        && is_integer(companion.element())
+                        && companion.shape() == [*nonzero]
+                })
+            })
+        }),
+        Layout::BlockFloatingPoint {
+            block_len, scales, ..
+        } => payload
+            .shape()
+            .iter()
+            .try_fold(1_u64, |count, extent| count.checked_mul(*extent))
+            .and_then(|elements| elements.checked_add(u64::from(*block_len) - 1))
+            .map(|rounded| rounded / u64::from(*block_len))
+            .is_some_and(|blocks| {
+                descriptor_matches(*scales, &|companion| {
+                    is_dense(companion.layout())
+                        && matches!(
+                            companion.element(),
+                            crate::ElementType::F16
+                                | crate::ElementType::F32
+                                | crate::ElementType::F64
+                        )
+                        && companion.shape() == [blocks]
+                })
+            }),
+    }
+}
+
+fn is_dense(layout: &Layout) -> bool {
+    matches!(layout, Layout::DenseRowMajor | Layout::DenseColumnMajor)
+}
+
+fn is_integer(element: crate::ElementType) -> bool {
+    matches!(
+        element,
+        crate::ElementType::I8
+            | crate::ElementType::I16
+            | crate::ElementType::I24
+            | crate::ElementType::I32
+            | crate::ElementType::I64
+            | crate::ElementType::U8
+            | crate::ElementType::U16
+            | crate::ElementType::U32
+            | crate::ElementType::U64
+    )
 }
 
 fn check_limit(report: &mut Option<ValidationReport>, actual: usize, maximum: usize, path: &str) {

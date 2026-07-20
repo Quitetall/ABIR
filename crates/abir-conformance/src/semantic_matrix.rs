@@ -111,6 +111,9 @@ pub fn semantic_matrix_dataset() -> AbirDataset {
         rational(1, 1),
         rational(1, 1_000_000),
         concept("abir:clock-relation/measured"),
+        rational(0, 1),
+        Some(rational(10, 1)),
+        content(83),
     ));
 
     draft.add_coordinate_frame(CoordinateFrame::new(
@@ -145,6 +148,43 @@ pub fn semantic_matrix_dataset() -> AbirDataset {
         ],
         ReferenceKind::Differential,
     ));
+    draft.add_source_relationship(SourceRelationship::PatientSubject {
+        patient_id: id::<PatientTag>(31),
+        subject_id: id::<SubjectTag>(30),
+    });
+    draft.add_source_relationship(SourceRelationship::SessionSubject {
+        session_id: id::<SessionTag>(32),
+        subject_id: id::<SubjectTag>(30),
+    });
+    draft.add_source_relationship(SourceRelationship::SessionPatient {
+        session_id: id::<SessionTag>(32),
+        patient_id: id::<PatientTag>(31),
+    });
+    draft.add_source_relationship(SourceRelationship::AcquisitionSession {
+        acquisition_id: id::<AcquisitionTag>(33),
+        session_id: id::<SessionTag>(32),
+    });
+    draft.add_source_relationship(SourceRelationship::AcquisitionDevice {
+        acquisition_id: id::<AcquisitionTag>(33),
+        device_id: id::<DeviceTag>(34),
+    });
+    draft.add_source_relationship(SourceRelationship::DeviceSensor {
+        device_id: id::<DeviceTag>(34),
+        sensor_id: id::<SensorTag>(35),
+    });
+    draft.add_source_relationship(SourceRelationship::SensorChannel {
+        sensor_id: id::<SensorTag>(35),
+        channel_id: id::<ChannelTag>(36),
+    });
+    draft.add_source_relationship(SourceRelationship::AcquisitionRecording {
+        acquisition_id: id::<AcquisitionTag>(33),
+        recording_id,
+    });
+    draft.add_source_relationship(SourceRelationship::ChannelBasisMember {
+        channel_id: id::<ChannelTag>(36),
+        basis_id,
+        position: 0,
+    });
     draft.add_policy(Policy::new(
         policy_id,
         None,
@@ -314,19 +354,33 @@ pub fn semantic_matrix_dataset() -> AbirDataset {
         )));
     }
 
-    for (index, content_id, element, logical_bytes, extent, semantic) in [
+    for (index, content_id, element, logical_bytes, shape, semantic) in [
         (
             12_usize,
             70_u8,
             ElementType::I32,
             12_u64,
-            3_u64,
+            vec![3_u64],
             "abir:axis/ragged-offset",
         ),
-        (13, 71, ElementType::U32, 8, 2, "abir:axis/coo-index"),
-        (14, 72, ElementType::U32, 12, 3, "abir:axis/csr-indptr"),
-        (15, 73, ElementType::U32, 4, 1, "abir:axis/csr-index"),
-        (16, 74, ElementType::F32, 8, 2, "abir:axis/bfp-scale"),
+        (
+            13,
+            71,
+            ElementType::U32,
+            8,
+            vec![1, 2],
+            "abir:axis/coo-index",
+        ),
+        (
+            14,
+            72,
+            ElementType::U32,
+            12,
+            vec![3],
+            "abir:axis/csr-indptr",
+        ),
+        (15, 73, ElementType::U32, 4, vec![1], "abir:axis/csr-index"),
+        (16, 74, ElementType::F32, 8, vec![2], "abir:axis/bfp-scale"),
     ] {
         draft.add_atom(Atom::Tensor(Tensor::new(
             atom_ids[index],
@@ -335,11 +389,14 @@ pub fn semantic_matrix_dataset() -> AbirDataset {
                 content_id,
                 logical_bytes,
                 element,
-                vec![extent],
+                shape.clone(),
                 Layout::DenseRowMajor,
                 None,
             )),
-            vec![SemanticAxis::new(concept(semantic), extent)],
+            shape
+                .into_iter()
+                .map(|extent| SemanticAxis::new(concept(semantic), extent))
+                .collect(),
         )));
     }
 

@@ -37,7 +37,8 @@ pub use canonical::{canonical_debug_json, logical_content_id};
 pub use catalog::{
     Acquisition, Calibration, CalibrationError, CatalogRecord, Channel, ChannelBasis, ChannelSpec,
     Clock, ClockRelation, ConceptDictionary, CoordinateFrame, DerivedArtifact, Device, Event,
-    FrameTransform, Patient, Recording, ReferenceKind, Sensor, Session, Stream, Subject,
+    FrameTransform, Patient, Recording, ReferenceKind, Sensor, Session, SourceRelationship, Stream,
+    Subject,
 };
 #[cfg(feature = "alloc")]
 pub use concept::{ConceptError, ConceptId, SourceKey, SourceKeyError};

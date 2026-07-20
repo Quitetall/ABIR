@@ -4,8 +4,8 @@ use abir::{
     CoordinateFrameTag, DatasetDraft, DatasetTag, Derivation, DerivationTag, DerivedArtifact,
     DerivedArtifactTag, Device, DeviceTag, Event, EventTag, ExactNumber, FailureCode,
     FrameTransform, FrameTransformTag, ObjectId, ObjectKind, Patient, PatientTag, Rational,
-    SemanticRef, Sensor, SensorTag, Session, SessionTag, SourceKey, Subject, SubjectTag,
-    ValidationLimits,
+    SemanticRef, Sensor, SensorTag, Session, SessionTag, SourceKey, SourceRelationship, Subject,
+    SubjectTag, ValidationLimits,
 };
 
 fn id<T>(byte: u8) -> ObjectId<T> {
@@ -59,6 +59,10 @@ fn typed_catalog_records_validate_and_are_retrievable() {
         id::<ConceptDictionaryTag>(9),
         concept("dictionary"),
     ));
+    draft.add_source_relationship(SourceRelationship::PatientSubject {
+        patient_id: id::<PatientTag>(3),
+        subject_id: id::<SubjectTag>(2),
+    });
 
     let clock_a = id::<ClockTag>(10);
     let clock_b = id::<ClockTag>(11);
@@ -73,6 +77,9 @@ fn typed_catalog_records_validate_and_are_retrievable() {
         rational(1, 1),
         rational(1, 1_000_000),
         concept("clock-method"),
+        rational(0, 1),
+        Some(rational(10, 1)),
+        ContentId::from_bytes([20; 32]),
     ));
 
     let frame_a = id::<CoordinateFrameTag>(13);
@@ -117,6 +124,7 @@ fn typed_catalog_records_validate_and_are_retrievable() {
     let dataset = draft.validate(ValidationLimits::default()).unwrap();
 
     assert_eq!(dataset.subjects().len(), 1);
+    assert_eq!(dataset.source_relationships().len(), 1);
     assert_eq!(
         dataset
             .subject(id::<SubjectTag>(2))
@@ -171,6 +179,39 @@ fn typed_catalog_records_validate_and_are_retrievable() {
 }
 
 #[test]
+fn source_relationships_reject_dangling_typed_endpoints() {
+    let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
+    draft.add_patient(Patient::new(id::<PatientTag>(2), concept("patient")));
+    draft.add_source_relationship(SourceRelationship::PatientSubject {
+        patient_id: id::<PatientTag>(2),
+        subject_id: id::<SubjectTag>(3),
+    });
+
+    assert_failure(
+        draft,
+        FailureCode::DanglingReference,
+        "source_relationships[0]",
+    );
+}
+
+#[test]
+fn event_order_handles_large_exact_rationals_without_overflow() {
+    let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
+    let clock_id = id::<ClockTag>(2);
+    draft.add_clock(clock(clock_id));
+    draft.add_event(Event::new(
+        id::<EventTag>(3),
+        concept("event"),
+        clock_id,
+        rational(i128::MAX - 2, i128::MAX - 1),
+        rational(i128::MAX - 1, i128::MAX),
+        rational(0, 1),
+    ));
+
+    assert!(draft.validate(ValidationLimits::default()).is_ok());
+}
+
+#[test]
 fn duplicate_catalog_identity_fails_closed() {
     let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
     let duplicate = id::<SubjectTag>(2);
@@ -180,6 +221,40 @@ fn duplicate_catalog_identity_fails_closed() {
     let report = draft.validate(ValidationLimits::default()).unwrap_err();
     assert!(report.failures().iter().any(|failure| {
         failure.failure_code() == FailureCode::DuplicateId && failure.path() == "subjects"
+    }));
+}
+
+#[test]
+fn catalog_and_relationship_structural_limits_fail_closed() {
+    let mut catalog = DatasetDraft::new(id::<DatasetTag>(1));
+    catalog.add_subject(Subject::new(id::<SubjectTag>(2), concept("subject")));
+    let catalog_report = catalog
+        .validate(ValidationLimits {
+            max_catalog_records: 0,
+            ..ValidationLimits::default()
+        })
+        .unwrap_err();
+    assert!(catalog_report.failures().iter().any(|failure| {
+        failure.failure_code() == FailureCode::StructuralLimit
+            && failure.path() == "catalog_records"
+    }));
+
+    let mut relationships = DatasetDraft::new(id::<DatasetTag>(3));
+    relationships.add_subject(Subject::new(id::<SubjectTag>(4), concept("subject")));
+    relationships.add_patient(Patient::new(id::<PatientTag>(5), concept("patient")));
+    relationships.add_source_relationship(SourceRelationship::PatientSubject {
+        patient_id: id::<PatientTag>(5),
+        subject_id: id::<SubjectTag>(4),
+    });
+    let relationship_report = relationships
+        .validate(ValidationLimits {
+            max_relationships: 0,
+            ..ValidationLimits::default()
+        })
+        .unwrap_err();
+    assert!(relationship_report.failures().iter().any(|failure| {
+        failure.failure_code() == FailureCode::StructuralLimit
+            && failure.path() == "source_relationships"
     }));
 }
 
@@ -196,6 +271,9 @@ fn every_specialized_catalog_reference_fails_closed_when_dangling() {
         rational(1, 1),
         rational(0, 1),
         concept("method"),
+        rational(0, 1),
+        None,
+        ContentId::from_bytes([21; 32]),
     ));
     assert_failure(clock_draft, FailureCode::UnresolvedClock, "to_clock_id");
 
@@ -260,6 +338,9 @@ fn invalid_intervals_uncertainty_and_rates_are_rejected() {
         rational(0, 1),
         rational(-1, 1),
         concept("method"),
+        rational(0, 1),
+        Some(rational(-1, 1)),
+        ContentId::from_bytes([22; 32]),
     ));
     draft.add_event(Event::new(
         id::<EventTag>(4),

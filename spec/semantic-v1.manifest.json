@@ -4,16 +4,16 @@
   "hash_algorithm": "sha256",
   "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
   "artifacts": [
-    { "path": "spec/ABIR_SEMANTIC_V1.md", "sha256": "26ef6325ff382b90b4c710f2dc3043a8622de966f99b24f24ff3415c928f127b" },
+    { "path": "spec/ABIR_SEMANTIC_V1.md", "sha256": "09b7d2020aeaa4d6e3ed7f32e81261948e60dad8ea568ddd519a3d19b765d9d5" },
     { "path": "spec/COMPATIBILITY.md", "sha256": "aed3f48acde2e7f24db9a3a0614a73de450c4cd9dc85d1d1910b1312503cd01c" },
-    { "path": "schema/abir-semantic-v1.schema.json", "sha256": "e4fd34ece40852da7cce96f175dcbf024da22a6a2893cfcb46244fc956e014d7" },
+    { "path": "schema/abir-semantic-v1.schema.json", "sha256": "1b163fc106b93a48af7403a2f6bcd8ca0d3bbc88313dc524e8e13c96388fb950" },
     { "path": "registries/concepts-v1.json", "sha256": "31a936a3c6947e42e6430ca7a3531fbd6cb62e13c1e3e5bf31f7d2db00011423" },
     { "path": "registries/failures-v1.json", "sha256": "88da823fb1e968bbc66a8b513b21a8cef7a6d52c74743d5e6c40e0e03bfe8e1f" },
     { "path": "registries/proofs-v1.json", "sha256": "439ba689f0e73b7cc7b2380f4bb8faf82480ec797cb9c5cd6da74774cdebcfb0" },
-    { "path": "fixtures/valid/canonical-tensor.json", "sha256": "0775343a229206c5e738257cf78804c783e124f5c1c541ae5df93827b8a5ecdf" },
-    { "path": "fixtures/valid/canonical-tensor.content-id", "sha256": "6ee59f6e7cc70e3b974d8f3b086989dd9e4275d7982065b0e2165ce44fd53334" },
-    { "path": "fixtures/valid/semantic-matrix.json", "sha256": "e8998dc93dc714a04f5d9aef0dd3b6ec910ceca8dd8e07c485dcdc521dff280c" },
-    { "path": "fixtures/valid/semantic-matrix.content-id", "sha256": "4ec27af56da3bdc95627aa6cc10b9da743a07111b746e1bc83b0929391413098" },
+    { "path": "fixtures/valid/canonical-tensor.json", "sha256": "14a559ecfd31c9ad06053f0703da778c2a910b36b3b53048f7be26b34f638f85" },
+    { "path": "fixtures/valid/canonical-tensor.content-id", "sha256": "6c1c8db2383f5b86f44be4edb15fd7d0a5f13579bd29ff35ee3bb1f2b5ead98c" },
+    { "path": "fixtures/valid/semantic-matrix.json", "sha256": "c5512d106382b5e4d1143c3ef05ed8b8af2ba0f1487fcad24738033f5360709c" },
+    { "path": "fixtures/valid/semantic-matrix.content-id", "sha256": "2ae21ce92bda23e719744489d3f2304c82eb980d43f1026851b2e2f5310c4667" },
     { "path": "fixtures/invalid/schema/present-without-payload.json", "sha256": "b446788ef15b1645de1b6ddd726e764c72c28b9b094a14e00ad219b31519e5ca" },
     { "path": "fixtures/invalid/schema/malformed-content-id.json", "sha256": "8d81f7c7bfd9d7dadacf82211c65f9083c6b94444b8d661b08175b43827f20aa" }
   ]

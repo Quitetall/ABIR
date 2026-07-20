@@ -227,7 +227,7 @@ fn full_semantic_matrix_validates() {
             false,
         )],
     )));
-    for (atom_id, content_id, element, logical_bytes, shape, semantic, extent) in [
+    for (atom_id, content_id, element, logical_bytes, shape, semantic) in [
         (
             atom_ids[7],
             40,
@@ -235,16 +235,14 @@ fn full_semantic_matrix_validates() {
             12,
             vec![3],
             "abir:axis/ragged-offset",
-            3,
         ),
         (
             atom_ids[8],
             41,
             ElementType::U32,
             8,
-            vec![2],
+            vec![1, 2],
             "abir:axis/sparse-coordinate",
-            2,
         ),
         (
             atom_ids[9],
@@ -253,7 +251,6 @@ fn full_semantic_matrix_validates() {
             8,
             vec![2],
             "abir:axis/bfp-scale",
-            2,
         ),
     ] {
         draft.add_atom(Atom::Tensor(Tensor::new(
@@ -263,11 +260,17 @@ fn full_semantic_matrix_validates() {
                 content_id,
                 logical_bytes,
                 element,
-                shape,
+                shape.clone(),
                 Layout::DenseRowMajor,
                 None,
             )),
-            vec![SemanticAxis::new(ConceptId::new(semantic).unwrap(), extent)],
+            shape
+                .iter()
+                .copied()
+                .map(|axis_extent| {
+                    SemanticAxis::new(ConceptId::new(semantic).unwrap(), axis_extent)
+                })
+                .collect(),
         )));
     }
 

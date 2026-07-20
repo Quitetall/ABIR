@@ -53,6 +53,49 @@ pub type Sensor = CatalogRecord<SensorTag>;
 pub type Channel = CatalogRecord<ChannelTag>;
 pub type ConceptDictionary = CatalogRecord<ConceptDictionaryTag>;
 
+/// Typed edges that preserve the source hierarchy without embedding one
+/// standard's containment model into catalog records.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SourceRelationship {
+    PatientSubject {
+        patient_id: ObjectId<PatientTag>,
+        subject_id: ObjectId<SubjectTag>,
+    },
+    SessionSubject {
+        session_id: ObjectId<SessionTag>,
+        subject_id: ObjectId<SubjectTag>,
+    },
+    SessionPatient {
+        session_id: ObjectId<SessionTag>,
+        patient_id: ObjectId<PatientTag>,
+    },
+    AcquisitionSession {
+        acquisition_id: ObjectId<AcquisitionTag>,
+        session_id: ObjectId<SessionTag>,
+    },
+    AcquisitionDevice {
+        acquisition_id: ObjectId<AcquisitionTag>,
+        device_id: ObjectId<DeviceTag>,
+    },
+    DeviceSensor {
+        device_id: ObjectId<DeviceTag>,
+        sensor_id: ObjectId<SensorTag>,
+    },
+    SensorChannel {
+        sensor_id: ObjectId<SensorTag>,
+        channel_id: ObjectId<ChannelTag>,
+    },
+    AcquisitionRecording {
+        acquisition_id: ObjectId<AcquisitionTag>,
+        recording_id: ObjectId<RecordingTag>,
+    },
+    ChannelBasisMember {
+        channel_id: ObjectId<ChannelTag>,
+        basis_id: ObjectId<ChannelBasisTag>,
+        position: u32,
+    },
+}
+
 /// Exact relationship between two clocks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClockRelation {
@@ -63,9 +106,15 @@ pub struct ClockRelation {
     rate: Rational,
     uncertainty: Rational,
     method: ConceptId,
+    validity_start: Rational,
+    validity_end: Option<Rational>,
+    provenance: ContentId,
 }
 
 impl ClockRelation {
+    // All fields are mandatory semantic claims; a parameter object would only
+    // move, rather than reduce, the call-site obligation to name each value.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ObjectId<ClockRelationTag>,
         from_clock_id: ObjectId<ClockTag>,
@@ -74,6 +123,9 @@ impl ClockRelation {
         rate: Rational,
         uncertainty: Rational,
         method: ConceptId,
+        validity_start: Rational,
+        validity_end: Option<Rational>,
+        provenance: ContentId,
     ) -> Self {
         Self {
             id,
@@ -83,6 +135,9 @@ impl ClockRelation {
             rate,
             uncertainty,
             method,
+            validity_start,
+            validity_end,
+            provenance,
         }
     }
 
@@ -106,6 +161,15 @@ impl ClockRelation {
     }
     pub fn method(&self) -> &ConceptId {
         &self.method
+    }
+    pub const fn validity_start(&self) -> Rational {
+        self.validity_start
+    }
+    pub const fn validity_end(&self) -> Option<Rational> {
+        self.validity_end
+    }
+    pub const fn provenance(&self) -> ContentId {
+        self.provenance
     }
 }
 

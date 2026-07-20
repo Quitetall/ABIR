@@ -49,6 +49,13 @@ Canonical concept namespaces begin with a lowercase ASCII letter and contain
 only lowercase ASCII letters, digits, period, or hyphen before the colon. This
 restriction is intentional so identity does not depend on case folding.
 
+The frozen source relationship set is `PatientSubject`, `SessionSubject`,
+`SessionPatient`, `AcquisitionSession`, `AcquisitionDevice`, `DeviceSensor`,
+`SensorChannel`, `AcquisitionRecording`, and `ChannelBasisMember`. Each endpoint
+must resolve to the declared typed catalog. A `ClockRelation` additionally
+declares an exact validity interval and a provenance `ContentId`; clock
+alignment outside that interval is not implied.
+
 ## 4. Atomic data forms
 
 The atom algebra is sealed for semantic-v1:
@@ -72,6 +79,13 @@ CSR identifies indptr and indices payloads, and block-floating-point layouts
 identify a scale payload. These companion `ContentId` values must resolve in
 the same verified dataset and may not alias the primary payload where that
 would erase the composite representation.
+
+Companion contracts are normative: explicit timestamps are dense `i64[count]`;
+ragged offsets are dense integer `[rows + 1]`; COO indices are dense integer
+`[nonzero, rank]`; CSR indptr and indices are dense integer `[rows + 1]` and
+`[nonzero]`; and block-floating-point scales are dense floating-point
+`[ceil(element_count / block_len)]`. Every descriptor carrying the same
+companion `ContentId` must agree with that contract.
 
 ## 5. Time and presence
 
