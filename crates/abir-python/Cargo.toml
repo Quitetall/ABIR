@@ -9,6 +9,10 @@ license = "AGPL-3.0-or-later"
 name = "abir"
 crate-type = ["cdylib"]
 
+[features]
+default = ["abi3-py310"]
+abi3-py310 = ["pyo3/abi3-py310"]
+
 [dependencies]
 abir-core = { package = "abir", path = "../abir", version = "0.1.0" }
 pyo3 = { version = "0.22", features = ["macros", "extension-module", "abi3-py310"] }
