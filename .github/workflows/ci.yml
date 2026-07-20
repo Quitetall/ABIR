@@ -38,6 +38,17 @@ jobs:
       - name: Check no-default-features
         run: cargo check -p abir --no-default-features
 
+      - name: Check full semantic core on no_std RISC-V
+        run: |
+          rustup target add riscv32imac-unknown-none-elf
+          cargo check -p abir --no-default-features --features alloc --target riscv32imac-unknown-none-elf
+
+      - name: Check fuzz target compiles
+        run: cargo check --manifest-path fuzz/Cargo.toml --bin dataset_draft
+
+      - name: Exercise performance harness
+        run: ABIR_BENCH_ITERS=10000 cargo run -p abir-conformance --release --bin measure_semantic_core
+
       - name: Install Python validation tools
         run: python -m pip install --upgrade pip maturin pytest numpy jsonschema
 
