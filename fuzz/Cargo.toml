@@ -1,0 +1,22 @@
+[package]
+name = "abir-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+abir = { path = "../crates/abir" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "dataset_draft"
+path = "fuzz_targets/dataset_draft.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

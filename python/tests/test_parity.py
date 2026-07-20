@@ -54,3 +54,11 @@ def test_rust_fixture_conforms_to_normative_json_schema():
     fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
     jsonschema.Draft202012Validator.check_schema(schema)
     jsonschema.validate(fixture, schema)
+
+
+def test_schema_negative_corpus_is_rejected():
+    schema = json.loads((ROOT / "schema/abir-semantic-v1.schema.json").read_text())
+    validator = jsonschema.Draft202012Validator(schema)
+    for path in sorted((ROOT / "fixtures/invalid/schema").glob("*.json")):
+        instance = json.loads(path.read_text())
+        assert list(validator.iter_errors(instance)), f"negative fixture passed: {path.name}"

@@ -1,0 +1,23 @@
+{
+  "semantic_version": "1",
+  "dataset_id": "01010101010101010101010101010101",
+  "recordings": [],
+  "streams": [],
+  "atoms": [
+    {
+      "id": "02020202020202020202020202020202",
+      "kind": "tensor",
+      "presence": "present",
+      "payload": {
+        "content_id": "not-a-content-id",
+        "logical_bytes": 2,
+        "element": "i16",
+        "byte_order": "little",
+        "layout": "dense-row-major",
+        "shape": [1],
+        "encoding": null,
+        "media_type": null
+      }
+    }
+  ]
+}

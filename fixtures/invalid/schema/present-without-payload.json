@@ -1,0 +1,13 @@
+{
+  "semantic_version": "1",
+  "dataset_id": "01010101010101010101010101010101",
+  "recordings": [],
+  "streams": [],
+  "atoms": [
+    {
+      "id": "02020202020202020202020202020202",
+      "kind": "tensor",
+      "presence": "present"
+    }
+  ]
+}
