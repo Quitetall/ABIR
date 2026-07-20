@@ -200,6 +200,7 @@ impl CoordinateFrame {
 pub struct ChannelSpec {
     concept: ConceptId,
     coordinate_frame_id: Option<ObjectId<CoordinateFrameTag>>,
+    source_keys: Vec<SourceKey>,
 }
 
 impl ChannelSpec {
@@ -207,6 +208,7 @@ impl ChannelSpec {
         Self {
             concept,
             coordinate_frame_id: None,
+            source_keys: Vec::new(),
         }
     }
 
@@ -215,11 +217,20 @@ impl ChannelSpec {
         self
     }
 
+    pub fn with_source_key(mut self, key: SourceKey) -> Self {
+        self.source_keys.push(key);
+        self
+    }
+
     pub fn concept(&self) -> &ConceptId {
         &self.concept
     }
     pub const fn coordinate_frame_id(&self) -> Option<ObjectId<CoordinateFrameTag>> {
         self.coordinate_frame_id
+    }
+
+    pub fn source_keys(&self) -> &[SourceKey] {
+        &self.source_keys
     }
 }
 

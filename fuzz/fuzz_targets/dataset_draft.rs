@@ -20,7 +20,7 @@ fuzz_target!(|data: &[u8]| {
     draft.add_stream(Stream::new(
         stream_id,
         recording_id,
-        ConceptId::new("future:modality/fuzz").unwrap(),
+        ConceptId::new("future:modality/fuzz").expect("static fuzz modality is canonical"),
         vec![atom_id],
         None,
         None,

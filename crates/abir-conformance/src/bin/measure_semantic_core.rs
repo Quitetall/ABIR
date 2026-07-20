@@ -12,7 +12,10 @@ fn main() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(100_000);
-    assert!(iterations > 0, "ABIR_BENCH_ITERS must be positive");
+    assert!(
+        (1..=10_000_000).contains(&iterations),
+        "ABIR_BENCH_ITERS must be between 1 and 10,000,000"
+    );
 
     let validation_start = Instant::now();
     for _ in 0..iterations {

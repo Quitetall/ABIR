@@ -177,10 +177,7 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
                     json!({
                         "id": basis.id().to_string(),
                         "reference": reference_name(basis.reference()),
-                        "channels": basis.channels().iter().map(|channel| json!({
-                            "concept": channel.concept().as_str(),
-                            "coordinate_frame_id": channel.coordinate_frame_id().map(|id| id.to_string())
-                        })).collect::<Vec<_>>()
+                        "channels": basis.channels().iter().map(channel_value).collect::<Vec<_>>()
                     })
                 })
                 .collect(),
@@ -307,6 +304,18 @@ fn atom_value(atom: &Atom, projection: Projection) -> Value {
         "id": atom.id().to_string(), "kind": kind, "presence": presence_name(atom.presence()),
         "payload": atom.payload().map(|value| payload_value(value, projection)),
         "time_axis": time, "calibration": calibration
+    })
+}
+
+fn channel_value(channel: &crate::ChannelSpec) -> Value {
+    let mut keys: Vec<_> = channel.source_keys().iter().collect();
+    keys.sort_by(|a, b| (a.namespace(), a.value()).cmp(&(b.namespace(), b.value())));
+    json!({
+        "concept": channel.concept().as_str(),
+        "coordinate_frame_id": channel.coordinate_frame_id().map(|id| id.to_string()),
+        "source_keys": keys.into_iter().map(|key| json!({
+            "namespace": key.namespace(), "value": key.value()
+        })).collect::<Vec<_>>()
     })
 }
 

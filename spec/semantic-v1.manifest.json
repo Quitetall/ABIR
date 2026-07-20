@@ -6,7 +6,7 @@
   "artifacts": [
     { "path": "spec/ABIR_SEMANTIC_V1.md", "sha256": "879f22f0e20076ae2999867564eab039ac3826a12536f7fecf7d9ceaeeda6aa8" },
     { "path": "spec/COMPATIBILITY.md", "sha256": "aed3f48acde2e7f24db9a3a0614a73de450c4cd9dc85d1d1910b1312503cd01c" },
-    { "path": "schema/abir-semantic-v1.schema.json", "sha256": "57f5cf1262185deb4dba8526adb2a7b95c7df68e2daf08ec38dc24d0788d4f8e" },
+    { "path": "schema/abir-semantic-v1.schema.json", "sha256": "cf625a20408fb9fad009431e7081ffd90aa99ac600259a131453a46dc077d76d" },
     { "path": "registries/concepts-v1.json", "sha256": "31a936a3c6947e42e6430ca7a3531fbd6cb62e13c1e3e5bf31f7d2db00011423" },
     { "path": "registries/failures-v1.json", "sha256": "88da823fb1e968bbc66a8b513b21a8cef7a6d52c74743d5e6c40e0e03bfe8e1f" },
     { "path": "registries/proofs-v1.json", "sha256": "439ba689f0e73b7cc7b2380f4bb8faf82480ec797cb9c5cd6da74774cdebcfb0" }

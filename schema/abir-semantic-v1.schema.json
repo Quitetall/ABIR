@@ -233,7 +233,8 @@
       "required": ["concept", "coordinate_frame_id"],
       "properties": {
         "concept": { "$ref": "#/$defs/concept" },
-        "coordinate_frame_id": { "$ref": "#/$defs/nullable_object_id" }
+        "coordinate_frame_id": { "$ref": "#/$defs/nullable_object_id" },
+        "source_keys": { "type": "array", "items": { "$ref": "#/$defs/source_key" } }
       }
     }
   }

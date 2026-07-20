@@ -69,7 +69,8 @@ fn full_semantic_matrix_validates() {
         basis_id,
         vec![
             ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap())
-                .with_coordinate_frame(frame_id),
+                .with_coordinate_frame(frame_id)
+                .with_source_key(SourceKey::new("legacy.channel-label", "Fp1-Ref").unwrap()),
             ChannelSpec::new(ConceptId::new("eeg:channel/fp2").unwrap())
                 .with_coordinate_frame(frame_id),
         ],
