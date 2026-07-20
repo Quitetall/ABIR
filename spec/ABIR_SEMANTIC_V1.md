@@ -142,6 +142,17 @@ Logical hashing uses domain `org.quitetall.abir.semantic-v1\0` followed by the
 canonical JSON bytes. Storage handles, `StorageId`, physical layout/location,
 observed execution, and current authorization-ledger state are excluded.
 
+### 9.1 Semantic metadata budget
+
+`ValidationLimits.max_metadata_bytes` limits a deterministic, target-independent
+semantic complexity budget. The budget charges UTF-8 content, normative
+fixed-width collection entries, and 64 bytes per semantic record. It excludes
+payload bytes, allocator headers and spare capacity, and target ABI padding. It
+is therefore not a retained-memory ceiling. Host performance evidence records
+the budget, root inline size, and canonical debug size separately; a future
+storage/runtime profile may add allocator-specific memory ceilings without
+changing semantic-v1 identity.
+
 ## 10. Structured failures
 
 Every failure has a stable registry code, severity, semantic path, origin,

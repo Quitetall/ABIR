@@ -9,6 +9,8 @@ pub struct ValidationLimits {
     pub max_channels: usize,
     pub max_rank: usize,
     pub max_nesting_depth: usize,
+    /// Maximum target-independent semantic metadata budget. This is not a
+    /// retained-memory or allocator-capacity ceiling.
     pub max_metadata_bytes: usize,
     pub max_logical_payload_bytes: u64,
 }

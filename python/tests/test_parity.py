@@ -146,3 +146,22 @@ def test_schema_rejects_contradictory_atom_fields_and_empty_rational():
     fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
     fixture["atoms"][0]["payload"]["logical_bytes"] = 2**64
     assert list(validator.iter_errors(fixture))
+
+
+def test_schema_exact_numbers_match_i128_domain():
+    schema = json.loads((ROOT / "schema/abir-semantic-v1.schema.json").read_text())
+    validator = jsonschema.Draft202012Validator(schema)
+
+    for value in [str(-(2**127)), "-1", "0", str(2**127 - 1)]:
+        fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+        fixture["clocks"][0]["offset"] = {"$rational": [value, "1"]}
+        assert not list(validator.iter_errors(fixture)), value
+
+    for value in [str(-(2**127) - 1), str(2**127), "-0"]:
+        fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+        fixture["clocks"][0]["offset"] = {"$rational": [value, "1"]}
+        assert list(validator.iter_errors(fixture)), value
+
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+    fixture["clocks"][0]["offset"] = {"$rational": ["1", str(2**127)]}
+    assert list(validator.iter_errors(fixture))

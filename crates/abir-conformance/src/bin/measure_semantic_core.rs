@@ -63,10 +63,10 @@ fn main() {
         },
         "metadata": {
             "root_inline_bytes": std::mem::size_of_val(opened.dataset()),
-            "estimated_retained_bytes": opened.dataset().estimated_metadata_bytes(),
-            "estimator": "UTF-8 semantic text plus 64 bytes per record; payload bytes excluded",
+            "semantic_budget_bytes": opened.dataset().semantic_metadata_budget_bytes(),
+            "budget_definition": "target-independent UTF-8 text, normative collection widths, and 64 bytes per semantic record; excludes payload bytes and allocator spare capacity",
             "canonical_debug_bytes": canonical_bytes.len(),
-            "note": "Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist."
+            "note": "root_inline_bytes and canonical_debug_bytes are reproducible metadata-footprint proxies, not a whole-allocator retained-memory measurement. Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist."
         }
     });
     println!(

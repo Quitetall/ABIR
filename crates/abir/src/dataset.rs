@@ -1128,11 +1128,13 @@ impl AbirDataset {
     pub fn source_relationships(&self) -> &[SourceRelationship] {
         &self.source_relationships
     }
-    /// Deterministic conservative estimate of retained semantic metadata.
+    /// Deterministic semantic metadata budget charged by validation.
     ///
-    /// Counts UTF-8 semantic text plus a fixed 64-byte charge per record for
-    /// identifiers and scalar fields. Payload bytes are deliberately excluded.
-    pub fn estimated_metadata_bytes(&self) -> usize {
+    /// This is a target-independent complexity budget, not an allocator or
+    /// retained-memory measurement. It counts UTF-8 semantic text, normative
+    /// fixed-width collection entries, and a 64-byte charge per semantic
+    /// record. Payload bytes and allocator spare capacity are excluded.
+    pub fn semantic_metadata_budget_bytes(&self) -> usize {
         validated_dataset_metadata_bytes(self).unwrap_or(usize::MAX)
     }
     pub fn payload_content_ids(&self) -> Vec<ContentId> {
@@ -1549,9 +1551,10 @@ macro_rules! metadata_bytes {
             }
         }
 
-        // Fixed-width identities and scalar fields also consume metadata memory.
-        // A conservative 64-byte charge per record keeps the limit meaningful
-        // across host and no_std layouts without depending on target ABI padding.
+        // Fixed-width identities and scalar fields consume the normative
+        // semantic budget too. This target-independent charge bounds semantic
+        // complexity; it deliberately does not claim to measure Rust allocator
+        // retention or target ABI padding.
         let record_count = [
             draft.recordings.len(),
             draft.streams.len(),
