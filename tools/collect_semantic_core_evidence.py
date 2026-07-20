@@ -10,6 +10,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,7 @@ HASHED_ARTIFACTS = (
     "fixtures/valid/canonical-tensor.content-id",
     "fixtures/valid/semantic-matrix.json",
     "fixtures/valid/semantic-matrix.content-id",
+    "fuzz/corpus/dataset_draft.sha256",
 )
 
 
@@ -68,15 +70,33 @@ print(json.dumps({
     return json.loads(run(python, "-c", snippet))
 
 
+def python_runtime(python: str) -> dict[str, str]:
+    snippet = """
+import json
+import importlib.metadata
+import abir
+print(json.dumps({
+    "module_path": abir.__file__,
+    "distribution_version": importlib.metadata.version("abir-biosignal"),
+}))
+"""
+    return json.loads(run(python, "-c", snippet))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="evidence/semantic-core.json")
     parser.add_argument("--python", default=sys.executable)
+    parser.add_argument("--wheel", required=True)
     parser.add_argument("--iterations", type=int, default=100_000)
     parser.add_argument("--python-samples", type=int, default=10)
     args = parser.parse_args()
     if args.iterations <= 0 or args.python_samples <= 0:
         parser.error("iteration counts must be positive")
+
+    wheel = Path(args.wheel).resolve()
+    if not wheel.is_file() or wheel.suffix != ".whl":
+        parser.error("--wheel must name an existing wheel")
 
     rust_stdout = run(
         "cargo",
@@ -90,8 +110,22 @@ def main() -> int:
         env={**__import__("os").environ, "ABIR_BENCH_ITERS": str(args.iterations)},
     )
     rust_metrics = json.loads(rust_stdout)
-    imports = python_import_samples(args.python, args.python_samples)
-    zero_copy = python_zero_copy(args.python)
+    with tempfile.TemporaryDirectory(prefix="abir-evidence-python-") as temporary:
+        venv = Path(temporary) / "venv"
+        run(args.python, "-m", "venv", "--system-site-packages", str(venv))
+        evidence_python = str(venv / "bin/python")
+        run(
+            evidence_python,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--no-deps",
+            str(wheel),
+        )
+        imports = python_import_samples(evidence_python, args.python_samples)
+        zero_copy = python_zero_copy(evidence_python)
+        runtime = python_runtime(evidence_python)
 
     evidence = {
         "schema_version": 1,
@@ -107,6 +141,11 @@ def main() -> int:
         },
         "rust": rust_metrics,
         "python": {
+            "wheel": {
+                "filename": wheel.name,
+                "sha256": sha256(wheel),
+                **runtime,
+            },
             "import_seconds": {
                 "samples": imports,
                 "mean": statistics.mean(imports),
@@ -119,8 +158,10 @@ def main() -> int:
         },
         "commands": [
             f"ABIR_BENCH_ITERS={args.iterations} cargo run -q -p abir-conformance --release --bin measure_semantic_core",
-            f"{args.python} -c <import-timer>",
-            f"{args.python} -c <zero-copy-probe>",
+            f"{args.python} -m venv --system-site-packages <temporary-venv>",
+            f"<temporary-venv>/bin/python -m pip install --no-index --no-deps {wheel}",
+            "<temporary-venv>/bin/python -c <import-timer>",
+            "<temporary-venv>/bin/python -c <zero-copy-probe>",
         ],
         "regression_policy": {
             "structural_limits": "enforced-now",

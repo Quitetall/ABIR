@@ -63,6 +63,8 @@ fn main() {
         },
         "metadata": {
             "root_inline_bytes": std::mem::size_of_val(opened.dataset()),
+            "estimated_retained_bytes": opened.dataset().estimated_metadata_bytes(),
+            "estimator": "UTF-8 semantic text plus 64 bytes per record; payload bytes excluded",
             "canonical_debug_bytes": canonical_bytes.len(),
             "note": "Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist."
         }

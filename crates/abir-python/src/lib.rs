@@ -280,9 +280,9 @@ fn build_tensor_dataset(
 }
 
 fn parse_canonical_dataset(document: &[u8]) -> PyResult<abir_core::AbirDataset> {
-    let root: Value = serde_json::from_slice(document)
+    let document_value: Value = serde_json::from_slice(document)
         .map_err(|error| PyValueError::new_err(format!("invalid JSON: {error}")))?;
-    let root = object(&root, "$")?;
+    let root = object(&document_value, "$")?;
     if string(field(root, "semantic_version", "$")?, "$.semantic_version")? != "1" {
         return Err(parse_error(
             "$.semantic_version",
@@ -467,7 +467,7 @@ fn parse_canonical_dataset(document: &[u8]) -> PyResult<abir_core::AbirDataset> 
     parse_relations(root, &mut draft)?;
     parse_governance(root, &mut draft)?;
 
-    draft
+    let dataset = draft
         .validate(ValidationLimits::default())
         .map_err(|report| {
             let failures = report
@@ -477,7 +477,18 @@ fn parse_canonical_dataset(document: &[u8]) -> PyResult<abir_core::AbirDataset> 
                 .collect::<Vec<_>>()
                 .join("; ");
             PyValueError::new_err(failures)
-        })
+        })?;
+    let normalized_input = serde_json::to_vec(&document_value)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let normalized_semantics =
+        canonical_debug_json(&dataset).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    if normalized_input != normalized_semantics {
+        return Err(parse_error(
+            "$",
+            "document is not the exact semantic-v1 canonical debug form",
+        ));
+    }
+    Ok(dataset)
 }
 
 fn parse_relations(root: &Map<String, Value>, draft: &mut DatasetDraft) -> PyResult<()> {
@@ -1153,7 +1164,7 @@ fn exact(value: &Value, path: &str) -> PyResult<ExactNumber> {
         return string(value, path)?
             .parse::<i128>()
             .map(ExactNumber::Integer)
-            .map_err(|_| parse_error(path, "integer is outside i64"));
+            .map_err(|_| parse_error(path, "integer is outside i128"));
     }
     Ok(ExactNumber::Rational(rational(value, path)?))
 }

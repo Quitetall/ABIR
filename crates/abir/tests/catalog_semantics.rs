@@ -259,6 +259,25 @@ fn catalog_and_relationship_structural_limits_fail_closed() {
 }
 
 #[test]
+fn metadata_byte_limit_accounts_for_foreign_text() {
+    let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
+    draft.add_subject(
+        Subject::new(id::<SubjectTag>(2), concept("subject")).with_source_key(
+            SourceKey::new("test", "a-foreign-identifier-longer-than-the-budget").unwrap(),
+        ),
+    );
+    let report = draft
+        .validate(ValidationLimits {
+            max_metadata_bytes: 16,
+            ..ValidationLimits::default()
+        })
+        .unwrap_err();
+    assert!(report.failures().iter().any(|failure| {
+        failure.failure_code() == FailureCode::StructuralLimit && failure.path() == "metadata_bytes"
+    }));
+}
+
+#[test]
 fn every_specialized_catalog_reference_fails_closed_when_dangling() {
     let mut clock_draft = DatasetDraft::new(id::<DatasetTag>(1));
     let present_clock = id::<ClockTag>(2);

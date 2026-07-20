@@ -62,6 +62,18 @@ def test_python_deserializes_full_semantic_matrix_without_semantic_drift():
     assert dataset.semantic_family_counts == (7, 1, 1, 1, 1, 1)
 
 
+def test_python_parser_rejects_unmodeled_or_noncanonical_semantics():
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+    fixture["atoms"][0]["unmodeled"] = "would otherwise be silently discarded"
+    with pytest.raises(ValueError, match="exact semantic-v1 canonical debug form"):
+        abir.Dataset.from_canonical_json(json.dumps(fixture).encode())
+
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+    fixture["clocks"][0]["offset"] = {"$rational": ["2", "6"]}
+    with pytest.raises(ValueError, match="exact semantic-v1 canonical debug form"):
+        abir.Dataset.from_canonical_json(json.dumps(fixture).encode())
+
+
 def test_numpy_view_is_zero_copy_over_original_python_bytes():
     payload = bytes(range(8))
     dataset = abir.Dataset.canonical_fixture(payload)
@@ -117,4 +129,12 @@ def test_schema_rejects_contradictory_atom_fields_and_empty_rational():
 
     fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
     fixture["clocks"][0]["offset"] = {"$rational": []}
+    assert list(validator.iter_errors(fixture))
+
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+    fixture["clocks"][0]["offset"] = {"$integer": "0"}
+    assert list(validator.iter_errors(fixture))
+
+    fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
+    del fixture["clocks"][0]["rate"]
     assert list(validator.iter_errors(fixture))

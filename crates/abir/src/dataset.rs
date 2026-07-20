@@ -265,6 +265,13 @@ impl DatasetDraft {
             "streams",
         );
         check_limit(&mut report, self.atoms.len(), limits.max_atoms, "atoms");
+        let metadata_bytes = dataset_metadata_bytes(&self).unwrap_or(usize::MAX);
+        check_limit(
+            &mut report,
+            metadata_bytes,
+            limits.max_metadata_bytes,
+            "metadata_bytes",
+        );
         let catalog_records = [
             self.subjects.len(),
             self.patients.len(),
@@ -1121,6 +1128,13 @@ impl AbirDataset {
     pub fn source_relationships(&self) -> &[SourceRelationship] {
         &self.source_relationships
     }
+    /// Deterministic conservative estimate of retained semantic metadata.
+    ///
+    /// Counts UTF-8 semantic text plus a fixed 64-byte charge per record for
+    /// identifiers and scalar fields. Payload bytes are deliberately excluded.
+    pub fn estimated_metadata_bytes(&self) -> usize {
+        validated_dataset_metadata_bytes(self).unwrap_or(usize::MAX)
+    }
     pub fn payload_content_ids(&self) -> Vec<ContentId> {
         self.atoms
             .iter()
@@ -1324,6 +1338,185 @@ fn is_integer(element: crate::ElementType) -> bool {
             | crate::ElementType::U32
             | crate::ElementType::U64
     )
+}
+
+macro_rules! metadata_bytes {
+    ($draft:expr) => {{
+        let draft = $draft;
+        let mut bytes = 0_usize;
+        let mut add = |value: usize| {
+            bytes = bytes.checked_add(value)?;
+            Some(())
+        };
+        let mut add_text = |value: &str| add(value.len());
+
+        macro_rules! catalog_text {
+            ($values:expr) => {
+                for value in $values {
+                    add_text(value.kind().as_str())?;
+                    for key in value.source_keys() {
+                        add_text(key.namespace())?;
+                        add_text(key.value())?;
+                    }
+                }
+            };
+        }
+        catalog_text!(&draft.subjects);
+        catalog_text!(&draft.patients);
+        catalog_text!(&draft.sessions);
+        catalog_text!(&draft.acquisitions);
+        catalog_text!(&draft.devices);
+        catalog_text!(&draft.sensors);
+        catalog_text!(&draft.channels);
+        catalog_text!(&draft.concept_dictionaries);
+
+        for recording in &draft.recordings {
+            for key in recording.source_keys() {
+                add_text(key.namespace())?;
+                add_text(key.value())?;
+            }
+        }
+        for stream in &draft.streams {
+            add_text(stream.modality().as_str())?;
+        }
+        for atom in &draft.atoms {
+            if let Some(payload) = atom.payload() {
+                if let Some(encoding) = payload.encoding() {
+                    add_text(encoding.as_str())?;
+                }
+                if let Some(media_type) = payload.media_type() {
+                    add_text(media_type)?;
+                }
+            }
+            match atom {
+                Atom::SignalBlock(block) => {
+                    if let Some(calibration) = block.calibration() {
+                        add_text(calibration.unit().as_str())?;
+                    }
+                }
+                Atom::TemporalTable(table) => {
+                    add_text(table.record_kind().as_str())?;
+                    for column in table.columns() {
+                        add_text(column.semantic().as_str())?;
+                    }
+                }
+                Atom::Table(table) => {
+                    for column in table.columns() {
+                        add_text(column.semantic().as_str())?;
+                    }
+                }
+                Atom::Tensor(tensor) => {
+                    for axis in tensor.axes() {
+                        add_text(axis.semantic().as_str())?;
+                    }
+                }
+                Atom::EncodedBlock(block) => {
+                    add_text(block.decoded_semantics().atom_kind().as_str())?;
+                }
+                Atom::BlobRef(blob) => {
+                    add_text(blob.media_type())?;
+                    add_text(blob.integrity().algorithm().as_str())?;
+                }
+            }
+        }
+        for clock in &draft.clocks {
+            add_text(clock.kind().as_str())?;
+        }
+        for relation in &draft.clock_relations {
+            add_text(relation.method().as_str())?;
+        }
+        for frame in &draft.coordinate_frames {
+            add_text(frame.kind().as_str())?;
+        }
+        for transform in &draft.frame_transforms {
+            add_text(transform.method().as_str())?;
+        }
+        for basis in &draft.channel_bases {
+            for channel in basis.channels() {
+                add_text(channel.concept().as_str())?;
+                for key in channel.source_keys() {
+                    add_text(key.namespace())?;
+                    add_text(key.value())?;
+                }
+            }
+        }
+        for event in &draft.events {
+            add_text(event.kind().as_str())?;
+        }
+        for policy in &draft.policies {
+            for restriction in policy.restrictions() {
+                add_text(restriction.as_str())?;
+            }
+        }
+        for proof in &draft.proofs {
+            add_text(proof.kind().as_str())?;
+        }
+        for derivation in &draft.derivations {
+            add_text(derivation.operation().as_str())?;
+        }
+        for fidelity in &draft.fidelity {
+            if let Some(metric) = fidelity.metric() {
+                add_text(metric.as_str())?;
+            }
+        }
+        for capsule in &draft.source_capsules {
+            add_text(capsule.source().namespace())?;
+            add_text(capsule.source().value())?;
+            if let Some(media_type) = capsule.media_type() {
+                add_text(media_type)?;
+            }
+        }
+        for execution in &draft.observed_execution {
+            add_text(execution.operation().as_str())?;
+            add_text(execution.implementation())?;
+            if let Some(hardware) = execution.hardware() {
+                add_text(hardware)?;
+            }
+        }
+
+        // Fixed-width identities and scalar fields also consume metadata memory.
+        // A conservative 64-byte charge per record keeps the limit meaningful
+        // across host and no_std layouts without depending on target ABI padding.
+        let record_count = [
+            draft.recordings.len(),
+            draft.streams.len(),
+            draft.atoms.len(),
+            draft.clocks.len(),
+            draft.coordinate_frames.len(),
+            draft.channel_bases.len(),
+            draft.policies.len(),
+            draft.proofs.len(),
+            draft.derivations.len(),
+            draft.fidelity.len(),
+            draft.source_capsules.len(),
+            draft.observed_execution.len(),
+            draft.subjects.len(),
+            draft.patients.len(),
+            draft.sessions.len(),
+            draft.acquisitions.len(),
+            draft.devices.len(),
+            draft.sensors.len(),
+            draft.channels.len(),
+            draft.clock_relations.len(),
+            draft.frame_transforms.len(),
+            draft.events.len(),
+            draft.concept_dictionaries.len(),
+            draft.derived_artifacts.len(),
+            draft.source_relationships.len(),
+        ]
+        .into_iter()
+        .try_fold(0_usize, usize::checked_add)?;
+        add(record_count.checked_mul(64)?)?;
+        Some(bytes)
+    }};
+}
+
+fn dataset_metadata_bytes(draft: &DatasetDraft) -> Option<usize> {
+    metadata_bytes!(draft)
+}
+
+fn validated_dataset_metadata_bytes(dataset: &AbirDataset) -> Option<usize> {
+    metadata_bytes!(dataset)
 }
 
 fn check_limit(report: &mut Option<ValidationReport>, actual: usize, maximum: usize, path: &str) {

@@ -59,3 +59,14 @@ jobs:
 
       - name: Python parity and schema tests
         run: python -m pytest python/tests -q
+
+  fuzz-smoke:
+    name: Seed corpus smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Execute committed dataset corpus
+        run: cargo fuzz run dataset_draft fuzz/corpus/dataset_draft -- -runs=1000

@@ -24,10 +24,6 @@
     "channels": { "type": "array", "items": { "$ref": "#/$defs/catalog_record" } },
     "concept_dictionaries": { "type": "array", "items": { "$ref": "#/$defs/catalog_record" } },
     "source_relationships": { "type": "array", "items": { "$ref": "#/$defs/source_relationship" } },
-    "source_keys": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/source_key" }
-    },
     "recordings": {
       "type": "array",
       "items": { "$ref": "#/$defs/recording" }
@@ -59,6 +55,19 @@
       "type": "string",
       "pattern": "^[a-z][a-z0-9.-]*:[A-Za-z0-9._/-]+$"
     },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["$rational"],
+      "properties": {
+        "$rational": {
+          "type": "array", "prefixItems": [
+            { "type": "string", "pattern": "^-?(0|[1-9][0-9]*)$" },
+            { "type": "string", "pattern": "^[1-9][0-9]*$" }
+          ], "items": false, "minItems": 2, "maxItems": 2
+        }
+      }
+    },
     "exact": {
       "oneOf": [
         {
@@ -67,19 +76,7 @@
           "required": ["$integer"],
           "properties": { "$integer": { "type": "string", "pattern": "^-?(0|[1-9][0-9]*)$" } }
         },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["$rational"],
-          "properties": {
-            "$rational": {
-              "type": "array", "prefixItems": [
-                { "type": "string", "pattern": "^-?(0|[1-9][0-9]*)$" },
-                { "type": "string", "pattern": "^[1-9][0-9]*$" }
-              ], "items": false, "minItems": 2, "maxItems": 2
-            }
-          }
-        }
+        { "$ref": "#/$defs/rational" }
       ]
     },
     "source_key": {
@@ -111,7 +108,7 @@
     },
     "recording": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "streams"],
+      "required": ["id", "streams", "source_keys"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "streams": { "type": "array", "items": { "$ref": "#/$defs/object_id" } },
@@ -120,7 +117,7 @@
     },
     "stream": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "recording_id", "modality", "atoms"],
+      "required": ["id", "recording_id", "modality", "atoms", "clock_id", "channel_basis_id", "policy_id"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "recording_id": { "$ref": "#/$defs/object_id" },
@@ -255,8 +252,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["start", "rate", "samples"],
       "properties": {
-        "start": { "$ref": "#/$defs/exact" },
-        "rate": { "$ref": "#/$defs/exact" },
+        "start": { "$ref": "#/$defs/rational" },
+        "rate": { "$ref": "#/$defs/rational" },
         "samples": { "type": "integer", "minimum": 1 }
       }
     },
@@ -286,21 +283,21 @@
       "type": "object", "additionalProperties": false,
       "required": ["scale", "offset", "unit"],
       "properties": {
-        "scale": { "$ref": "#/$defs/exact" },
-        "offset": { "$ref": "#/$defs/exact" },
+        "scale": { "$ref": "#/$defs/rational" },
+        "offset": { "$ref": "#/$defs/rational" },
         "unit": { "$ref": "#/$defs/concept" }
       }
     },
     "clock": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "kind", "uncertainty"],
+      "required": ["id", "kind", "parent_id", "offset", "rate", "uncertainty"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "kind": { "$ref": "#/$defs/concept" },
         "parent_id": { "$ref": "#/$defs/nullable_object_id" },
-        "offset": { "$ref": "#/$defs/exact" },
-        "rate": { "$ref": "#/$defs/exact" },
-        "uncertainty": { "$ref": "#/$defs/exact" }
+        "offset": { "$ref": "#/$defs/rational" },
+        "rate": { "$ref": "#/$defs/rational" },
+        "uncertainty": { "$ref": "#/$defs/rational" }
       }
     },
     "clock_relation": {
@@ -310,24 +307,24 @@
         "id": { "$ref": "#/$defs/object_id" },
         "from_clock_id": { "$ref": "#/$defs/object_id" },
         "to_clock_id": { "$ref": "#/$defs/object_id" },
-        "offset": { "$ref": "#/$defs/exact" },
-        "rate": { "$ref": "#/$defs/exact" },
-        "uncertainty": { "$ref": "#/$defs/exact" },
+        "offset": { "$ref": "#/$defs/rational" },
+        "rate": { "$ref": "#/$defs/rational" },
+        "uncertainty": { "$ref": "#/$defs/rational" },
         "method": { "$ref": "#/$defs/concept" },
-        "validity_start": { "$ref": "#/$defs/exact" },
-        "validity_end": { "oneOf": [{ "$ref": "#/$defs/exact" }, { "type": "null" }] },
+        "validity_start": { "$ref": "#/$defs/rational" },
+        "validity_end": { "oneOf": [{ "$ref": "#/$defs/rational" }, { "type": "null" }] },
         "provenance": { "$ref": "#/$defs/content_id" }
       }
     },
     "coordinate_frame": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "kind"],
+      "required": ["id", "kind", "parent_id", "transform", "uncertainty"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "kind": { "$ref": "#/$defs/concept" },
         "parent_id": { "$ref": "#/$defs/nullable_object_id" },
         "transform": { "oneOf": [{ "type": "array", "minItems": 16, "maxItems": 16, "items": { "$ref": "#/$defs/exact" } }, { "type": "null" }] },
-        "uncertainty": { "$ref": "#/$defs/exact" }
+        "uncertainty": { "$ref": "#/$defs/rational" }
       }
     },
     "frame_transform": {
@@ -338,13 +335,13 @@
         "from_frame_id": { "$ref": "#/$defs/object_id" },
         "to_frame_id": { "$ref": "#/$defs/object_id" },
         "transform": { "type": "array", "minItems": 16, "maxItems": 16, "items": { "$ref": "#/$defs/exact" } },
-        "uncertainty": { "$ref": "#/$defs/exact" },
+        "uncertainty": { "$ref": "#/$defs/rational" },
         "method": { "$ref": "#/$defs/concept" }
       }
     },
     "channel_basis": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "channels"],
+      "required": ["id", "reference", "channels"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "channels": { "type": "array", "items": { "$ref": "#/$defs/channel" } },
@@ -358,14 +355,14 @@
         "id": { "$ref": "#/$defs/object_id" },
         "kind": { "$ref": "#/$defs/concept" },
         "clock_id": { "$ref": "#/$defs/object_id" },
-        "start": { "$ref": "#/$defs/exact" },
-        "end": { "$ref": "#/$defs/exact" },
-        "uncertainty": { "$ref": "#/$defs/exact" }
+        "start": { "$ref": "#/$defs/rational" },
+        "end": { "$ref": "#/$defs/rational" },
+        "uncertainty": { "$ref": "#/$defs/rational" }
       }
     },
     "policy": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "restrictions"],
+      "required": ["id", "parent_id", "restrictions"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "parent_id": { "$ref": "#/$defs/nullable_object_id" },
@@ -403,7 +400,7 @@
     },
     "fidelity": {
       "type": "object", "additionalProperties": false,
-      "required": ["subject", "kind"],
+      "required": ["subject", "kind", "metric", "bound"],
       "properties": {
         "subject": { "$ref": "#/$defs/semantic_ref" },
         "kind": { "enum": ["exact", "bounded", "transformed"] },
@@ -413,7 +410,7 @@
     },
     "source_capsule": {
       "type": "object", "additionalProperties": false,
-      "required": ["source", "content_id"],
+      "required": ["source", "content_id", "media_type"],
       "properties": {
         "source": { "$ref": "#/$defs/source_key" },
         "content_id": { "$ref": "#/$defs/content_id" },
@@ -422,7 +419,7 @@
     },
     "execution": {
       "type": "object", "additionalProperties": false,
-      "required": ["operation", "implementation"],
+      "required": ["operation", "implementation", "hardware"],
       "properties": {
         "operation": { "$ref": "#/$defs/concept" },
         "implementation": { "type": "string" },
@@ -439,7 +436,7 @@
     },
     "channel": {
       "type": "object", "additionalProperties": false,
-      "required": ["concept", "coordinate_frame_id"],
+      "required": ["concept", "coordinate_frame_id", "source_keys"],
       "properties": {
         "concept": { "$ref": "#/$defs/concept" },
         "coordinate_frame_id": { "$ref": "#/$defs/nullable_object_id" },

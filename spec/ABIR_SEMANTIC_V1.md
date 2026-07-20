@@ -152,6 +152,9 @@ failures are always errors.
 
 ## 11. Extension rule
 
-Readers preserve unknown namespaced concepts and metadata. They must reject an
-unknown atom kind, exact-number tag, proof used as a known authorization, or any
-extension that changes a required semantic-v1 invariant.
+Readers preserve unknown namespaced concepts and opaque source metadata carried
+by `SourceCapsule` content. The sealed canonical JSON schema rejects
+unrecognized members so a reader cannot silently discard semantics it does not
+model. Readers must also reject an unknown atom kind, exact-number tag, proof
+used as a known authorization, or any extension that changes a required
+semantic-v1 invariant.
