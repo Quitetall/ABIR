@@ -20,6 +20,8 @@ HASHED_ARTIFACTS = (
     "schema/abir-semantic-v1.schema.json",
     "fixtures/valid/canonical-tensor.json",
     "fixtures/valid/canonical-tensor.content-id",
+    "fixtures/valid/semantic-matrix.json",
+    "fixtures/valid/semantic-matrix.content-id",
 )
 
 

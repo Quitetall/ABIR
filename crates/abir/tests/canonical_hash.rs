@@ -1,8 +1,8 @@
 use abir::{
     canonical_debug_json, logical_content_id, Atom, AtomTag, ByteOrder, Clock, ClockTag, ConceptId,
     ContentId, DatasetDraft, DatasetTag, ElementType, ExecutionRecord, Layout, ObjectId,
-    PayloadDescriptor, Presence, Rational, Recording, RecordingTag, Stream, StreamTag, Tensor,
-    ValidationLimits,
+    PayloadDescriptor, Presence, Rational, Recording, RecordingTag, SemanticAxis, Stream,
+    StreamTag, Tensor, ValidationLimits,
 };
 
 fn id<T>(value: u8) -> ObjectId<T> {
@@ -43,6 +43,10 @@ fn dataset(reverse: bool, layout: Layout, observed_execution: bool) -> abir::Abi
                 Some(ConceptId::new("abir:encoding/raw").unwrap()),
                 None,
             )),
+            vec![SemanticAxis::new(
+                ConceptId::new("abir:axis/value").unwrap(),
+                4,
+            )],
         )));
     }
     draft.add_clock(Clock::new(

@@ -4,6 +4,10 @@ fn id<T>(value: u8) -> ObjectId<T> {
     ObjectId::from_bytes([value; 16])
 }
 
+fn content(value: u8) -> ContentId {
+    ContentId::from_bytes([value; 32])
+}
+
 fn payload(
     value: u8,
     logical_bytes: u64,
@@ -32,7 +36,7 @@ fn full_semantic_matrix_validates() {
     let frame_id = id::<CoordinateFrameTag>(5);
     let basis_id = id::<ChannelBasisTag>(6);
     let policy_id = id::<PolicyTag>(7);
-    let atom_ids: Vec<_> = (10_u8..17).map(id::<AtomTag>).collect();
+    let atom_ids: Vec<_> = (10_u8..20).map(id::<AtomTag>).collect();
 
     let mut transform = [ExactNumber::Integer(0); 16];
     for diagonal in [0_usize, 5, 10, 15] {
@@ -115,12 +119,22 @@ fn full_semantic_matrix_validates() {
         Presence::Present,
         Some(payload(
             21,
-            8,
+            4,
             ElementType::Bytes,
-            vec![2],
-            Layout::Ragged { rows: 2 },
+            vec![2, 1],
+            Layout::Ragged {
+                rows: 2,
+                offsets: content(40),
+            },
             None,
         )),
+        clock_id,
+        ConceptId::new("abir:record/event").unwrap(),
+        vec![TableColumn::new(
+            ConceptId::new("abir:column/value").unwrap(),
+            ElementType::Bytes,
+            false,
+        )],
     )));
     draft.add_atom(Atom::Table(Table::new(
         atom_ids[2],
@@ -130,9 +144,24 @@ fn full_semantic_matrix_validates() {
             8,
             ElementType::I16,
             vec![2, 2],
-            Layout::SparseCoo { nonzero: 1 },
+            Layout::SparseCoo {
+                nonzero: 1,
+                indices: content(41),
+            },
             None,
         )),
+        vec![
+            TableColumn::new(
+                ConceptId::new("abir:column/time").unwrap(),
+                ElementType::I16,
+                false,
+            ),
+            TableColumn::new(
+                ConceptId::new("abir:column/value").unwrap(),
+                ElementType::I16,
+                true,
+            ),
+        ],
     )));
     draft.add_atom(Atom::Tensor(Tensor::new(
         atom_ids[3],
@@ -145,9 +174,14 @@ fn full_semantic_matrix_validates() {
             Layout::BlockFloatingPoint {
                 block_len: 4,
                 mantissa_bits: 12,
+                scales: content(42),
             },
             None,
         )),
+        vec![
+            SemanticAxis::new(ConceptId::new("abir:axis/channel").unwrap(), 2),
+            SemanticAxis::new(ConceptId::new("abir:axis/sample").unwrap(), 4),
+        ],
     )));
     draft.add_atom(Atom::EncodedBlock(EncodedBlock::new(
         atom_ids[4],
@@ -160,6 +194,11 @@ fn full_semantic_matrix_validates() {
             Layout::DenseRowMajor,
             None,
         )),
+        DecodedSemantics::new(
+            ConceptId::new("abir:atom/signal-block").unwrap(),
+            ElementType::Bytes,
+            vec![4],
+        ),
     )));
     draft.add_atom(Atom::BlobRef(BlobRef::new(
         atom_ids[5],
@@ -172,12 +211,65 @@ fn full_semantic_matrix_validates() {
             Layout::DenseRowMajor,
             Some("application/octet-stream"),
         )),
+        "application/octet-stream".to_string(),
+        BlobIntegrity::new(
+            ConceptId::new("abir:integrity/blake3-256").unwrap(),
+            content(25),
+        ),
     )));
     draft.add_atom(Atom::Table(Table::new(
         atom_ids[6],
-        Presence::Missing,
+        Presence::AbsentAtSource,
         None,
+        vec![TableColumn::new(
+            ConceptId::new("abir:column/value").unwrap(),
+            ElementType::I16,
+            false,
+        )],
     )));
+    for (atom_id, content_id, element, logical_bytes, shape, semantic, extent) in [
+        (
+            atom_ids[7],
+            40,
+            ElementType::I32,
+            12,
+            vec![3],
+            "abir:axis/ragged-offset",
+            3,
+        ),
+        (
+            atom_ids[8],
+            41,
+            ElementType::U32,
+            8,
+            vec![2],
+            "abir:axis/sparse-coordinate",
+            2,
+        ),
+        (
+            atom_ids[9],
+            42,
+            ElementType::F32,
+            8,
+            vec![2],
+            "abir:axis/bfp-scale",
+            2,
+        ),
+    ] {
+        draft.add_atom(Atom::Tensor(Tensor::new(
+            atom_id,
+            Presence::Present,
+            Some(payload(
+                content_id,
+                logical_bytes,
+                element,
+                shape,
+                Layout::DenseRowMajor,
+                None,
+            )),
+            vec![SemanticAxis::new(ConceptId::new(semantic).unwrap(), extent)],
+        )));
+    }
 
     draft.add_proof(Proof::new(
         id::<ProofTag>(30),
@@ -211,8 +303,8 @@ fn full_semantic_matrix_validates() {
     );
 
     let dataset = draft.validate(ValidationLimits::default()).unwrap();
-    assert_eq!(dataset.atoms().len(), 7);
-    assert_eq!(dataset.payload_content_ids().len(), 6);
+    assert_eq!(dataset.atoms().len(), 10);
+    assert_eq!(dataset.payload_content_ids().len(), 9);
     assert_eq!(dataset.coordinate_frames().len(), 1);
     assert_eq!(dataset.policies().len(), 1);
 }

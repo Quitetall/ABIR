@@ -22,6 +22,18 @@ def test_python_matches_rust_canonical_goldens():
     assert dataset.atom_count == 1
 
 
+def test_python_preserves_full_rust_semantic_matrix():
+    dataset = abir.Dataset.semantic_matrix_fixture()
+    assert dataset.canonical_json() == (
+        ROOT / "fixtures/valid/semantic-matrix.json"
+    ).read_bytes()
+    assert dataset.content_id() == (
+        ROOT / "fixtures/valid/semantic-matrix.content-id"
+    ).read_text().strip()
+    assert dataset.atom_count == 17
+    assert dataset.semantic_family_counts == (7, 1, 1, 1, 1, 1)
+
+
 def test_numpy_view_is_zero_copy_over_original_python_bytes():
     payload = bytes(range(8))
     dataset = abir.Dataset.canonical_fixture(payload)

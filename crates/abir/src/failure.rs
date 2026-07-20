@@ -1,3 +1,4 @@
+use crate::{ConceptId, ContentId, SemanticRef};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -44,12 +45,30 @@ pub enum Severity {
     Warning,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetryClass {
+    Never,
+    Immediate,
+    AfterCorrection,
+    Transient,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FailureOrigin {
+    NamespaceCode { namespace: String, code: String },
+    ConceptId(ConceptId),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidationFailure {
     code: FailureCode,
     severity: Severity,
     path: String,
     related_object: Option<[u8; 16]>,
+    origin: FailureOrigin,
+    retry_class: RetryClass,
+    affected_scope: Option<SemanticRef>,
+    evidence: Vec<ContentId>,
 }
 
 impl ValidationFailure {
@@ -59,11 +78,38 @@ impl ValidationFailure {
             severity: Severity::Error,
             path: path.as_ref().to_string(),
             related_object: None,
+            origin: FailureOrigin::NamespaceCode {
+                namespace: "abir".to_string(),
+                code: "validation".to_string(),
+            },
+            retry_class: RetryClass::AfterCorrection,
+            affected_scope: None,
+            evidence: Vec::new(),
         }
     }
 
     pub fn with_related_object(mut self, object: [u8; 16]) -> Self {
         self.related_object = Some(object);
+        self
+    }
+
+    pub fn with_origin(mut self, origin: FailureOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    pub fn with_retry_class(mut self, retry_class: RetryClass) -> Self {
+        self.retry_class = retry_class;
+        self
+    }
+
+    pub fn with_affected_scope(mut self, scope: SemanticRef) -> Self {
+        self.affected_scope = Some(scope);
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: Vec<ContentId>) -> Self {
+        self.evidence = evidence;
         self
     }
 
@@ -85,6 +131,22 @@ impl ValidationFailure {
 
     pub const fn related_object(&self) -> Option<[u8; 16]> {
         self.related_object
+    }
+
+    pub fn origin(&self) -> &FailureOrigin {
+        &self.origin
+    }
+
+    pub const fn retry_class(&self) -> RetryClass {
+        self.retry_class
+    }
+
+    pub const fn affected_scope(&self) -> Option<SemanticRef> {
+        self.affected_scope
+    }
+
+    pub fn evidence(&self) -> &[ContentId] {
+        &self.evidence
     }
 }
 

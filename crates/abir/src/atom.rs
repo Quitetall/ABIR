@@ -1,12 +1,15 @@
-use crate::{AtomTag, Calibration, ConceptId, ContentId, ObjectId, TimeAxis, ValidationLimits};
+use crate::{
+    AtomTag, Calibration, ClockTag, ConceptId, ContentId, ObjectId, TimeAxis, ValidationLimits,
+};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Presence {
     Present,
-    Missing,
-    Unknown,
+    AbsentAtSource,
+    UnknownAtSource,
+    Withheld,
     Redacted,
     NotApplicable,
 }
@@ -54,10 +57,24 @@ pub enum ByteOrder {
 pub enum Layout {
     DenseRowMajor,
     DenseColumnMajor,
-    Ragged { rows: u64 },
-    SparseCoo { nonzero: u64 },
-    SparseCsr { nonzero: u64 },
-    BlockFloatingPoint { block_len: u32, mantissa_bits: u8 },
+    Ragged {
+        rows: u64,
+        offsets: ContentId,
+    },
+    SparseCoo {
+        nonzero: u64,
+        indices: ContentId,
+    },
+    SparseCsr {
+        nonzero: u64,
+        indptr: ContentId,
+        indices: ContentId,
+    },
+    BlockFloatingPoint {
+        block_len: u32,
+        mantissa_bits: u8,
+        scales: ContentId,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,16 +164,33 @@ impl PayloadDescriptor {
             Layout::BlockFloatingPoint {
                 block_len,
                 mantissa_bits,
-            } => block_len > 0 && (1..=32).contains(&mantissa_bits),
-            Layout::Ragged { rows } => rows > 0,
-            Layout::SparseCoo { nonzero } | Layout::SparseCsr { nonzero } => self
-                .shape
-                .iter()
-                .try_fold(1_u64, |n, extent| n.checked_mul(*extent))
-                .is_some_and(|extent| nonzero <= extent),
+                scales,
+            } => block_len > 0 && (1..=32).contains(&mantissa_bits) && scales != self.content_id,
+            Layout::Ragged { rows, offsets } => rows > 0 && offsets != self.content_id,
+            Layout::SparseCoo { nonzero, indices } => {
+                indices != self.content_id && nonzero_fits_shape(nonzero, &self.shape)
+            }
+            Layout::SparseCsr {
+                nonzero,
+                indptr,
+                indices,
+            } => {
+                self.shape.len() == 2
+                    && indptr != indices
+                    && indptr != self.content_id
+                    && indices != self.content_id
+                    && nonzero_fits_shape(nonzero, &self.shape)
+            }
             Layout::DenseRowMajor | Layout::DenseColumnMajor => true,
         }
     }
+}
+
+fn nonzero_fits_shape(nonzero: u64, shape: &[u64]) -> bool {
+    shape
+        .iter()
+        .try_fold(1_u64, |n, extent| n.checked_mul(*extent))
+        .is_some_and(|extent| nonzero <= extent)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -193,35 +227,266 @@ impl SignalBlock {
     }
 }
 
-macro_rules! payload_atom {
-    ($name:ident) => {
-        #[derive(Clone, Debug, Eq, PartialEq)]
-        pub struct $name {
-            id: ObjectId<AtomTag>,
-            presence: Presence,
-            payload: Option<PayloadDescriptor>,
-        }
-        impl $name {
-            pub fn new(
-                id: ObjectId<AtomTag>,
-                presence: Presence,
-                payload: Option<PayloadDescriptor>,
-            ) -> Self {
-                Self {
-                    id,
-                    presence,
-                    payload,
-                }
-            }
-        }
-    };
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TableColumn {
+    semantic: ConceptId,
+    element: ElementType,
+    nullable: bool,
 }
 
-payload_atom!(TemporalTable);
-payload_atom!(Table);
-payload_atom!(Tensor);
-payload_atom!(EncodedBlock);
-payload_atom!(BlobRef);
+impl TableColumn {
+    pub const fn new(semantic: ConceptId, element: ElementType, nullable: bool) -> Self {
+        Self {
+            semantic,
+            element,
+            nullable,
+        }
+    }
+
+    pub fn semantic(&self) -> &ConceptId {
+        &self.semantic
+    }
+    pub const fn element(&self) -> ElementType {
+        self.element
+    }
+    pub const fn nullable(&self) -> bool {
+        self.nullable
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticAxis {
+    semantic: ConceptId,
+    extent: u64,
+}
+
+impl SemanticAxis {
+    pub const fn new(semantic: ConceptId, extent: u64) -> Self {
+        Self { semantic, extent }
+    }
+
+    pub fn semantic(&self) -> &ConceptId {
+        &self.semantic
+    }
+    pub const fn extent(&self) -> u64 {
+        self.extent
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedSemantics {
+    atom_kind: ConceptId,
+    element: ElementType,
+    shape: Vec<u64>,
+}
+
+impl DecodedSemantics {
+    pub const fn new(atom_kind: ConceptId, element: ElementType, shape: Vec<u64>) -> Self {
+        Self {
+            atom_kind,
+            element,
+            shape,
+        }
+    }
+
+    pub fn atom_kind(&self) -> &ConceptId {
+        &self.atom_kind
+    }
+    pub const fn element(&self) -> ElementType {
+        self.element
+    }
+    pub fn shape(&self) -> &[u64] {
+        &self.shape
+    }
+
+    fn is_structurally_valid(&self, limits: ValidationLimits) -> bool {
+        !self.shape.is_empty()
+            && self.shape.len() <= limits.max_rank
+            && self.shape.iter().all(|extent| *extent > 0)
+            && self
+                .shape
+                .iter()
+                .try_fold(1_u64, |elements, extent| elements.checked_mul(*extent))
+                .is_some()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlobIntegrity {
+    algorithm: ConceptId,
+    digest: ContentId,
+}
+
+impl BlobIntegrity {
+    pub const fn new(algorithm: ConceptId, digest: ContentId) -> Self {
+        Self { algorithm, digest }
+    }
+
+    pub fn algorithm(&self) -> &ConceptId {
+        &self.algorithm
+    }
+    pub const fn digest(&self) -> ContentId {
+        self.digest
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TemporalTable {
+    id: ObjectId<AtomTag>,
+    presence: Presence,
+    payload: Option<PayloadDescriptor>,
+    clock_id: ObjectId<ClockTag>,
+    record_kind: ConceptId,
+    columns: Vec<TableColumn>,
+}
+
+impl TemporalTable {
+    pub fn new(
+        id: ObjectId<AtomTag>,
+        presence: Presence,
+        payload: Option<PayloadDescriptor>,
+        clock_id: ObjectId<ClockTag>,
+        record_kind: ConceptId,
+        columns: Vec<TableColumn>,
+    ) -> Self {
+        Self {
+            id,
+            presence,
+            payload,
+            clock_id,
+            record_kind,
+            columns,
+        }
+    }
+
+    pub const fn clock_id(&self) -> ObjectId<ClockTag> {
+        self.clock_id
+    }
+    pub fn record_kind(&self) -> &ConceptId {
+        &self.record_kind
+    }
+    pub fn columns(&self) -> &[TableColumn] {
+        &self.columns
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Table {
+    id: ObjectId<AtomTag>,
+    presence: Presence,
+    payload: Option<PayloadDescriptor>,
+    columns: Vec<TableColumn>,
+}
+
+impl Table {
+    pub fn new(
+        id: ObjectId<AtomTag>,
+        presence: Presence,
+        payload: Option<PayloadDescriptor>,
+        columns: Vec<TableColumn>,
+    ) -> Self {
+        Self {
+            id,
+            presence,
+            payload,
+            columns,
+        }
+    }
+
+    pub fn columns(&self) -> &[TableColumn] {
+        &self.columns
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Tensor {
+    id: ObjectId<AtomTag>,
+    presence: Presence,
+    payload: Option<PayloadDescriptor>,
+    axes: Vec<SemanticAxis>,
+}
+
+impl Tensor {
+    pub fn new(
+        id: ObjectId<AtomTag>,
+        presence: Presence,
+        payload: Option<PayloadDescriptor>,
+        axes: Vec<SemanticAxis>,
+    ) -> Self {
+        Self {
+            id,
+            presence,
+            payload,
+            axes,
+        }
+    }
+
+    pub fn axes(&self) -> &[SemanticAxis] {
+        &self.axes
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodedBlock {
+    id: ObjectId<AtomTag>,
+    presence: Presence,
+    payload: Option<PayloadDescriptor>,
+    decoded: DecodedSemantics,
+}
+
+impl EncodedBlock {
+    pub fn new(
+        id: ObjectId<AtomTag>,
+        presence: Presence,
+        payload: Option<PayloadDescriptor>,
+        decoded: DecodedSemantics,
+    ) -> Self {
+        Self {
+            id,
+            presence,
+            payload,
+            decoded,
+        }
+    }
+
+    pub fn decoded_semantics(&self) -> &DecodedSemantics {
+        &self.decoded
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlobRef {
+    id: ObjectId<AtomTag>,
+    presence: Presence,
+    payload: Option<PayloadDescriptor>,
+    media_type: String,
+    integrity: BlobIntegrity,
+}
+
+impl BlobRef {
+    pub fn new(
+        id: ObjectId<AtomTag>,
+        presence: Presence,
+        payload: Option<PayloadDescriptor>,
+        media_type: String,
+        integrity: BlobIntegrity,
+    ) -> Self {
+        Self {
+            id,
+            presence,
+            payload,
+            media_type,
+            integrity,
+        }
+    }
+
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+    pub fn integrity(&self) -> &BlobIntegrity {
+        &self.integrity
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Atom {
@@ -286,6 +551,19 @@ impl Atom {
         if !presence_matches {
             return false;
         }
+        let semantic_contract_valid = match self {
+            Self::SignalBlock(_) => true,
+            Self::TemporalTable(table) => columns_are_valid(&table.columns),
+            Self::Table(table) => columns_are_valid(&table.columns),
+            Self::Tensor(tensor) => {
+                !tensor.axes.is_empty() && tensor.axes.iter().all(|axis| axis.extent > 0)
+            }
+            Self::EncodedBlock(block) => block.decoded.is_structurally_valid(limits),
+            Self::BlobRef(blob) => media_type_is_valid(&blob.media_type),
+        };
+        if !semantic_contract_valid {
+            return false;
+        }
         let Some(payload) = self.payload() else {
             return true;
         };
@@ -297,8 +575,42 @@ impl Atom {
                 .time_axis
                 .sample_count()
                 .is_ok_and(|samples| payload.shape.last().copied() == Some(samples)),
-            Self::BlobRef(_) => payload.media_type().is_some(),
-            _ => true,
+            Self::TemporalTable(table) => payload_matches_columns(payload, &table.columns),
+            Self::Table(table) => payload_matches_columns(payload, &table.columns),
+            Self::Tensor(tensor) => axes_match_shape(&tensor.axes, payload.shape()),
+            Self::EncodedBlock(_) | Self::BlobRef(_) => true,
         }
     }
+}
+
+fn columns_are_valid(columns: &[TableColumn]) -> bool {
+    !columns.is_empty()
+        && columns.iter().enumerate().all(|(index, column)| {
+            !columns[..index]
+                .iter()
+                .any(|other| other.semantic == column.semantic)
+        })
+}
+
+fn payload_matches_columns(payload: &PayloadDescriptor, columns: &[TableColumn]) -> bool {
+    payload.shape.len() == 2 && payload.shape[1] == columns.len() as u64
+}
+
+fn axes_match_shape(axes: &[SemanticAxis], shape: &[u64]) -> bool {
+    axes.len() == shape.len()
+        && axes
+            .iter()
+            .zip(shape)
+            .all(|(axis, extent)| axis.extent > 0 && axis.extent == *extent)
+}
+
+fn media_type_is_valid(media_type: &str) -> bool {
+    let Some((type_name, subtype)) = media_type.split_once('/') else {
+        return false;
+    };
+    !type_name.is_empty()
+        && !subtype.is_empty()
+        && !media_type
+            .chars()
+            .any(|character| character.is_ascii_control() || character.is_ascii_whitespace())
 }

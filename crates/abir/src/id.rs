@@ -21,6 +21,18 @@ semantic_tags!(
     PolicyTag,
     ProofTag,
     DerivationTag,
+    SubjectTag,
+    PatientTag,
+    SessionTag,
+    AcquisitionTag,
+    DeviceTag,
+    SensorTag,
+    ChannelTag,
+    ClockRelationTag,
+    FrameTransformTag,
+    EventTag,
+    ConceptDictionaryTag,
+    DerivedArtifactTag,
 );
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -35,6 +47,18 @@ pub enum ObjectKind {
     Policy,
     Proof,
     Derivation,
+    Subject,
+    Patient,
+    Session,
+    Acquisition,
+    Device,
+    Sensor,
+    Channel,
+    ClockRelation,
+    FrameTransform,
+    Event,
+    ConceptDictionary,
+    DerivedArtifact,
 }
 
 mod sealed {
@@ -67,6 +91,18 @@ tag_kinds!(
     PolicyTag => Policy,
     ProofTag => Proof,
     DerivationTag => Derivation,
+    SubjectTag => Subject,
+    PatientTag => Patient,
+    SessionTag => Session,
+    AcquisitionTag => Acquisition,
+    DeviceTag => Device,
+    SensorTag => Sensor,
+    ChannelTag => Channel,
+    ClockRelationTag => ClockRelation,
+    FrameTransformTag => FrameTransform,
+    EventTag => Event,
+    ConceptDictionaryTag => ConceptDictionary,
+    DerivedArtifactTag => DerivedArtifact,
 );
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

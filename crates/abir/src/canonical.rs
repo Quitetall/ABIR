@@ -1,6 +1,6 @@
 use crate::{
-    AbirDataset, Atom, ByteOrder, ElementType, ExactNumber, FidelityKind, Layout, ObjectKind,
-    Presence, Rational, SemanticRef, TimeAxis,
+    AbirDataset, Atom, ByteOrder, CatalogRecord, ElementType, ExactNumber, FidelityKind, Layout,
+    ObjectKind, Presence, Rational, SemanticRef, SemanticTag, TableColumn, TimeAxis,
 };
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -34,6 +34,30 @@ enum Projection {
 }
 
 fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
+    let mut subjects: Vec<_> = dataset.subjects().iter().collect();
+    subjects.sort_by_key(|value| value.id());
+    let mut patients: Vec<_> = dataset.patients().iter().collect();
+    patients.sort_by_key(|value| value.id());
+    let mut sessions: Vec<_> = dataset.sessions().iter().collect();
+    sessions.sort_by_key(|value| value.id());
+    let mut acquisitions: Vec<_> = dataset.acquisitions().iter().collect();
+    acquisitions.sort_by_key(|value| value.id());
+    let mut devices: Vec<_> = dataset.devices().iter().collect();
+    devices.sort_by_key(|value| value.id());
+    let mut sensors: Vec<_> = dataset.sensors().iter().collect();
+    sensors.sort_by_key(|value| value.id());
+    let mut channels: Vec<_> = dataset.channels().iter().collect();
+    channels.sort_by_key(|value| value.id());
+    let mut dictionaries: Vec<_> = dataset.concept_dictionaries().iter().collect();
+    dictionaries.sort_by_key(|value| value.id());
+    let mut clock_relations: Vec<_> = dataset.clock_relations().iter().collect();
+    clock_relations.sort_by_key(|value| value.id());
+    let mut frame_transforms: Vec<_> = dataset.frame_transforms().iter().collect();
+    frame_transforms.sort_by_key(|value| value.id());
+    let mut events: Vec<_> = dataset.events().iter().collect();
+    events.sort_by_key(|value| value.id());
+    let mut derived_artifacts: Vec<_> = dataset.derived_artifacts().iter().collect();
+    derived_artifacts.sort_by_key(|value| value.id());
     let mut recordings: Vec<_> = dataset.recordings().iter().collect();
     recordings.sort_by_key(|value| value.id());
     let mut streams: Vec<_> = dataset.streams().iter().collect();
@@ -84,6 +108,108 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
     let mut root = serde_json::Map::new();
     root.insert("semantic_version".into(), Value::String("1".into()));
     root.insert("dataset_id".into(), Value::String(dataset.id().to_string()));
+    root.insert(
+        "subjects".into(),
+        Value::Array(subjects.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "patients".into(),
+        Value::Array(patients.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "sessions".into(),
+        Value::Array(sessions.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "acquisitions".into(),
+        Value::Array(acquisitions.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "devices".into(),
+        Value::Array(devices.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "sensors".into(),
+        Value::Array(sensors.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "channels".into(),
+        Value::Array(channels.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "concept_dictionaries".into(),
+        Value::Array(dictionaries.into_iter().map(catalog_record_value).collect()),
+    );
+    root.insert(
+        "clock_relations".into(),
+        Value::Array(
+            clock_relations
+                .into_iter()
+                .map(|relation| {
+                    json!({
+                        "id": relation.id().to_string(),
+                        "from_clock_id": relation.from_clock_id().to_string(),
+                        "to_clock_id": relation.to_clock_id().to_string(),
+                        "offset": rational_value(relation.offset()),
+                        "rate": rational_value(relation.rate()),
+                        "uncertainty": rational_value(relation.uncertainty()),
+                        "method": relation.method().as_str()
+                    })
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "frame_transforms".into(),
+        Value::Array(
+            frame_transforms
+                .into_iter()
+                .map(|transform| {
+                    json!({
+                        "id": transform.id().to_string(),
+                        "from_frame_id": transform.from_frame_id().to_string(),
+                        "to_frame_id": transform.to_frame_id().to_string(),
+                        "transform": transform.transform().iter().copied().map(exact_value).collect::<Vec<_>>(),
+                        "uncertainty": rational_value(transform.uncertainty()),
+                        "method": transform.method().as_str()
+                    })
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "events".into(),
+        Value::Array(
+            events
+                .into_iter()
+                .map(|event| {
+                    json!({
+                        "id": event.id().to_string(),
+                        "kind": event.kind().as_str(),
+                        "clock_id": event.clock_id().to_string(),
+                        "start": rational_value(event.start()),
+                        "end": rational_value(event.end()),
+                        "uncertainty": rational_value(event.uncertainty())
+                    })
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "derived_artifacts".into(),
+        Value::Array(
+            derived_artifacts
+                .into_iter()
+                .map(|artifact| {
+                    json!({
+                        "id": artifact.id().to_string(),
+                        "content_id": artifact.content_id().to_string(),
+                        "derivation_id": artifact.derivation_id().to_string()
+                    })
+                })
+                .collect(),
+        ),
+    );
     root.insert(
         "recordings".into(),
         Value::Array(
@@ -282,28 +408,117 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
 }
 
 fn atom_value(atom: &Atom, projection: Projection) -> Value {
-    let (kind, time, calibration) = match atom {
-        Atom::SignalBlock(block) => (
-            "signal-block",
-            Some(time_value(block.time_axis())),
-            block.calibration().map(|value| {
+    let mut value = serde_json::Map::new();
+    value.insert("id".into(), Value::String(atom.id().to_string()));
+    value.insert(
+        "presence".into(),
+        Value::String(presence_name(atom.presence()).into()),
+    );
+    value.insert(
+        "payload".into(),
+        atom.payload()
+            .map(|payload| payload_value(payload, projection))
+            .unwrap_or(Value::Null),
+    );
+    match atom {
+        Atom::SignalBlock(block) => {
+            value.insert("kind".into(), Value::String("signal-block".into()));
+            value.insert("time_axis".into(), time_value(block.time_axis()));
+            value.insert(
+                "calibration".into(),
+                block
+                    .calibration()
+                    .map(|calibration| {
+                        json!({
+                            "scale": exact_value(ExactNumber::Rational(calibration.scale())),
+                            "offset": exact_value(ExactNumber::Rational(calibration.offset())),
+                            "unit": calibration.unit().as_str()
+                        })
+                    })
+                    .unwrap_or(Value::Null),
+            );
+        }
+        Atom::TemporalTable(table) => {
+            value.insert("kind".into(), Value::String("temporal-table".into()));
+            value.insert(
+                "clock_id".into(),
+                Value::String(table.clock_id().to_string()),
+            );
+            value.insert(
+                "record_kind".into(),
+                Value::String(table.record_kind().as_str().into()),
+            );
+            value.insert(
+                "columns".into(),
+                Value::Array(table.columns().iter().map(table_column_value).collect()),
+            );
+        }
+        Atom::Table(table) => {
+            value.insert("kind".into(), Value::String("table".into()));
+            value.insert(
+                "columns".into(),
+                Value::Array(table.columns().iter().map(table_column_value).collect()),
+            );
+        }
+        Atom::Tensor(tensor) => {
+            value.insert("kind".into(), Value::String("tensor".into()));
+            value.insert(
+                "axes".into(),
+                Value::Array(
+                    tensor
+                        .axes()
+                        .iter()
+                        .map(|axis| {
+                            json!({ "semantic": axis.semantic().as_str(), "extent": axis.extent() })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        Atom::EncodedBlock(block) => {
+            value.insert("kind".into(), Value::String("encoded-block".into()));
+            let decoded = block.decoded_semantics();
+            value.insert(
+                "decoded_semantics".into(),
                 json!({
-                    "scale": exact_value(ExactNumber::Rational(value.scale())),
-                    "offset": exact_value(ExactNumber::Rational(value.offset())),
-                    "unit": value.unit().as_str()
-                })
-            }),
-        ),
-        Atom::TemporalTable(_) => ("temporal-table", None, None),
-        Atom::Table(_) => ("table", None, None),
-        Atom::Tensor(_) => ("tensor", None, None),
-        Atom::EncodedBlock(_) => ("encoded-block", None, None),
-        Atom::BlobRef(_) => ("blob-ref", None, None),
-    };
+                    "atom_kind": decoded.atom_kind().as_str(),
+                    "element": element_name(decoded.element()),
+                    "shape": decoded.shape()
+                }),
+            );
+        }
+        Atom::BlobRef(blob) => {
+            value.insert("kind".into(), Value::String("blob-ref".into()));
+            value.insert("media_type".into(), Value::String(blob.media_type().into()));
+            value.insert(
+                "integrity".into(),
+                json!({
+                    "algorithm": blob.integrity().algorithm().as_str(),
+                    "digest": blob.integrity().digest().to_string()
+                }),
+            );
+        }
+    }
+    Value::Object(value)
+}
+
+fn catalog_record_value<T: SemanticTag>(record: &CatalogRecord<T>) -> Value {
+    let mut source_keys: Vec<_> = record.source_keys().iter().collect();
+    source_keys.sort_by(|a, b| (a.namespace(), a.value()).cmp(&(b.namespace(), b.value())));
     json!({
-        "id": atom.id().to_string(), "kind": kind, "presence": presence_name(atom.presence()),
-        "payload": atom.payload().map(|value| payload_value(value, projection)),
-        "time_axis": time, "calibration": calibration
+        "id": record.id().to_string(),
+        "kind": record.kind().as_str(),
+        "source_keys": source_keys.into_iter().map(|key| json!({
+            "namespace": key.namespace(), "value": key.value()
+        })).collect::<Vec<_>>()
+    })
+}
+
+fn table_column_value(column: &TableColumn) -> Value {
+    json!({
+        "semantic": column.semantic().as_str(),
+        "element": element_name(column.element()),
+        "nullable": column.nullable()
     })
 }
 
@@ -324,7 +539,10 @@ fn payload_value(payload: &crate::PayloadDescriptor, projection: Projection) -> 
         return json!({
             "content_id": payload.content_id().to_string(),
             "element": element_name(payload.element()),
-            "shape": payload.shape()
+            "shape": payload.shape(),
+            "encoding": payload.encoding().map(|value| value.as_str()),
+            "media_type": payload.media_type(),
+            "composite": logical_composite_value(payload.layout())
         });
     }
     json!({
@@ -333,6 +551,36 @@ fn payload_value(payload: &crate::PayloadDescriptor, projection: Projection) -> 
         "shape": payload.shape(), "layout": layout_value(payload.layout()),
         "encoding": payload.encoding().map(|value| value.as_str()), "media_type": payload.media_type()
     })
+}
+
+fn logical_composite_value(layout: &Layout) -> Value {
+    match layout {
+        Layout::DenseRowMajor | Layout::DenseColumnMajor => Value::Null,
+        Layout::Ragged { rows, offsets } => {
+            json!({ "ragged": { "rows": rows, "offsets": offsets.to_string() } })
+        }
+        Layout::SparseCoo { nonzero, indices } => {
+            json!({ "sparse-coo": { "nonzero": nonzero, "indices": indices.to_string() } })
+        }
+        Layout::SparseCsr {
+            nonzero,
+            indptr,
+            indices,
+        } => json!({ "sparse-csr": {
+            "nonzero": nonzero,
+            "indptr": indptr.to_string(),
+            "indices": indices.to_string()
+        } }),
+        Layout::BlockFloatingPoint {
+            block_len,
+            mantissa_bits,
+            scales,
+        } => json!({ "bfp": {
+            "block_len": block_len,
+            "mantissa_bits": mantissa_bits,
+            "scales": scales.to_string()
+        } }),
+    }
 }
 
 fn time_value(axis: &TimeAxis) -> Value {
@@ -374,14 +622,33 @@ fn layout_value(layout: &Layout) -> Value {
     match layout {
         Layout::DenseRowMajor => json!("dense-row-major"),
         Layout::DenseColumnMajor => json!("dense-column-major"),
-        Layout::Ragged { rows } => json!({ "ragged": { "rows": rows } }),
-        Layout::SparseCoo { nonzero } => json!({ "sparse-coo": { "nonzero": nonzero } }),
-        Layout::SparseCsr { nonzero } => json!({ "sparse-csr": { "nonzero": nonzero } }),
+        Layout::Ragged { rows, offsets } => {
+            json!({ "ragged": { "rows": rows, "offsets": offsets.to_string() } })
+        }
+        Layout::SparseCoo { nonzero, indices } => {
+            json!({ "sparse-coo": { "nonzero": nonzero, "indices": indices.to_string() } })
+        }
+        Layout::SparseCsr {
+            nonzero,
+            indptr,
+            indices,
+        } => json!({
+            "sparse-csr": {
+                "nonzero": nonzero,
+                "indptr": indptr.to_string(),
+                "indices": indices.to_string()
+            }
+        }),
         Layout::BlockFloatingPoint {
             block_len,
             mantissa_bits,
+            scales,
         } => {
-            json!({ "bfp": { "block_len": block_len, "mantissa_bits": mantissa_bits } })
+            json!({ "bfp": {
+                "block_len": block_len,
+                "mantissa_bits": mantissa_bits,
+                "scales": scales.to_string()
+            } })
         }
     }
 }
@@ -398,8 +665,9 @@ fn hex(bytes: &[u8]) -> alloc::string::String {
 fn presence_name(value: Presence) -> &'static str {
     match value {
         Presence::Present => "present",
-        Presence::Missing => "missing",
-        Presence::Unknown => "unknown",
+        Presence::AbsentAtSource => "absent-at-source",
+        Presence::UnknownAtSource => "unknown-at-source",
+        Presence::Withheld => "withheld",
         Presence::Redacted => "redacted",
         Presence::NotApplicable => "not-applicable",
     }
@@ -450,5 +718,17 @@ fn object_kind_name(value: ObjectKind) -> &'static str {
         ObjectKind::Policy => "policy",
         ObjectKind::Proof => "proof",
         ObjectKind::Derivation => "derivation",
+        ObjectKind::Subject => "subject",
+        ObjectKind::Patient => "patient",
+        ObjectKind::Session => "session",
+        ObjectKind::Acquisition => "acquisition",
+        ObjectKind::Device => "device",
+        ObjectKind::Sensor => "sensor",
+        ObjectKind::Channel => "channel",
+        ObjectKind::ClockRelation => "clock-relation",
+        ObjectKind::FrameTransform => "frame-transform",
+        ObjectKind::Event => "event",
+        ObjectKind::ConceptDictionary => "concept-dictionary",
+        ObjectKind::DerivedArtifact => "derived-artifact",
     }
 }

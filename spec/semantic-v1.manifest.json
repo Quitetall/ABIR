@@ -4,11 +4,17 @@
   "hash_algorithm": "sha256",
   "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
   "artifacts": [
-    { "path": "spec/ABIR_SEMANTIC_V1.md", "sha256": "879f22f0e20076ae2999867564eab039ac3826a12536f7fecf7d9ceaeeda6aa8" },
+    { "path": "spec/ABIR_SEMANTIC_V1.md", "sha256": "26ef6325ff382b90b4c710f2dc3043a8622de966f99b24f24ff3415c928f127b" },
     { "path": "spec/COMPATIBILITY.md", "sha256": "aed3f48acde2e7f24db9a3a0614a73de450c4cd9dc85d1d1910b1312503cd01c" },
-    { "path": "schema/abir-semantic-v1.schema.json", "sha256": "cf625a20408fb9fad009431e7081ffd90aa99ac600259a131453a46dc077d76d" },
+    { "path": "schema/abir-semantic-v1.schema.json", "sha256": "e4fd34ece40852da7cce96f175dcbf024da22a6a2893cfcb46244fc956e014d7" },
     { "path": "registries/concepts-v1.json", "sha256": "31a936a3c6947e42e6430ca7a3531fbd6cb62e13c1e3e5bf31f7d2db00011423" },
     { "path": "registries/failures-v1.json", "sha256": "88da823fb1e968bbc66a8b513b21a8cef7a6d52c74743d5e6c40e0e03bfe8e1f" },
-    { "path": "registries/proofs-v1.json", "sha256": "439ba689f0e73b7cc7b2380f4bb8faf82480ec797cb9c5cd6da74774cdebcfb0" }
+    { "path": "registries/proofs-v1.json", "sha256": "439ba689f0e73b7cc7b2380f4bb8faf82480ec797cb9c5cd6da74774cdebcfb0" },
+    { "path": "fixtures/valid/canonical-tensor.json", "sha256": "0775343a229206c5e738257cf78804c783e124f5c1c541ae5df93827b8a5ecdf" },
+    { "path": "fixtures/valid/canonical-tensor.content-id", "sha256": "6ee59f6e7cc70e3b974d8f3b086989dd9e4275d7982065b0e2165ce44fd53334" },
+    { "path": "fixtures/valid/semantic-matrix.json", "sha256": "e8998dc93dc714a04f5d9aef0dd3b6ec910ceca8dd8e07c485dcdc521dff280c" },
+    { "path": "fixtures/valid/semantic-matrix.content-id", "sha256": "4ec27af56da3bdc95627aa6cc10b9da743a07111b746e1bc83b0929391413098" },
+    { "path": "fixtures/invalid/schema/present-without-payload.json", "sha256": "b446788ef15b1645de1b6ddd726e764c72c28b9b094a14e00ad219b31519e5ca" },
+    { "path": "fixtures/invalid/schema/malformed-content-id.json", "sha256": "8d81f7c7bfd9d7dadacf82211c65f9083c6b94444b8d661b08175b43827f20aa" }
   ]
 }

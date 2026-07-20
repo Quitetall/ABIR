@@ -24,6 +24,7 @@ name = "abir-python"
 version = "0.1.0"
 dependencies = [
  "abir",
+ "abir-conformance",
  "pyo3",
 ]
 

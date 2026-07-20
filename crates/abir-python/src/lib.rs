@@ -1,7 +1,8 @@
 use abir_core::{
     canonical_debug_json, logical_content_id, Atom, AtomTag, ByteOrder, Clock, ConceptId,
     ContentId, DatasetDraft, DatasetTag, ElementType, Layout, ObjectId, PayloadDescriptor,
-    Presence, Rational, Recording, RecordingTag, Stream, StreamTag, Tensor, ValidationLimits,
+    Presence, Rational, Recording, RecordingTag, SemanticAxis, Stream, StreamTag, Tensor,
+    ValidationLimits,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -98,6 +99,16 @@ impl PyDataset {
         })
     }
 
+    /// Complete cross-language semantic-v1 conformance fixture.
+    #[staticmethod]
+    fn semantic_matrix_fixture(py: Python<'_>) -> Self {
+        Self {
+            inner: abir_conformance::semantic_matrix_dataset(),
+            atom_id: ObjectId::from_bytes([13; 16]),
+            payload: PyBytes::new_bound(py, &[]).unbind(),
+        }
+    }
+
     fn canonical_json<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         let bytes = canonical_debug_json(&self.inner)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
@@ -153,6 +164,24 @@ impl PyDataset {
     fn atom_count(&self) -> usize {
         self.inner.atoms().len()
     }
+
+    #[getter]
+    fn semantic_family_counts(&self) -> (usize, usize, usize, usize, usize, usize) {
+        (
+            self.inner.subjects().len()
+                + self.inner.patients().len()
+                + self.inner.sessions().len()
+                + self.inner.acquisitions().len()
+                + self.inner.devices().len()
+                + self.inner.sensors().len()
+                + self.inner.channels().len(),
+            self.inner.clock_relations().len(),
+            self.inner.frame_transforms().len(),
+            self.inner.events().len(),
+            self.inner.derived_artifacts().len(),
+            self.inner.concept_dictionaries().len(),
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -171,6 +200,16 @@ fn build_tensor_dataset(
     clock: Option<Clock>,
 ) -> PyResult<abir_core::AbirDataset> {
     let clock_id = clock.as_ref().map(Clock::id);
+    let axes = shape
+        .iter()
+        .copied()
+        .map(|extent| {
+            SemanticAxis::new(
+                ConceptId::new("abir:axis/sample").expect("static concept"),
+                extent,
+            )
+        })
+        .collect();
     let mut draft = DatasetDraft::new(dataset_id);
     draft.add_recording(Recording::new(recording_id, vec![stream_id]));
     draft.add_stream(Stream::new(
@@ -195,6 +234,7 @@ fn build_tensor_dataset(
             Some(ConceptId::new("abir:encoding/raw").expect("static concept")),
             None,
         )),
+        axes,
     )));
     if let Some(clock) = clock {
         draft.add_clock(clock);

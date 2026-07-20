@@ -1,7 +1,11 @@
 use crate::{
-    Atom, ChannelBasis, Clock, ContentId, CoordinateFrame, DatasetTag, Derivation, ExecutionRecord,
-    FailureCode, Fidelity, FidelityKind, ObjectId, ObjectKind, Policy, Proof, Recording,
-    SemanticRef, SourceCapsule, Stream, ValidationFailure, ValidationLimits, ValidationReport,
+    Acquisition, AcquisitionTag, Atom, Channel, ChannelBasis, ChannelTag, Clock, ClockRelation,
+    ClockRelationTag, ConceptDictionary, ConceptDictionaryTag, ContentId, CoordinateFrame,
+    DatasetTag, Derivation, DerivedArtifact, DerivedArtifactTag, Device, DeviceTag, Event,
+    EventTag, ExecutionRecord, FailureCode, Fidelity, FidelityKind, FrameTransform,
+    FrameTransformTag, Layout, ObjectId, ObjectKind, Patient, PatientTag, Policy, Proof, Recording,
+    SemanticRef, Sensor, SensorTag, Session, SessionTag, SourceCapsule, Stream, Subject,
+    SubjectTag, TimeAxis, ValidationFailure, ValidationLimits, ValidationReport,
 };
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -22,6 +26,18 @@ pub struct DatasetDraft {
     fidelity: Vec<Fidelity>,
     source_capsules: Vec<SourceCapsule>,
     observed_execution: Vec<ExecutionRecord>,
+    subjects: Vec<Subject>,
+    patients: Vec<Patient>,
+    sessions: Vec<Session>,
+    acquisitions: Vec<Acquisition>,
+    devices: Vec<Device>,
+    sensors: Vec<Sensor>,
+    channels: Vec<Channel>,
+    clock_relations: Vec<ClockRelation>,
+    frame_transforms: Vec<FrameTransform>,
+    events: Vec<Event>,
+    concept_dictionaries: Vec<ConceptDictionary>,
+    derived_artifacts: Vec<DerivedArtifact>,
 }
 
 impl DatasetDraft {
@@ -40,6 +56,18 @@ impl DatasetDraft {
             fidelity: Vec::new(),
             source_capsules: Vec::new(),
             observed_execution: Vec::new(),
+            subjects: Vec::new(),
+            patients: Vec::new(),
+            sessions: Vec::new(),
+            acquisitions: Vec::new(),
+            devices: Vec::new(),
+            sensors: Vec::new(),
+            channels: Vec::new(),
+            clock_relations: Vec::new(),
+            frame_transforms: Vec::new(),
+            events: Vec::new(),
+            concept_dictionaries: Vec::new(),
+            derived_artifacts: Vec::new(),
         }
     }
 
@@ -79,6 +107,42 @@ impl DatasetDraft {
     pub fn add_observed_execution(&mut self, value: ExecutionRecord) {
         self.observed_execution.push(value);
     }
+    pub fn add_subject(&mut self, value: Subject) {
+        self.subjects.push(value);
+    }
+    pub fn add_patient(&mut self, value: Patient) {
+        self.patients.push(value);
+    }
+    pub fn add_session(&mut self, value: Session) {
+        self.sessions.push(value);
+    }
+    pub fn add_acquisition(&mut self, value: Acquisition) {
+        self.acquisitions.push(value);
+    }
+    pub fn add_device(&mut self, value: Device) {
+        self.devices.push(value);
+    }
+    pub fn add_sensor(&mut self, value: Sensor) {
+        self.sensors.push(value);
+    }
+    pub fn add_channel(&mut self, value: Channel) {
+        self.channels.push(value);
+    }
+    pub fn add_clock_relation(&mut self, value: ClockRelation) {
+        self.clock_relations.push(value);
+    }
+    pub fn add_frame_transform(&mut self, value: FrameTransform) {
+        self.frame_transforms.push(value);
+    }
+    pub fn add_event(&mut self, value: Event) {
+        self.events.push(value);
+    }
+    pub fn add_concept_dictionary(&mut self, value: ConceptDictionary) {
+        self.concept_dictionaries.push(value);
+    }
+    pub fn add_derived_artifact(&mut self, value: DerivedArtifact) {
+        self.derived_artifacts.push(value);
+    }
     pub fn recordings(&self) -> &[Recording] {
         &self.recordings
     }
@@ -99,6 +163,83 @@ impl DatasetDraft {
     }
     pub fn coordinate_frames_mut(&mut self) -> &mut [CoordinateFrame] {
         &mut self.coordinate_frames
+    }
+    pub fn subjects(&self) -> &[Subject] {
+        &self.subjects
+    }
+    pub fn subject(&self, id: ObjectId<SubjectTag>) -> Option<&Subject> {
+        self.subjects.iter().find(|value| value.id() == id)
+    }
+    pub fn patients(&self) -> &[Patient] {
+        &self.patients
+    }
+    pub fn patient(&self, id: ObjectId<PatientTag>) -> Option<&Patient> {
+        self.patients.iter().find(|value| value.id() == id)
+    }
+    pub fn sessions(&self) -> &[Session] {
+        &self.sessions
+    }
+    pub fn session(&self, id: ObjectId<SessionTag>) -> Option<&Session> {
+        self.sessions.iter().find(|value| value.id() == id)
+    }
+    pub fn acquisitions(&self) -> &[Acquisition] {
+        &self.acquisitions
+    }
+    pub fn acquisition(&self, id: ObjectId<AcquisitionTag>) -> Option<&Acquisition> {
+        self.acquisitions.iter().find(|value| value.id() == id)
+    }
+    pub fn devices(&self) -> &[Device] {
+        &self.devices
+    }
+    pub fn device(&self, id: ObjectId<DeviceTag>) -> Option<&Device> {
+        self.devices.iter().find(|value| value.id() == id)
+    }
+    pub fn sensors(&self) -> &[Sensor] {
+        &self.sensors
+    }
+    pub fn sensor(&self, id: ObjectId<SensorTag>) -> Option<&Sensor> {
+        self.sensors.iter().find(|value| value.id() == id)
+    }
+    pub fn channels(&self) -> &[Channel] {
+        &self.channels
+    }
+    pub fn channel(&self, id: ObjectId<ChannelTag>) -> Option<&Channel> {
+        self.channels.iter().find(|value| value.id() == id)
+    }
+    pub fn clock_relations(&self) -> &[ClockRelation] {
+        &self.clock_relations
+    }
+    pub fn clock_relation(&self, id: ObjectId<ClockRelationTag>) -> Option<&ClockRelation> {
+        self.clock_relations.iter().find(|value| value.id() == id)
+    }
+    pub fn frame_transforms(&self) -> &[FrameTransform] {
+        &self.frame_transforms
+    }
+    pub fn frame_transform(&self, id: ObjectId<FrameTransformTag>) -> Option<&FrameTransform> {
+        self.frame_transforms.iter().find(|value| value.id() == id)
+    }
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+    pub fn event(&self, id: ObjectId<EventTag>) -> Option<&Event> {
+        self.events.iter().find(|value| value.id() == id)
+    }
+    pub fn concept_dictionaries(&self) -> &[ConceptDictionary] {
+        &self.concept_dictionaries
+    }
+    pub fn concept_dictionary(
+        &self,
+        id: ObjectId<ConceptDictionaryTag>,
+    ) -> Option<&ConceptDictionary> {
+        self.concept_dictionaries
+            .iter()
+            .find(|value| value.id() == id)
+    }
+    pub fn derived_artifacts(&self) -> &[DerivedArtifact] {
+        &self.derived_artifacts
+    }
+    pub fn derived_artifact(&self, id: ObjectId<DerivedArtifactTag>) -> Option<&DerivedArtifact> {
+        self.derived_artifacts.iter().find(|value| value.id() == id)
     }
 
     pub fn validate(self, limits: ValidationLimits) -> Result<AbirDataset, ValidationReport> {
@@ -145,10 +286,70 @@ impl DatasetDraft {
             self.proofs.iter().map(Proof::id),
             "proofs",
         ));
-        drop(unique_ids(
+        let derivation_ids = unique_ids(
             &mut report,
             self.derivations.iter().map(Derivation::id),
             "derivations",
+        );
+        drop(unique_ids(
+            &mut report,
+            self.subjects.iter().map(Subject::id),
+            "subjects",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.patients.iter().map(Patient::id),
+            "patients",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.sessions.iter().map(Session::id),
+            "sessions",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.acquisitions.iter().map(Acquisition::id),
+            "acquisitions",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.devices.iter().map(Device::id),
+            "devices",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.sensors.iter().map(Sensor::id),
+            "sensors",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.channels.iter().map(Channel::id),
+            "channels",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.clock_relations.iter().map(ClockRelation::id),
+            "clock_relations",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.frame_transforms.iter().map(FrameTransform::id),
+            "frame_transforms",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.events.iter().map(Event::id),
+            "events",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.concept_dictionaries.iter().map(ConceptDictionary::id),
+            "concept_dictionaries",
+        ));
+        drop(unique_ids(
+            &mut report,
+            self.derived_artifacts.iter().map(DerivedArtifact::id),
+            "derived_artifacts",
         ));
 
         for (index, recording) in self.recordings.iter().enumerate() {
@@ -239,6 +440,12 @@ impl DatasetDraft {
             }
         }
 
+        let payload_content_ids: BTreeSet<_> = self
+            .atoms
+            .iter()
+            .filter_map(Atom::payload)
+            .map(|payload| payload.content_id())
+            .collect();
         for (index, atom) in self.atoms.iter().enumerate() {
             if !atom.is_structurally_valid(limits) {
                 push(
@@ -249,6 +456,30 @@ impl DatasetDraft {
                     )
                     .with_related_object(atom.id().to_bytes()),
                 );
+            }
+            if let Atom::TemporalTable(table) = atom {
+                if !clock_ids.contains(&table.clock_id()) {
+                    push(
+                        &mut report,
+                        ValidationFailure::error(
+                            FailureCode::UnresolvedClock,
+                            format!("atoms[{index}].clock_id"),
+                        )
+                        .with_related_object(table.clock_id().to_bytes()),
+                    );
+                }
+            }
+            for content_id in atom_companion_content_ids(atom) {
+                if !payload_content_ids.contains(&content_id) {
+                    push(
+                        &mut report,
+                        ValidationFailure::error(
+                            FailureCode::DanglingReference,
+                            format!("atoms[{index}].payload.companion"),
+                        )
+                        .with_evidence(alloc::vec![content_id]),
+                    );
+                }
             }
         }
 
@@ -301,6 +532,114 @@ impl DatasetDraft {
             }
         }
         validate_frame_ancestry(&mut report, &self.coordinate_frames, limits);
+
+        for (index, relation) in self.clock_relations.iter().enumerate() {
+            for (field, clock_id) in [
+                ("from_clock_id", relation.from_clock_id()),
+                ("to_clock_id", relation.to_clock_id()),
+            ] {
+                if !clock_ids.contains(&clock_id) {
+                    push(
+                        &mut report,
+                        ValidationFailure::error(
+                            FailureCode::UnresolvedClock,
+                            format!("clock_relations[{index}].{field}"),
+                        )
+                        .with_related_object(clock_id.to_bytes()),
+                    );
+                }
+            }
+            if !relation.rate().is_positive() || relation.uncertainty().parts().0 < 0 {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::InvalidExactNumber,
+                        format!("clock_relations[{index}]"),
+                    ),
+                );
+            }
+        }
+
+        for (index, transform) in self.frame_transforms.iter().enumerate() {
+            for (field, frame_id) in [
+                ("from_frame_id", transform.from_frame_id()),
+                ("to_frame_id", transform.to_frame_id()),
+            ] {
+                if !frame_ids.contains(&frame_id) {
+                    push(
+                        &mut report,
+                        ValidationFailure::error(
+                            FailureCode::UnresolvedCoordinateFrame,
+                            format!("frame_transforms[{index}].{field}"),
+                        )
+                        .with_related_object(frame_id.to_bytes()),
+                    );
+                }
+            }
+            if transform.uncertainty().parts().0 < 0 {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::InvalidExactNumber,
+                        format!("frame_transforms[{index}].uncertainty"),
+                    ),
+                );
+            }
+        }
+
+        for (index, event) in self.events.iter().enumerate() {
+            if !clock_ids.contains(&event.clock_id()) {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::UnresolvedClock,
+                        format!("events[{index}].clock_id"),
+                    )
+                    .with_related_object(event.clock_id().to_bytes()),
+                );
+            }
+            if !matches!(
+                rational_order(event.end(), event.start()),
+                Some(core::cmp::Ordering::Equal | core::cmp::Ordering::Greater)
+            ) || event.uncertainty().parts().0 < 0
+            {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::InvalidExactNumber,
+                        format!("events[{index}].interval"),
+                    ),
+                );
+            }
+        }
+
+        for (index, artifact) in self.derived_artifacts.iter().enumerate() {
+            let derivation = self
+                .derivations
+                .iter()
+                .find(|value| value.id() == artifact.derivation_id());
+            if !derivation_ids.contains(&artifact.derivation_id()) {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::DanglingReference,
+                        format!("derived_artifacts[{index}].derivation_id"),
+                    )
+                    .with_related_object(artifact.derivation_id().to_bytes()),
+                );
+            } else if !derivation
+                .is_some_and(|value| value.outputs().contains(&SemanticRef::of(artifact.id())))
+            {
+                push(
+                    &mut report,
+                    ValidationFailure::error(
+                        FailureCode::DanglingReference,
+                        format!("derived_artifacts[{index}].derivation_output"),
+                    )
+                    .with_related_object(artifact.id().to_bytes()),
+                );
+            }
+        }
 
         for (basis_index, basis) in self.channel_bases.iter().enumerate() {
             if basis.channels().len() > limits.max_channels {
@@ -360,6 +699,54 @@ impl DatasetDraft {
         semantic_refs.extend(self.proofs.iter().map(|value| SemanticRef::of(value.id())));
         semantic_refs.extend(
             self.derivations
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.subjects
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.patients
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.sessions
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.acquisitions
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(self.devices.iter().map(|value| SemanticRef::of(value.id())));
+        semantic_refs.extend(self.sensors.iter().map(|value| SemanticRef::of(value.id())));
+        semantic_refs.extend(
+            self.channels
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.clock_relations
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.frame_transforms
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(self.events.iter().map(|value| SemanticRef::of(value.id())));
+        semantic_refs.extend(
+            self.concept_dictionaries
+                .iter()
+                .map(|value| SemanticRef::of(value.id())),
+        );
+        semantic_refs.extend(
+            self.derived_artifacts
                 .iter()
                 .map(|value| SemanticRef::of(value.id())),
         );
@@ -440,6 +827,18 @@ impl DatasetDraft {
             fidelity: self.fidelity,
             source_capsules: self.source_capsules,
             observed_execution: self.observed_execution,
+            subjects: self.subjects,
+            patients: self.patients,
+            sessions: self.sessions,
+            acquisitions: self.acquisitions,
+            devices: self.devices,
+            sensors: self.sensors,
+            channels: self.channels,
+            clock_relations: self.clock_relations,
+            frame_transforms: self.frame_transforms,
+            events: self.events,
+            concept_dictionaries: self.concept_dictionaries,
+            derived_artifacts: self.derived_artifacts,
         })
     }
 }
@@ -459,6 +858,18 @@ pub struct AbirDataset {
     fidelity: Vec<Fidelity>,
     source_capsules: Vec<SourceCapsule>,
     observed_execution: Vec<ExecutionRecord>,
+    subjects: Vec<Subject>,
+    patients: Vec<Patient>,
+    sessions: Vec<Session>,
+    acquisitions: Vec<Acquisition>,
+    devices: Vec<Device>,
+    sensors: Vec<Sensor>,
+    channels: Vec<Channel>,
+    clock_relations: Vec<ClockRelation>,
+    frame_transforms: Vec<FrameTransform>,
+    events: Vec<Event>,
+    concept_dictionaries: Vec<ConceptDictionary>,
+    derived_artifacts: Vec<DerivedArtifact>,
 }
 
 impl AbirDataset {
@@ -501,6 +912,83 @@ impl AbirDataset {
     pub fn observed_execution(&self) -> &[ExecutionRecord] {
         &self.observed_execution
     }
+    pub fn subjects(&self) -> &[Subject] {
+        &self.subjects
+    }
+    pub fn subject(&self, id: ObjectId<SubjectTag>) -> Option<&Subject> {
+        self.subjects.iter().find(|value| value.id() == id)
+    }
+    pub fn patients(&self) -> &[Patient] {
+        &self.patients
+    }
+    pub fn patient(&self, id: ObjectId<PatientTag>) -> Option<&Patient> {
+        self.patients.iter().find(|value| value.id() == id)
+    }
+    pub fn sessions(&self) -> &[Session] {
+        &self.sessions
+    }
+    pub fn session(&self, id: ObjectId<SessionTag>) -> Option<&Session> {
+        self.sessions.iter().find(|value| value.id() == id)
+    }
+    pub fn acquisitions(&self) -> &[Acquisition] {
+        &self.acquisitions
+    }
+    pub fn acquisition(&self, id: ObjectId<AcquisitionTag>) -> Option<&Acquisition> {
+        self.acquisitions.iter().find(|value| value.id() == id)
+    }
+    pub fn devices(&self) -> &[Device] {
+        &self.devices
+    }
+    pub fn device(&self, id: ObjectId<DeviceTag>) -> Option<&Device> {
+        self.devices.iter().find(|value| value.id() == id)
+    }
+    pub fn sensors(&self) -> &[Sensor] {
+        &self.sensors
+    }
+    pub fn sensor(&self, id: ObjectId<SensorTag>) -> Option<&Sensor> {
+        self.sensors.iter().find(|value| value.id() == id)
+    }
+    pub fn channels(&self) -> &[Channel] {
+        &self.channels
+    }
+    pub fn channel(&self, id: ObjectId<ChannelTag>) -> Option<&Channel> {
+        self.channels.iter().find(|value| value.id() == id)
+    }
+    pub fn clock_relations(&self) -> &[ClockRelation] {
+        &self.clock_relations
+    }
+    pub fn clock_relation(&self, id: ObjectId<ClockRelationTag>) -> Option<&ClockRelation> {
+        self.clock_relations.iter().find(|value| value.id() == id)
+    }
+    pub fn frame_transforms(&self) -> &[FrameTransform] {
+        &self.frame_transforms
+    }
+    pub fn frame_transform(&self, id: ObjectId<FrameTransformTag>) -> Option<&FrameTransform> {
+        self.frame_transforms.iter().find(|value| value.id() == id)
+    }
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+    pub fn event(&self, id: ObjectId<EventTag>) -> Option<&Event> {
+        self.events.iter().find(|value| value.id() == id)
+    }
+    pub fn concept_dictionaries(&self) -> &[ConceptDictionary] {
+        &self.concept_dictionaries
+    }
+    pub fn concept_dictionary(
+        &self,
+        id: ObjectId<ConceptDictionaryTag>,
+    ) -> Option<&ConceptDictionary> {
+        self.concept_dictionaries
+            .iter()
+            .find(|value| value.id() == id)
+    }
+    pub fn derived_artifacts(&self) -> &[DerivedArtifact] {
+        &self.derived_artifacts
+    }
+    pub fn derived_artifact(&self, id: ObjectId<DerivedArtifactTag>) -> Option<&DerivedArtifact> {
+        self.derived_artifacts.iter().find(|value| value.id() == id)
+    }
     pub fn payload_content_ids(&self) -> Vec<ContentId> {
         self.atoms
             .iter()
@@ -515,6 +1003,40 @@ fn push(report: &mut Option<ValidationReport>, failure: ValidationFailure) {
         Some(report) => report.push(failure),
         None => *report = Some(ValidationReport::new(failure)),
     }
+}
+
+fn rational_order(left: crate::Rational, right: crate::Rational) -> Option<core::cmp::Ordering> {
+    let (left_numerator, left_denominator) = left.parts();
+    let (right_numerator, right_denominator) = right.parts();
+    Some(
+        left_numerator
+            .checked_mul(right_denominator)?
+            .cmp(&right_numerator.checked_mul(left_denominator)?),
+    )
+}
+
+fn atom_companion_content_ids(atom: &Atom) -> Vec<ContentId> {
+    let mut ids = Vec::new();
+    if let Some(payload) = atom.payload() {
+        match payload.layout() {
+            Layout::DenseRowMajor | Layout::DenseColumnMajor => {}
+            Layout::Ragged { offsets, .. } => ids.push(*offsets),
+            Layout::SparseCoo { indices, .. } => ids.push(*indices),
+            Layout::SparseCsr {
+                indptr, indices, ..
+            } => {
+                ids.push(*indptr);
+                ids.push(*indices);
+            }
+            Layout::BlockFloatingPoint { scales, .. } => ids.push(*scales),
+        }
+    }
+    if let Atom::SignalBlock(block) = atom {
+        if let TimeAxis::Explicit { timestamps, .. } = block.time_axis() {
+            ids.push(*timestamps);
+        }
+    }
+    ids
 }
 
 fn check_limit(report: &mut Option<ValidationReport>, actual: usize, maximum: usize, path: &str) {

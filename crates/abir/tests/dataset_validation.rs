@@ -3,7 +3,8 @@ use abir::{
     ClockTag, ConceptId, ContentId, CoordinateFrame, CoordinateFrameTag, DatasetDraft, DatasetTag,
     Derivation, DerivationTag, ElementType, FailureCode, Layout, ObjectId, PayloadDescriptor,
     Policy, PolicyTag, Presence, Proof, ProofTag, Rational, Recording, RecordingTag, ReferenceKind,
-    SemanticRef, SignalBlock, Stream, StreamTag, TimeAxis, TimeSegment, ValidationLimits,
+    SemanticRef, SignalBlock, Stream, StreamTag, Table, TableColumn, TemporalTable, TimeAxis,
+    TimeSegment, ValidationLimits,
 };
 
 fn id<T>(value: u8) -> ObjectId<T> {
@@ -147,12 +148,63 @@ fn payload_shape_mismatch_and_presence_mismatch_are_rejected() {
         .any(|failure| failure.failure_code() == FailureCode::PayloadMismatch));
 
     let mut absent = eeg_dataset();
-    absent.atoms_mut()[0].set_presence(Presence::Missing);
+    absent.atoms_mut()[0].set_presence(Presence::AbsentAtSource);
     let report = absent.validate(ValidationLimits::default()).unwrap_err();
     assert!(report
         .failures()
         .iter()
         .any(|failure| failure.failure_code() == FailureCode::PayloadMismatch));
+}
+
+#[test]
+fn composite_payloads_and_temporal_tables_reject_dangling_semantics() {
+    let mut composite = DatasetDraft::new(id::<DatasetTag>(70));
+    composite.add_atom(Atom::Table(Table::new(
+        id::<AtomTag>(71),
+        Presence::Present,
+        Some(PayloadDescriptor::new(
+            ContentId::from_bytes([71; 32]),
+            2,
+            ElementType::I16,
+            ByteOrder::Little,
+            vec![1, 1],
+            Layout::SparseCoo {
+                nonzero: 1,
+                indices: ContentId::from_bytes([72; 32]),
+            },
+            None,
+            None,
+        )),
+        vec![TableColumn::new(
+            ConceptId::new("abir:column/value").unwrap(),
+            ElementType::I16,
+            false,
+        )],
+    )));
+    let report = composite.validate(ValidationLimits::default()).unwrap_err();
+    assert!(report.failures().iter().any(|failure| {
+        failure.failure_code() == FailureCode::DanglingReference
+            && failure.path() == "atoms[0].payload.companion"
+    }));
+
+    let mut temporal = DatasetDraft::new(id::<DatasetTag>(73));
+    temporal.add_atom(Atom::TemporalTable(TemporalTable::new(
+        id::<AtomTag>(74),
+        Presence::AbsentAtSource,
+        None,
+        id::<ClockTag>(75),
+        ConceptId::new("abir:record/event").unwrap(),
+        vec![TableColumn::new(
+            ConceptId::new("abir:column/time").unwrap(),
+            ElementType::I64,
+            false,
+        )],
+    )));
+    let report = temporal.validate(ValidationLimits::default()).unwrap_err();
+    assert!(report.failures().iter().any(|failure| {
+        failure.failure_code() == FailureCode::UnresolvedClock
+            && failure.path() == "atoms[0].clock_id"
+    }));
 }
 
 #[test]

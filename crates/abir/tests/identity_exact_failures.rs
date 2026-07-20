@@ -1,7 +1,12 @@
 use abir::{
-    ConceptId, ContentId, DatasetTag, ExactNumber, FailureCode, Handle, ObjectId, Rational,
-    SourceKey, StorageId, ValidationFailure, ValidationLimits, ValidationReport,
+    AtomTag, ConceptId, ContentId, DatasetTag, ExactNumber, FailureCode, FailureOrigin, Handle,
+    ObjectId, Rational, RetryClass, SemanticRef, SourceKey, StorageId, ValidationFailure,
+    ValidationLimits, ValidationReport,
 };
+
+fn id<T>(value: u8) -> ObjectId<T> {
+    ObjectId::from_bytes([value; 16])
+}
 
 #[test]
 fn typed_ids_preserve_bytes_without_interchanging_types() {
@@ -50,4 +55,45 @@ fn validation_reports_are_structured_and_nonempty() {
     let limits = ValidationLimits::default();
     assert!(limits.max_recordings > 0);
     assert!(limits.max_nesting_depth > 0);
+}
+
+#[test]
+fn validation_failure_builder_preserves_extension_fields() {
+    let scope = SemanticRef::of(id::<AtomTag>(6));
+    let evidence = vec![
+        ContentId::from_bytes([9; 32]),
+        ContentId::from_bytes([10; 32]),
+    ];
+
+    let failure = ValidationFailure::error(FailureCode::StructuralLimit, "streams[0].extent")
+        .with_origin(FailureOrigin::NamespaceCode {
+            namespace: "abir".to_string(),
+            code: "validation".to_string(),
+        })
+        .with_retry_class(RetryClass::Transient)
+        .with_affected_scope(scope)
+        .with_evidence(evidence.clone());
+
+    assert_eq!(
+        failure.origin(),
+        &FailureOrigin::NamespaceCode {
+            namespace: "abir".to_string(),
+            code: "validation".to_string(),
+        }
+    );
+    assert_eq!(failure.retry_class(), RetryClass::Transient);
+    assert_eq!(failure.affected_scope(), Some(scope));
+    assert_eq!(failure.evidence(), evidence.as_slice());
+
+    let default_failure = ValidationFailure::error(FailureCode::DuplicateId, "recordings[1].id");
+    assert_eq!(default_failure.retry_class(), RetryClass::AfterCorrection);
+    assert_eq!(
+        default_failure.origin(),
+        &FailureOrigin::NamespaceCode {
+            namespace: "abir".to_string(),
+            code: "validation".to_string(),
+        }
+    );
+    assert_eq!(default_failure.affected_scope(), None);
+    assert_eq!(default_failure.evidence(), &[]);
 }

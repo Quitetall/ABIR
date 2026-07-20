@@ -27,15 +27,17 @@ mod view;
 
 #[cfg(feature = "alloc")]
 pub use atom::{
-    Atom, BlobRef, ByteOrder, ElementType, EncodedBlock, Layout, PayloadDescriptor, Presence,
-    SignalBlock, Table, TemporalTable, Tensor,
+    Atom, BlobIntegrity, BlobRef, ByteOrder, DecodedSemantics, ElementType, EncodedBlock, Layout,
+    PayloadDescriptor, Presence, SemanticAxis, SignalBlock, Table, TableColumn, TemporalTable,
+    Tensor,
 };
 #[cfg(feature = "alloc")]
 pub use canonical::{canonical_debug_json, logical_content_id};
 #[cfg(feature = "alloc")]
 pub use catalog::{
-    Calibration, CalibrationError, ChannelBasis, ChannelSpec, Clock, CoordinateFrame, Recording,
-    ReferenceKind, Stream,
+    Acquisition, Calibration, CalibrationError, CatalogRecord, Channel, ChannelBasis, ChannelSpec,
+    Clock, ClockRelation, ConceptDictionary, CoordinateFrame, DerivedArtifact, Device, Event,
+    FrameTransform, Patient, Recording, ReferenceKind, Sensor, Session, Stream, Subject,
 };
 #[cfg(feature = "alloc")]
 pub use concept::{ConceptError, ConceptId, SourceKey, SourceKeyError};
@@ -43,15 +45,19 @@ pub use concept::{ConceptError, ConceptId, SourceKey, SourceKeyError};
 pub use dataset::{AbirDataset, DatasetDraft};
 pub use exact::{ExactNumber, Rational, RationalError};
 #[cfg(feature = "alloc")]
-pub use failure::{FailureCode, Severity, ValidationFailure, ValidationReport};
+pub use failure::{
+    FailureCode, FailureOrigin, RetryClass, Severity, ValidationFailure, ValidationReport,
+};
 #[cfg(feature = "alloc")]
 pub use governance::{
     Derivation, ExecutionRecord, Fidelity, FidelityKind, Policy, Proof, SourceCapsule,
 };
 pub use id::{
-    AtomTag, ChannelBasisTag, ClockTag, ContentId, CoordinateFrameTag, DatasetTag, DerivationTag,
-    Handle, ObjectId, ObjectKind, PolicyTag, ProofTag, RecordingTag, SemanticRef, SemanticTag,
-    StorageId, StreamTag,
+    AcquisitionTag, AtomTag, ChannelBasisTag, ChannelTag, ClockRelationTag, ClockTag,
+    ConceptDictionaryTag, ContentId, CoordinateFrameTag, DatasetTag, DerivationTag,
+    DerivedArtifactTag, DeviceTag, EventTag, FrameTransformTag, Handle, ObjectId, ObjectKind,
+    PatientTag, PolicyTag, ProofTag, RecordingTag, SemanticRef, SemanticTag, SensorTag, SessionTag,
+    StorageId, StreamTag, SubjectTag,
 };
 pub use limits::ValidationLimits;
 #[cfg(feature = "alloc")]

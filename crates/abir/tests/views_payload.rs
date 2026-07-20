@@ -1,7 +1,7 @@
 use abir::{
     Atom, AtomTag, BorrowedPayload, BorrowedPayloadAccess, ByteOrder, ConceptId, ContentId,
     DatasetDraft, DatasetTag, ElementType, InMemoryPayloadAccess, Layout, ObjectId, OpenedDataset,
-    PayloadDescriptor, Presence, Recording, RecordingTag, Stream, StreamTag, Tensor,
+    PayloadDescriptor, Presence, Recording, RecordingTag, SemanticAxis, Stream, StreamTag, Tensor,
     ValidationLimits,
 };
 
@@ -40,6 +40,10 @@ fn tensor_dataset() -> (abir::AbirDataset, ContentId) {
         atom_id,
         Presence::Present,
         Some(descriptor),
+        vec![SemanticAxis::new(
+            ConceptId::new("abir:axis/value").unwrap(),
+            4,
+        )],
     )));
     (
         draft.validate(ValidationLimits::default()).unwrap(),

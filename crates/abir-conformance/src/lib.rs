@@ -3,10 +3,14 @@
 //! The crate intentionally exposes no placeholder conformance result: a
 //! conformance claim must be produced by executing the normative fixtures.
 
+mod semantic_matrix;
+
+pub use semantic_matrix::semantic_matrix_dataset;
+
 use abir::{
     Atom, AtomTag, ByteOrder, Clock, ClockTag, ConceptId, ContentId, DatasetDraft, DatasetTag,
     ElementType, Layout, ObjectId, PayloadDescriptor, Presence, Rational, Recording, RecordingTag,
-    Stream, StreamTag, Tensor, ValidationLimits,
+    SemanticAxis, Stream, StreamTag, Tensor, ValidationLimits,
 };
 
 fn id<T>(value: u8) -> ObjectId<T> {
@@ -41,6 +45,10 @@ pub fn canonical_sample_dataset() -> abir::AbirDataset {
             Some(ConceptId::new("abir:encoding/raw").expect("fixture encoding")),
             None,
         )),
+        vec![SemanticAxis::new(
+            ConceptId::new("abir:axis/sample").expect("fixture axis"),
+            4,
+        )],
     )));
     draft.add_clock(Clock::new(
         id::<ClockTag>(6),

@@ -33,9 +33,15 @@ metadata, excessive nesting, and payload descriptor mismatches.
 ## 3. Dataset root and catalog
 
 `AbirDataset` is the first-class root. It owns immutable semantic catalogs and
-payload `ContentId` references, never physical buffers. A dataset contains zero
-or more recordings. Recordings contain streams; streams contain ordered atom
-references and carry clock, channel-basis, modality, and policy semantics.
+payload `ContentId` references, never physical buffers. The catalog admits
+typed Subject, Patient, Session, Acquisition, Device, Sensor, Channel,
+Recording, Stream, Clock, ClockRelation, CoordinateFrame, FrameTransform,
+ChannelBasis, Event, ConceptDictionary, Policy, Proof, Derivation, and
+DerivedArtifact identities. Generic catalog records preserve a namespaced kind
+and foreign `SourceKey` values; relationship records preserve their typed
+endpoints and exact parameters. A dataset contains zero or more recordings.
+Recordings contain streams; streams contain ordered atom references and carry
+clock, channel-basis, modality, and policy semantics.
 
 Catalog references are explicit. Unknown registered concepts are preserved as
 opaque namespaced concept identifiers and are not silently coerced.
@@ -47,16 +53,25 @@ restriction is intentional so identity does not depend on case folding.
 
 The atom algebra is sealed for semantic-v1:
 
-1. `SignalBlock`: dense, ragged, sparse, or block-floating-point signal data.
-2. `TemporalTable`: rows with explicit temporal anchors or intervals.
-3. `Table`: typed non-temporal columnar data.
-4. `Tensor`: labelled or unlabelled n-dimensional data.
-5. `EncodedBlock`: bytes governed by a declared codec and decoded semantics.
-6. `BlobRef`: opaque external or embedded content with media type and digest.
+1. `SignalBlock`: dense, ragged, sparse, or block-floating-point signal data
+   with an exact time axis and optional exact affine calibration.
+2. `TemporalTable`: typed rows with a clock, record kind, and explicit column
+   semantics for temporal anchors or intervals.
+3. `Table`: typed non-temporal columns with explicit nullability.
+4. `Tensor`: labelled n-dimensional axes whose declared extents match shape.
+5. `EncodedBlock`: bytes governed by a declared codec and a required decoded
+   atom-kind, element, and shape contract.
+6. `BlobRef`: opaque external or embedded content with media type, integrity
+   algorithm, and digest.
 
 Every payload-bearing atom uses a `PayloadDescriptor` that declares content
 identity, logical byte length, element type, byte order, shape/layout, and
 encoding. Physical location and buffers are supplied only by `PayloadAccess`.
+Ragged layouts identify an offsets payload, COO identifies an indices payload,
+CSR identifies indptr and indices payloads, and block-floating-point layouts
+identify a scale payload. These companion `ContentId` values must resolve in
+the same verified dataset and may not alias the primary payload where that
+would erase the composite representation.
 
 ## 5. Time and presence
 
@@ -66,8 +81,10 @@ segments. A `TimeAxis` is either regular, explicit timestamps, or piecewise
 regular. Clock identity and uncertainty are mandatory when absolute alignment
 is claimed.
 
-Presence is explicit: `Present`, `Missing`, `Unknown`, `Redacted`, or
-`NotApplicable`. Missingness never implies a numeric zero or empty payload.
+Presence is explicit: `Present`, `AbsentAtSource`, `UnknownAtSource`,
+`Withheld`, `Redacted`, or `NotApplicable`. Absence, uncertainty, policy
+withholding, and redaction are distinct states. None implies a numeric zero or
+empty payload.
 
 ## 6. Calibration, coordinates, and channel bases
 
@@ -113,9 +130,11 @@ observed execution, and current authorization-ledger state are excluded.
 
 ## 10. Structured failures
 
-Every failure has a stable registry code, severity, semantic path, and optional
-related object identity. Implementations may add diagnostics but must not
-reinterpret a registered code. Structural-limit failures are always errors.
+Every failure has a stable registry code, severity, semantic path, origin,
+retry class, optional related object identity, optional affected semantic
+scope, and zero or more evidence `ContentId` values. Implementations may add
+diagnostics but must not reinterpret a registered code. Structural-limit
+failures are always errors.
 
 ## 11. Extension rule
 
