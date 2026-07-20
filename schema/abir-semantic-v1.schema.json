@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Quitetall/ABIR/schema/abir-semantic-v1.schema.json",
+  "title": "ABIR semantic-v1 canonical debug document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["semantic_version", "dataset_id", "recordings", "atoms"],
+  "properties": {
+    "semantic_version": { "const": "1" },
+    "dataset_id": { "$ref": "#/$defs/object_id" },
+    "source_keys": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source_key" }
+    },
+    "recordings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/recording" }
+    },
+    "atoms": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/atom" }
+    }
+  },
+  "$defs": {
+    "object_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "content_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "concept": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9.-]*:[A-Za-z0-9._/-]+$"
+    },
+    "exact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$integer"],
+          "properties": { "$integer": { "type": "string", "pattern": "^-?(0|[1-9][0-9]*)$" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$rational"],
+          "properties": {
+            "$rational": {
+              "type": "array", "prefixItems": [
+                { "type": "string", "pattern": "^-?(0|[1-9][0-9]*)$" },
+                { "type": "string", "pattern": "^[1-9][0-9]*$" }
+              ], "items": false
+            }
+          }
+        }
+      ]
+    },
+    "source_key": {
+      "type": "object", "additionalProperties": false,
+      "required": ["namespace", "value"],
+      "properties": { "namespace": { "type": "string", "minLength": 1 }, "value": { "type": "string" } }
+    },
+    "recording": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "streams"],
+      "properties": {
+        "id": { "$ref": "#/$defs/object_id" },
+        "streams": { "type": "array", "items": { "$ref": "#/$defs/object_id" } }
+      }
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_id", "logical_bytes", "element", "layout", "shape"],
+      "properties": {
+        "content_id": { "$ref": "#/$defs/content_id" },
+        "logical_bytes": { "type": "integer", "minimum": 0 },
+        "element": { "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"] },
+        "byte_order": { "enum": ["little", "big", "not-applicable"] },
+        "layout": { "enum": ["dense-row-major", "dense-column-major", "ragged", "sparse-coo", "sparse-csr", "bfp"] },
+        "shape": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "encoding": { "$ref": "#/$defs/concept" }
+      }
+    },
+    "atom": {
+      "type": "object", "additionalProperties": true,
+      "required": ["id", "kind", "presence"],
+      "properties": {
+        "id": { "$ref": "#/$defs/object_id" },
+        "kind": { "enum": ["signal-block", "temporal-table", "table", "tensor", "encoded-block", "blob-ref"] },
+        "presence": { "enum": ["present", "missing", "unknown", "redacted", "not-applicable"] },
+        "payload": { "$ref": "#/$defs/payload" }
+      }
+    }
+  }
+}

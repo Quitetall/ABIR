@@ -1,0 +1,14 @@
+{
+  "registry": "org.quitetall.abir.concepts",
+  "version": 1,
+  "entries": [
+    { "id": "abir:modality/eeg", "kind": "modality", "status": "stable" },
+    { "id": "abir:modality/ecg", "kind": "modality", "status": "stable" },
+    { "id": "abir:modality/emg", "kind": "modality", "status": "stable" },
+    { "id": "abir:modality/eog", "kind": "modality", "status": "stable" },
+    { "id": "abir:modality/imu", "kind": "modality", "status": "stable" },
+    { "id": "abir:encoding/raw", "kind": "encoding", "status": "stable" },
+    { "id": "abir:clock/device", "kind": "clock", "status": "stable" },
+    { "id": "abir:frame/head", "kind": "coordinate-frame", "status": "stable" }
+  ]
+}

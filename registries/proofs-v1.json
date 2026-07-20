@@ -1,0 +1,10 @@
+{
+  "registry": "org.quitetall.abir.proofs",
+  "version": 1,
+  "entries": [
+    { "id": "abir:proof/content-integrity", "scope": "content" },
+    { "id": "abir:proof/derivation", "scope": "derivation" },
+    { "id": "abir:proof/fidelity-bound", "scope": "fidelity" },
+    { "id": "abir:proof/policy-attestation", "scope": "policy" }
+  ]
+}

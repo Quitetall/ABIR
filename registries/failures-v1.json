@@ -1,0 +1,19 @@
+{
+  "registry": "org.quitetall.abir.failures",
+  "version": 1,
+  "entries": [
+    { "code": "ABIR-E001", "name": "duplicate-id" },
+    { "code": "ABIR-E002", "name": "dangling-reference" },
+    { "code": "ABIR-E003", "name": "invalid-exact-number" },
+    { "code": "ABIR-E004", "name": "invalid-shape-or-extent" },
+    { "code": "ABIR-E005", "name": "payload-mismatch" },
+    { "code": "ABIR-E006", "name": "unresolved-clock" },
+    { "code": "ABIR-E007", "name": "unresolved-coordinate-frame" },
+    { "code": "ABIR-E008", "name": "invalid-calibration" },
+    { "code": "ABIR-E009", "name": "proof-misuse" },
+    { "code": "ABIR-E010", "name": "policy-relaxation" },
+    { "code": "ABIR-E011", "name": "nonfinite-metadata" },
+    { "code": "ABIR-E012", "name": "structural-limit" },
+    { "code": "ABIR-E013", "name": "unsupported-semantic-extension" }
+  ]
+}
