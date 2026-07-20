@@ -45,6 +45,14 @@ impl Rational {
     pub const fn parts(self) -> (i128, i128) {
         (self.numerator, self.denominator)
     }
+
+    pub const fn is_positive(self) -> bool {
+        self.numerator > 0
+    }
+
+    pub const fn is_zero(self) -> bool {
+        self.numerator == 0
+    }
 }
 
 impl fmt::Display for Rational {

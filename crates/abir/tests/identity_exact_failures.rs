@@ -31,6 +31,8 @@ fn concepts_and_source_keys_preserve_namespaced_foreign_identity() {
     assert_eq!(concept.as_str(), "abir:modality/eeg");
     assert!(ConceptId::new("EEG").is_err());
     assert!(ConceptId::new("ABIR:modality/eeg").is_err());
+    assert!(ConceptId::new(":").is_err());
+    assert!(ConceptId::new("abir:").is_err());
 
     let key = SourceKey::new("edf.signal", "EEG Fp1-Ref").unwrap();
     assert_eq!(key.namespace(), "edf.signal");

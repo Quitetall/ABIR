@@ -4,23 +4,45 @@
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
+mod atom;
+#[cfg(feature = "alloc")]
+mod catalog;
+#[cfg(feature = "alloc")]
 mod concept;
+#[cfg(feature = "alloc")]
+mod dataset;
 mod exact;
 #[cfg(feature = "alloc")]
 mod failure;
 mod id;
 mod limits;
+#[cfg(feature = "alloc")]
+mod time;
 
 #[cfg(feature = "alloc")]
+pub use atom::{
+    Atom, BlobRef, ByteOrder, ElementType, EncodedBlock, Layout, PayloadDescriptor, Presence,
+    SignalBlock, Table, TemporalTable, Tensor,
+};
+#[cfg(feature = "alloc")]
+pub use catalog::{
+    Calibration, CalibrationError, ChannelBasis, ChannelSpec, Clock, CoordinateFrame, Recording,
+    ReferenceKind, Stream,
+};
+#[cfg(feature = "alloc")]
 pub use concept::{ConceptError, ConceptId, SourceKey, SourceKeyError};
+#[cfg(feature = "alloc")]
+pub use dataset::{AbirDataset, DatasetDraft};
 pub use exact::{ExactNumber, Rational, RationalError};
 #[cfg(feature = "alloc")]
 pub use failure::{FailureCode, Severity, ValidationFailure, ValidationReport};
 pub use id::{
-    AtomTag, ChannelBasisTag, ClockTag, ContentId, DatasetTag, DerivationTag, Handle, ObjectId,
-    PolicyTag, ProofTag, RecordingTag, StorageId, StreamTag,
+    AtomTag, ChannelBasisTag, ClockTag, ContentId, CoordinateFrameTag, DatasetTag, DerivationTag,
+    Handle, ObjectId, PolicyTag, ProofTag, RecordingTag, StorageId, StreamTag,
 };
 pub use limits::ValidationLimits;
+#[cfg(feature = "alloc")]
+pub use time::{TimeAxis, TimeError, TimeSegment};
 
 /// Package version. This is not the semantic schema version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

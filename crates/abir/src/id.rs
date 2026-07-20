@@ -16,6 +16,7 @@ semantic_tags!(
     StreamTag,
     AtomTag,
     ClockTag,
+    CoordinateFrameTag,
     ChannelBasisTag,
     PolicyTag,
     ProofTag,
