@@ -1,6 +1,6 @@
 use core::fmt;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Rational {
     numerator: i128,
     denominator: i128,
@@ -70,7 +70,7 @@ impl fmt::Display for RationalError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ExactNumber {
     Integer(i128),
     Rational(Rational),

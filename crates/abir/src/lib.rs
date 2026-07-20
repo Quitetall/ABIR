@@ -6,6 +6,8 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 mod atom;
 #[cfg(feature = "alloc")]
+mod canonical;
+#[cfg(feature = "alloc")]
 mod catalog;
 #[cfg(feature = "alloc")]
 mod concept;
@@ -28,6 +30,8 @@ pub use atom::{
     Atom, BlobRef, ByteOrder, ElementType, EncodedBlock, Layout, PayloadDescriptor, Presence,
     SignalBlock, Table, TemporalTable, Tensor,
 };
+#[cfg(feature = "alloc")]
+pub use canonical::{canonical_debug_json, logical_content_id};
 #[cfg(feature = "alloc")]
 pub use catalog::{
     Calibration, CalibrationError, ChannelBasis, ChannelSpec, Clock, CoordinateFrame, Recording,

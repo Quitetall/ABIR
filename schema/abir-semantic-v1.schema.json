@@ -33,6 +33,7 @@
   },
   "$defs": {
     "object_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "nullable_object_id": { "oneOf": [{ "$ref": "#/$defs/object_id" }, { "type": "null" }] },
     "content_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "concept": {
       "type": "string",
@@ -71,7 +72,8 @@
       "required": ["id", "streams"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
-        "streams": { "type": "array", "items": { "$ref": "#/$defs/object_id" } }
+        "streams": { "type": "array", "items": { "$ref": "#/$defs/object_id" } },
+        "source_keys": { "type": "array", "items": { "$ref": "#/$defs/source_key" } }
       }
     },
     "stream": {
@@ -82,9 +84,9 @@
         "recording_id": { "$ref": "#/$defs/object_id" },
         "modality": { "$ref": "#/$defs/concept" },
         "atoms": { "type": "array", "items": { "$ref": "#/$defs/object_id" } },
-        "clock_id": { "$ref": "#/$defs/object_id" },
-        "channel_basis_id": { "$ref": "#/$defs/object_id" },
-        "policy_id": { "$ref": "#/$defs/object_id" }
+        "clock_id": { "$ref": "#/$defs/nullable_object_id" },
+        "channel_basis_id": { "$ref": "#/$defs/nullable_object_id" },
+        "policy_id": { "$ref": "#/$defs/nullable_object_id" }
       }
     },
     "payload": {
@@ -95,10 +97,18 @@
         "logical_bytes": { "type": "integer", "minimum": 0 },
         "element": { "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"] },
         "byte_order": { "enum": ["little", "big", "not-applicable"] },
-        "layout": { "enum": ["dense-row-major", "dense-column-major", "ragged", "sparse-coo", "sparse-csr", "bfp"] },
+        "layout": {
+          "oneOf": [
+            { "enum": ["dense-row-major", "dense-column-major"] },
+            { "type": "object", "required": ["ragged"], "properties": { "ragged": { "type": "object", "required": ["rows"], "properties": { "rows": { "type": "integer", "minimum": 1 } } } } },
+            { "type": "object", "required": ["sparse-coo"], "properties": { "sparse-coo": { "type": "object", "required": ["nonzero"], "properties": { "nonzero": { "type": "integer", "minimum": 0 } } } } },
+            { "type": "object", "required": ["sparse-csr"], "properties": { "sparse-csr": { "type": "object", "required": ["nonzero"], "properties": { "nonzero": { "type": "integer", "minimum": 0 } } } } },
+            { "type": "object", "required": ["bfp"], "properties": { "bfp": { "type": "object", "required": ["block_len", "mantissa_bits"], "properties": { "block_len": { "type": "integer", "minimum": 1 }, "mantissa_bits": { "type": "integer", "minimum": 1, "maximum": 32 } } } } }
+          ]
+        },
         "shape": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
-        "encoding": { "$ref": "#/$defs/concept" },
-        "media_type": { "type": "string", "pattern": "^[^/\\s]+/[^\\s]+$" }
+        "encoding": { "oneOf": [{ "$ref": "#/$defs/concept" }, { "type": "null" }] },
+        "media_type": { "oneOf": [{ "type": "string", "pattern": "^[^/\\s]+/[^\\s]+$" }, { "type": "null" }] }
       }
     },
     "atom": {
@@ -108,16 +118,16 @@
         "id": { "$ref": "#/$defs/object_id" },
         "kind": { "enum": ["signal-block", "temporal-table", "table", "tensor", "encoded-block", "blob-ref"] },
         "presence": { "enum": ["present", "missing", "unknown", "redacted", "not-applicable"] },
-        "payload": { "$ref": "#/$defs/payload" }
+        "payload": { "oneOf": [{ "$ref": "#/$defs/payload" }, { "type": "null" }] }
       },
       "allOf": [
         {
           "if": { "properties": { "presence": { "const": "present" } }, "required": ["presence"] },
-          "then": { "required": ["payload"] }
+          "then": { "required": ["payload"], "properties": { "payload": { "$ref": "#/$defs/payload" } } }
         },
         {
           "if": { "properties": { "kind": { "const": "blob-ref" } }, "required": ["kind"] },
-          "then": { "properties": { "payload": { "required": ["media_type"] } } }
+          "then": { "properties": { "payload": { "allOf": [{ "$ref": "#/$defs/payload" }, { "required": ["media_type"], "properties": { "media_type": { "type": "string" } } }] } } }
         }
       ]
     },
@@ -127,7 +137,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "kind": { "$ref": "#/$defs/concept" },
-        "parent_id": { "$ref": "#/$defs/object_id" },
+        "parent_id": { "$ref": "#/$defs/nullable_object_id" },
         "offset": { "$ref": "#/$defs/exact" },
         "rate": { "$ref": "#/$defs/exact" },
         "uncertainty": { "$ref": "#/$defs/exact" }
@@ -139,8 +149,8 @@
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "kind": { "$ref": "#/$defs/concept" },
-        "parent_id": { "$ref": "#/$defs/object_id" },
-        "transform": { "type": "array", "minItems": 16, "maxItems": 16, "items": { "$ref": "#/$defs/exact" } },
+        "parent_id": { "$ref": "#/$defs/nullable_object_id" },
+        "transform": { "oneOf": [{ "type": "array", "minItems": 16, "maxItems": 16, "items": { "$ref": "#/$defs/exact" } }, { "type": "null" }] },
         "uncertainty": { "$ref": "#/$defs/exact" }
       }
     },
@@ -149,7 +159,7 @@
       "required": ["id", "channels"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
-        "channels": { "type": "array", "items": { "$ref": "#/$defs/concept" } },
+        "channels": { "type": "array", "items": { "$ref": "#/$defs/channel" } },
         "reference": { "enum": ["absolute", "common", "differential", "unknown"] }
       }
     },
@@ -158,18 +168,18 @@
       "required": ["id", "restrictions"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
-        "parent_id": { "$ref": "#/$defs/object_id" },
+        "parent_id": { "$ref": "#/$defs/nullable_object_id" },
         "restrictions": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/concept" } }
       }
     },
     "proof": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "kind", "subject_id", "payload"],
+      "required": ["id", "kind", "subject", "payload"],
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "kind": { "$ref": "#/$defs/concept" },
-        "subject_id": { "$ref": "#/$defs/object_id" },
-        "payload": { "$ref": "#/$defs/payload" }
+        "subject": { "$ref": "#/$defs/semantic_ref" },
+        "payload": { "$ref": "#/$defs/content_id" }
       }
     },
     "derivation": {
@@ -178,18 +188,18 @@
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "operation": { "$ref": "#/$defs/concept" },
-        "inputs": { "type": "array", "items": { "$ref": "#/$defs/object_id" } },
-        "outputs": { "type": "array", "items": { "$ref": "#/$defs/object_id" } }
+        "inputs": { "type": "array", "items": { "$ref": "#/$defs/semantic_ref" } },
+        "outputs": { "type": "array", "items": { "$ref": "#/$defs/semantic_ref" } }
       }
     },
     "fidelity": {
       "type": "object", "additionalProperties": false,
-      "required": ["subject_id", "kind"],
+      "required": ["subject", "kind"],
       "properties": {
-        "subject_id": { "$ref": "#/$defs/object_id" },
+        "subject": { "$ref": "#/$defs/semantic_ref" },
         "kind": { "enum": ["exact", "bounded", "transformed"] },
-        "bound": { "$ref": "#/$defs/exact" },
-        "metric": { "$ref": "#/$defs/concept" }
+        "bound": { "oneOf": [{ "$ref": "#/$defs/exact" }, { "type": "null" }] },
+        "metric": { "oneOf": [{ "$ref": "#/$defs/concept" }, { "type": "null" }] }
       }
     },
     "source_capsule": {
@@ -198,7 +208,7 @@
       "properties": {
         "source": { "$ref": "#/$defs/source_key" },
         "content_id": { "$ref": "#/$defs/content_id" },
-        "media_type": { "type": "string" }
+        "media_type": { "type": ["string", "null"] }
       }
     },
     "execution": {
@@ -207,7 +217,23 @@
       "properties": {
         "operation": { "$ref": "#/$defs/concept" },
         "implementation": { "type": "string" },
-        "hardware": { "type": "string" }
+        "hardware": { "type": ["string", "null"] }
+      }
+    },
+    "semantic_ref": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["dataset", "recording", "stream", "atom", "clock", "coordinate-frame", "channel-basis", "policy", "proof", "derivation"] },
+        "id": { "$ref": "#/$defs/object_id" }
+      }
+    },
+    "channel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["concept", "coordinate_frame_id"],
+      "properties": {
+        "concept": { "$ref": "#/$defs/concept" },
+        "coordinate_frame_id": { "$ref": "#/$defs/nullable_object_id" }
       }
     }
   }
