@@ -5,14 +5,14 @@
     "fixtures/valid/semantic-matrix.content-id": "2ae21ce92bda23e719744489d3f2304c82eb980d43f1026851b2e2f5310c4667",
     "fixtures/valid/semantic-matrix.json": "c5512d106382b5e4d1143c3ef05ed8b8af2ba0f1487fcad24738033f5360709c",
     "fuzz/corpus/dataset_draft.sha256": "852aeb5f6898728676d4a445232136954bbf37fc3ed050e690e810fc0b79d9fb",
-    "schema/abir-semantic-v1.schema.json": "419a8873f761ab333a3d98006e8e7238749bb99f49955f7d057cf7e8f1a2894c",
-    "spec/semantic-v1.manifest.json": "adcc65ae10260f96459b73cd179929ffa79d2784c07cb915fd9d72a0419a06b9"
+    "schema/abir-semantic-v1.schema.json": "ff8a1941697a7b241d7d75ba70b450c7ba5a65211d36bd1611136ebdea49e7b0",
+    "spec/semantic-v1.manifest.json": "b93eb28de529892673143b63a1e37b2bfe3a9fb041f1d714893353f34bb41655"
   },
-  "collected_at": "2026-07-20T22:58:21.450513+00:00",
+  "collected_at": "2026-07-20T23:06:26.830316+00:00",
   "commands": [
     "ABIR_BENCH_ITERS=100000 cargo run -q -p abir-conformance --release --bin measure_semantic_core",
-    "/tmp/abir-semantic-venv-0140/bin/python -m venv --system-site-packages <temporary-venv>",
-    "<temporary-venv>/bin/python -m pip install --no-index --no-deps /tmp/abir-dist-0140-final2/abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
+    "/usr/bin/python3 -m venv --system-site-packages <temporary-venv>",
+    "<temporary-venv>/bin/python -m pip install --no-index --no-deps /tmp/abir-dist-0140-final4/abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
     "<temporary-venv>/bin/python -c <import-timer>",
     "<temporary-venv>/bin/python -c <zero-copy-probe>"
   ],
@@ -24,26 +24,26 @@
   },
   "python": {
     "import_seconds": {
-      "maximum": 0.0011324419756419957,
-      "mean": 0.0008187590981833636,
+      "maximum": 0.0013413580018095672,
+      "mean": 0.0009862157981842755,
       "samples": [
-        0.0006056840065866709,
-        0.0007580270175822079,
-        0.0009956889552995563,
-        0.00046234100591391325,
-        0.0010172499460168183,
-        0.0010623239795677364,
-        0.0009728660224936903,
-        0.0011324419756419957,
-        0.0004633940407074988,
-        0.0007175740320235491
+        0.0009108039666898549,
+        0.0009155509760603309,
+        0.0006588909891434014,
+        0.0013413580018095672,
+        0.0013163529802113771,
+        0.0012543200282379985,
+        0.0008359070052392781,
+        0.0007798009901307523,
+        0.0011340880300849676,
+        0.0007150850142352283
       ]
     },
     "wheel": {
       "distribution_version": "0.1.0",
       "filename": "abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
-      "module_path": "/tmp/abir-evidence-python-x4hhfodn/venv/lib/python3.14/site-packages/abir/__init__.py",
-      "sha256": "b2063167080427346389962645c57525e7b1a57dbd9139076169eb704d1aed7b"
+      "module_path": "/tmp/abir-evidence-python-kl5e8mvs/venv/lib/python3.14/site-packages/abir/__init__.py",
+      "sha256": "5880e525107e451309f11fd2f2f8ac28366c694d15d293ba12251b6cd2f54d07"
     },
     "zero_copy": {
       "content_id": "6f8244472204b5ed25ebd67a1abd88e24f2addd6b152bb1857b27b78e7d02ebe",
@@ -58,29 +58,29 @@
     "performance_ceiling": "trusted-baseline-only-until-multi-host-samples",
     "structural_limits": "enforced-now"
   },
-  "revision": "a782d64b2f5d8f8c42c7fa15a46e11ff33d61303",
+  "revision": "3181bbc7d6ac66fe899c5b168bcf61c2e1c6c04a",
   "rust": {
     "iterations": 100000,
     "logical_hash": {
-      "hashes_per_second": 92653.96494895131,
-      "seconds": 1.079284627
+      "hashes_per_second": 70260.07743575319,
+      "seconds": 1.423283373
     },
     "metadata": {
+      "budget_definition": "target-independent UTF-8 text, normative collection widths, and 64 bytes per semantic record; excludes payload bytes and allocator spare capacity",
       "canonical_debug_bytes": 1419,
-      "estimated_retained_bytes": 395,
-      "estimator": "UTF-8 semantic text plus 64 bytes per record; payload bytes excluded",
-      "note": "Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist.",
-      "root_inline_bytes": 616
+      "note": "root_inline_bytes and canonical_debug_bytes are reproducible metadata-footprint proxies, not a whole-allocator retained-memory measurement. Trusted baseline only; regression ceilings are deferred until multiple hardware samples exist.",
+      "root_inline_bytes": 616,
+      "semantic_budget_bytes": 395
     },
     "schema_version": 1,
     "validation": {
-      "datasets_per_second": 1528629.5110334565,
-      "seconds": 0.065418075
+      "datasets_per_second": 1163974.5138933978,
+      "seconds": 0.085912534
     },
     "view": {
-      "nanoseconds_per_lease": 8.94268,
+      "nanoseconds_per_lease": 18.35248,
       "pointer_identity": true,
-      "seconds": 0.000894268
+      "seconds": 0.001835248
     }
   },
   "schema_version": 1,
