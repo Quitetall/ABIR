@@ -1,0 +1,13 @@
+[package]
+name = "abir-conformance"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+abir = { path = "../abir", version = "0.1.0" }
+
+[lib]
+name = "abir_conformance"
+path = "src/lib.rs"

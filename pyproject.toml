@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "abir-biosignal"
+version = "0.1.0"
+description = "ABIR Python bindings"
+readme = "README.md"
+requires-python = ">=3.10"
+
+authors = [{ name = "ABIR contributors" }]
+
+dependencies = []
+
+[project.urls]
+Source = "https://github.com/Quitetall/ABIR"
+
+[tool.maturin]
+bindings = "pyo3"
+manifest-path = "crates/abir-python/Cargo.toml"
+module-name = "abir"
+features = ["abi3-py310"]
+strip = true
+
+[tool.pytest.ini_options]
+addopts = "-q"

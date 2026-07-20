@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Rust and Python checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.81
+          components: rustfmt, clippy
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Rust lint
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Check no-default-features
+        run: cargo check -p abir --no-default-features
+
+      - name: Install maturin and pytest
+        run: python -m pip install --upgrade pip maturin pytest
+
+      - name: Build python extension (placeholder)
+        run: maturin build -m crates/abir-python/Cargo.toml --release
+
+      - name: Pytest placeholder
+        run: |
+          python -m pytest -q || \
+            if [ $? -eq 5 ]; then echo "No Python tests discovered; placeholder passes."; exit 0; else exit 1; fi

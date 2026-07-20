@@ -1,0 +1,16 @@
+[package]
+name = "abir"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "AGPL-3.0-or-later"
+authors = ["ABIR contributors <noreply@example.com>"]
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[lib]
+name = "abir"
+path = "src/lib.rs"
