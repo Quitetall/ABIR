@@ -1,0 +1,20 @@
+[package]
+name = "abir-bcs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "AGPL-3.0-or-later"
+
+[features]
+default = ["std"]
+std = ["alloc", "abir/std", "blake3/std"]
+alloc = ["abir/alloc", "dep:blake3", "dep:minicbor"]
+
+[dependencies]
+abir = { path = "../abir", version = "0.1.0", default-features = false }
+blake3 = { version = "=1.5.5", default-features = false, optional = true }
+minicbor = { version = "0.25", default-features = false, features = ["alloc"], optional = true }
+
+[lib]
+name = "abir_bcs"
+path = "src/lib.rs"

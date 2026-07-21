@@ -60,6 +60,17 @@ declares kind, flags, logical object identifier, payload `ContentId`, byte
 length, and payload digest. Padding bytes are zero and are excluded from logical
 identity.
 
+The generation-2 base catalog is a canonical two-entry CBOR map. Key 1 is the
+RFC 8785 ABIR semantic debug projection as a byte string and key 2 is the
+32-byte logical root `ContentId`. Keys occur in ascending order. This preserves
+one independently inspectable semantic projection while later registered keys
+may add native catalog tables.
+
+The empty frame index is 48 bytes: bytes 0–7 are `BCS2IDX\0`, bytes 8–11 are
+the little-endian frame count, bytes 12–15 are zero, and bytes 16–47 are the
+BLAKE3-256 catalog digest. Non-empty indexes append registered fixed-width frame
+entries and set the frame count accordingly.
+
 Profile identifiers reserve their high 16 bits for the family: 1 is LML, 2 is
 LMQ, 3 is training, 4 is stream, and 5 is forensic. The low 16 bits identify a
 profile within that family. Registry generation 1 is the first registry for BCS

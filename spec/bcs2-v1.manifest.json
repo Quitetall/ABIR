@@ -3,6 +3,6 @@
   "artifacts": [
     {"path": "registries/bcs2-profiles-v1.json", "sha256": "11ebc062fa1e0ad81a52ff771d9f71359ac33ec542d684a6105e519f9cecaafe"},
     {"path": "schema/bcs2-profile-v1.schema.json", "sha256": "0a436d158956be62ed04b016a1dfc25e4a19c368b2be97316f46503369020dee"},
-    {"path": "spec/BCS2_V1.md", "sha256": "056c65d7c4531ae152e02f9ef7379fb0c8e3fb537409484e7e85548b65ba1cbc"}
+    {"path": "spec/BCS2_V1.md", "sha256": "8b0687ce8240a1752ef2e80e42915933153ba335e3091fc34431829104189aa9"}
   ]
 }

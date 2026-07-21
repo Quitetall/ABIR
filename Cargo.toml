@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/abir",
+    "crates/abir-bcs",
     "crates/abir-conformance",
     "crates/abir-python",
 ]
