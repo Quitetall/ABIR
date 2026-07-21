@@ -122,4 +122,15 @@ fn profile_and_resource_bounds_are_enforced() {
         ),
         Err(Bcs2Error::BoundsExceeded)
     );
+    assert_eq!(
+        encode_dataset(
+            &dataset,
+            ProfileId::LML_LOSSLESS_V1,
+            ResourceBounds {
+                max_index_entries: 0,
+                ..ResourceBounds::default()
+            }
+        ),
+        Err(Bcs2Error::BoundsExceeded)
+    );
 }

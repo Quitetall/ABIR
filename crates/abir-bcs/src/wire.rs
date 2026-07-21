@@ -188,6 +188,10 @@ pub fn encode_dataset(
     profile: ProfileId,
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
+    if bounds.max_catalog_bytes == 0 || bounds.max_index_entries == 0 || bounds.max_frame_bytes == 0
+    {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
     let root = RootKind::Dataset;
     if !profile.accepts(root) {
         return Err(Bcs2Error::ProfileRootMismatch);
