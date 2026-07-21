@@ -22,6 +22,7 @@ FILE_ROLES = {
     "editor",
     "formatter",
     "generator",
+    "tester",
     "conflict-resolver",
     "integrator",
 }
