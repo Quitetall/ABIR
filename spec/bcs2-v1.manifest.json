@@ -1,0 +1,8 @@
+{
+  "generation": 1,
+  "artifacts": {
+    "registries/bcs2-profiles-v1.json": "dca3463351bfa634bdc9f4e613e4b378866400e54af1bd633991895b1b5ef7b9",
+    "schema/bcs2-profile-v1.schema.json": "a643ae8162386aa697c069dda3d09f2df5dad17532690516159e0130c33aa030",
+    "spec/BCS2_V1.md": "d5ca2fddf0f0f6ba358b63f6e5fc8d7e99d4e84457d8251313ccd66b4883e793"
+  }
+}

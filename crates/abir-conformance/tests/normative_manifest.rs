@@ -31,6 +31,63 @@ fn normative_manifest_hashes_match() {
 }
 
 #[test]
+fn bcs2_manifest_hashes_match() {
+    let root = root();
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(root.join("spec/bcs2-v1.manifest.json")).expect("read BCS2 manifest"),
+    )
+    .expect("parse BCS2 manifest");
+
+    for (path, expected) in manifest["artifacts"]
+        .as_object()
+        .expect("BCS2 manifest.artifacts must be an object")
+    {
+        let actual = format!(
+            "{:x}",
+            Sha256::digest(fs::read(root.join(path)).expect(path))
+        );
+        assert_eq!(
+            actual,
+            expected.as_str().expect("artifact digest"),
+            "normative BCS2 artifact changed: {path}"
+        );
+    }
+}
+
+#[test]
+fn bcs2_profile_registry_is_stable_and_unambiguous() {
+    let root = root();
+    let registry: Value = serde_json::from_slice(
+        &fs::read(root.join("registries/bcs2-profiles-v1.json")).expect("read registry"),
+    )
+    .expect("parse registry");
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    for profile in registry["profiles"].as_array().expect("profiles array") {
+        let id = profile["id"].as_u64().expect("profile id");
+        let name = profile["name"].as_str().expect("profile name");
+        assert!(ids.insert(id), "duplicate BCS2 profile id {id}");
+        assert!(names.insert(name), "duplicate BCS2 profile name {name}");
+        assert!(
+            !(profile["portable"].as_bool().expect("portable")
+                && profile["external_references"]
+                    .as_bool()
+                    .expect("external_references")),
+            "portable profile {name} cannot permit external references"
+        );
+    }
+    for retired in registry["retired_ids"]
+        .as_array()
+        .expect("retired_ids array")
+    {
+        assert!(
+            !ids.contains(&retired.as_u64().expect("retired profile id")),
+            "active BCS2 profile id is retired"
+        );
+    }
+}
+
+#[test]
 fn stable_registries_have_unique_entries() {
     let root = root();
     for relative in [
