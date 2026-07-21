@@ -4,9 +4,13 @@
   "title": "BCS2 profile registry generation 1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["generation", "profiles", "retired_ids"],
+  "required": ["generation", "wire_major", "id_family_prefixes", "profiles", "retired_ids"],
   "properties": {
     "generation": {"const": 1},
+    "wire_major": {"const": 2},
+    "id_family_prefixes": {
+      "const": {"1": "lml", "2": "lmq", "3": "training", "4": "stream", "5": "forensic"}
+    },
     "profiles": {
       "type": "array",
       "items": {

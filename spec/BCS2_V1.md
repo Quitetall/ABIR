@@ -42,7 +42,8 @@ Every artifact begins with one 128-byte little-endian envelope:
 | 88 | 8 | latest generation-footer offset, or zero |
 | 96 | 32 | logical root `ContentId` |
 
-The only legal root kinds are Dataset, Recording, Stream, Atom, and Bundle.
+The only legal root kinds are Dataset (1), Recording (2), Stream (3), Atom (4),
+Blob (5), and Bundle (6).
 The only legal storage contracts are SealedImmutable, SealedGenerational,
 UnsealedWorkspace, and RewriteCompact. Privacy is Plaintext,
 EncryptedOpaque, or EncryptedDiscoverable. Generation 2 requires BLAKE3-256
@@ -58,6 +59,11 @@ registered integer keys. Hot payloads use fixed frames and indexes. Each frame
 declares kind, flags, logical object identifier, payload `ContentId`, byte
 length, and payload digest. Padding bytes are zero and are excluded from logical
 identity.
+
+Profile identifiers reserve their high 16 bits for the family: 1 is LML, 2 is
+LMQ, 3 is training, 4 is stream, and 5 is forensic. The low 16 bits identify a
+profile within that family. Registry generation 1 is the first registry for BCS
+wire major 2; these generation numbers are independent.
 
 The catalog contains the canonical ABIR semantic projection and payload
 descriptors. Physical handles, `StorageId`, observed execution, authorization
@@ -102,4 +108,3 @@ input, profile, and payload bytes. Readers reject overflow, overlap, truncation,
 duplicate index keys, digest mismatch, unsupported required capability, profile
 violation, resource-limit excess, broken generation chain, incomplete portable
 closure, and privacy declaration mismatch before exposing a root.
-

@@ -38,19 +38,17 @@ fn bcs2_manifest_hashes_match() {
     )
     .expect("parse BCS2 manifest");
 
-    for (path, expected) in manifest["artifacts"]
-        .as_object()
-        .expect("BCS2 manifest.artifacts must be an object")
+    for artifact in manifest["artifacts"]
+        .as_array()
+        .expect("BCS2 manifest.artifacts must be an array")
     {
+        let path = artifact["path"].as_str().expect("artifact path");
+        let expected = artifact["sha256"].as_str().expect("artifact digest");
         let actual = format!(
             "{:x}",
             Sha256::digest(fs::read(root.join(path)).expect(path))
         );
-        assert_eq!(
-            actual,
-            expected.as_str().expect("artifact digest"),
-            "normative BCS2 artifact changed: {path}"
-        );
+        assert_eq!(actual, expected, "normative BCS2 artifact changed: {path}");
     }
 }
 
@@ -74,6 +72,13 @@ fn bcs2_profile_registry_is_stable_and_unambiguous() {
                     .as_bool()
                     .expect("external_references")),
             "portable profile {name} cannot permit external references"
+        );
+        let family = registry["id_family_prefixes"][(id >> 16).to_string()]
+            .as_str()
+            .expect("registered profile family");
+        assert!(
+            name.starts_with(&format!("bcs.{family}.")),
+            "profile {name} does not match its numeric family"
         );
     }
     for retired in registry["retired_ids"]
