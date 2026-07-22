@@ -13,13 +13,20 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "standard", "edition", "status", "validator"],
+        "required": ["id", "standard", "edition", "media_types", "status", "validator", "capabilities"],
         "properties": {
           "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
           "standard": {"type": "string", "minLength": 1},
           "edition": {"type": "string", "minLength": 1},
+          "media_types": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
           "status": {"enum": ["forensic", "semantic", "stream", "hardware"]},
-          "validator": {"type": "string", "minLength": 1}
+          "validator": {"type": "string", "minLength": 1},
+          "capabilities": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"enum": ["inspect", "import", "plan-export", "export", "validate", "stream", "hardware"]}
+          }
         }
       }
     }

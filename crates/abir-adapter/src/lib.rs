@@ -27,8 +27,52 @@ pub struct AdapterProfile {
     pub standard: String,
     pub edition: String,
     pub media_types: Vec<String>,
+    pub status: ProfileStatus,
+    #[serde(rename = "validator")]
     pub required_validator: String,
     pub capabilities: BTreeSet<AdapterCapability>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileStatus {
+    Forensic,
+    Semantic,
+    Stream,
+    Hardware,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AdapterProfileRegistry {
+    pub schema_version: u32,
+    pub profiles: Vec<AdapterProfile>,
+}
+
+impl AdapterProfileRegistry {
+    pub fn parse_json(bytes: &[u8]) -> Result<Self, AdapterError> {
+        let registry: Self = serde_json::from_slice(bytes)
+            .map_err(|error| AdapterError::InvalidSource(error.to_string()))?;
+        if registry.schema_version != 1 || registry.profiles.is_empty() {
+            return Err(AdapterError::InvalidSource(
+                "unsupported or empty Adapter profile registry".to_owned(),
+            ));
+        }
+        let mut ids = BTreeSet::new();
+        for profile in &registry.profiles {
+            if profile.id.0.is_empty()
+                || profile.standard.is_empty()
+                || profile.edition.is_empty()
+                || profile.required_validator.is_empty()
+                || profile.capabilities.is_empty()
+                || !ids.insert(profile.id.clone())
+            {
+                return Err(AdapterError::InvalidSource(
+                    "invalid or duplicate Adapter profile".to_owned(),
+                ));
+            }
+        }
+        Ok(registry)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -216,7 +260,37 @@ pub enum AdapterError {
 
 impl fmt::Display for AdapterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{self:?}")
+        match self {
+            Self::ProfileMismatch { expected, actual } => write!(
+                formatter,
+                "Adapter profile mismatch: expected {}, got {}",
+                expected.0, actual.0
+            ),
+            Self::EmptySource => formatter.write_str("foreign source contains no entries"),
+            Self::DuplicatePath(path) => write!(formatter, "duplicate source path: {path}"),
+            Self::InvalidPath(path) => write!(formatter, "invalid source path: {path}"),
+            Self::SourceTooLarge => formatter.write_str("foreign source exceeds declared limits"),
+            Self::InvalidSource(reason) => write!(formatter, "invalid foreign source: {reason}"),
+            Self::AbirValidation => formatter.write_str("imported ABIR root did not validate"),
+            Self::MissingPayload(id) => write!(formatter, "missing or corrupt payload: {id}"),
+            Self::ExportPlanMismatch => formatter.write_str("export plan does not match dataset"),
+            Self::ExportRequiresAcceptance => {
+                formatter.write_str("export requires explicit loss acceptance")
+            }
+            Self::UnsupportedMeaning(reason) => {
+                write!(
+                    formatter,
+                    "target cannot represent required meaning: {reason}"
+                )
+            }
+            Self::AdapterUnavailable {
+                package,
+                capability,
+            } => write!(
+                formatter,
+                "Adapter capability {capability} is unavailable; install package {package}"
+            ),
+        }
     }
 }
 
@@ -225,6 +299,7 @@ impl std::error::Error for AdapterError {}
 #[derive(Default)]
 pub struct AdapterRegistry {
     adapters: BTreeMap<ProfileId, Box<dyn Adapter + Send + Sync>>,
+    providers: BTreeMap<ProfileId, String>,
 }
 
 impl AdapterRegistry {
@@ -233,17 +308,18 @@ impl AdapterRegistry {
         adapter: impl Adapter + Send + Sync + 'static,
     ) -> Result<(), AdapterError> {
         let id = adapter.profile().id.clone();
-        if self
-            .adapters
-            .insert(id.clone(), Box::new(adapter))
-            .is_some()
-        {
+        if self.adapters.contains_key(&id) {
             return Err(AdapterError::InvalidSource(format!(
                 "duplicate adapter profile {}",
                 id.0
             )));
         }
+        self.adapters.insert(id, Box::new(adapter));
         Ok(())
+    }
+
+    pub fn declare_provider(&mut self, id: ProfileId, package: impl Into<String>) {
+        self.providers.insert(id, package.into());
     }
 
     pub fn get(&self, id: &ProfileId) -> Result<&(dyn Adapter + Send + Sync), AdapterError> {
@@ -251,7 +327,11 @@ impl AdapterRegistry {
             .get(id)
             .map(Box::as_ref)
             .ok_or_else(|| AdapterError::AdapterUnavailable {
-                package: "lamquant-legacy".to_owned(),
+                package: self
+                    .providers
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| "unregistered-adapter".to_owned()),
                 capability: id.0.clone(),
             })
     }
@@ -287,6 +367,8 @@ impl ForensicAdapter {
         for entry in &source.entries {
             if entry.path.is_empty()
                 || entry.path.starts_with('/')
+                || entry.path.contains('\\')
+                || entry.path.chars().any(char::is_control)
                 || entry
                     .path
                     .split('/')
@@ -489,6 +571,16 @@ fn hash_foreign_object(source: &ForeignObject) -> [u8; 32] {
     for entry in &source.entries {
         hasher.update(&(entry.path.len() as u64).to_le_bytes());
         hasher.update(entry.path.as_bytes());
+        match &entry.media_type {
+            Some(media_type) => {
+                hasher.update(&[1]);
+                hasher.update(&(media_type.len() as u64).to_le_bytes());
+                hasher.update(media_type.as_bytes());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
         hasher.update(content_id(&entry.bytes).as_bytes());
     }
     *hasher.finalize().as_bytes()
@@ -513,6 +605,7 @@ mod tests {
             standard: "EDF+".to_owned(),
             edition: "1".to_owned(),
             media_types: vec!["application/edf".to_owned()],
+            status: ProfileStatus::Forensic,
             required_validator: "edfbrowser".to_owned(),
             capabilities: BTreeSet::from([
                 AdapterCapability::Inspect,
@@ -604,7 +697,8 @@ mod tests {
 
     #[test]
     fn missing_adapter_is_installable_structured_failure() {
-        let registry = AdapterRegistry::default();
+        let mut registry = AdapterRegistry::default();
+        registry.declare_provider(ProfileId("bcs1".to_owned()), "lamquant-legacy");
         match registry.get(&ProfileId("bcs1".to_owned())) {
             Err(AdapterError::AdapterUnavailable {
                 package,
@@ -615,5 +709,38 @@ mod tests {
             }
             _ => panic!("missing adapter must return AdapterUnavailable"),
         }
+    }
+
+    #[test]
+    fn duplicate_registration_preserves_original_adapter() {
+        let mut registry = AdapterRegistry::default();
+        registry
+            .register(ForensicAdapter::new(profile(), 1024))
+            .unwrap();
+        assert!(registry
+            .register(ForensicAdapter::new(profile(), 2048))
+            .is_err());
+        assert_eq!(
+            registry
+                .get(&ProfileId("edfplus.1".to_owned()))
+                .unwrap()
+                .inspect(&source())
+                .unwrap()
+                .required_resources["max-source-bytes"],
+            1024
+        );
+    }
+
+    #[test]
+    fn committed_profile_registry_matches_rust_contract() {
+        let registry = AdapterProfileRegistry::parse_json(include_bytes!(
+            "../../../registries/adapter-profiles-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(registry.profiles.len(), 7);
+        assert!(registry.profiles.iter().all(|profile| {
+            profile.capabilities.contains(&AdapterCapability::Inspect)
+                && profile.capabilities.contains(&AdapterCapability::Validate)
+        }));
     }
 }
