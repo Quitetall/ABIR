@@ -21,6 +21,7 @@ pub struct GenerationFooter {
 
 pub fn encode_generation_footer(
     artifact_prefix: &[u8],
+    // Caller-supplied digest is ignored; canonical bytes always recompute it.
     mut footer: GenerationFooter,
 ) -> Result<[u8; GENERATION_FOOTER_LEN], Bcs2Error> {
     validate_links(&footer)?;
@@ -160,7 +161,16 @@ fn validate_extents(footer: &GenerationFooter, footer_offset: u64) -> Result<(),
         .index_offset
         .checked_add(footer.index_len)
         .ok_or(Bcs2Error::InvalidExtent)?;
-    if catalog_end != footer.index_offset || index_end != footer_offset {
+    let overlaps_previous = if footer.generation == 0 {
+        false
+    } else {
+        footer.catalog_offset
+            < footer
+                .previous_offset
+                .checked_add(GENERATION_FOOTER_LEN as u64)
+                .ok_or(Bcs2Error::InvalidExtent)?
+    };
+    if overlaps_previous || catalog_end != footer.index_offset || index_end != footer_offset {
         return Err(Bcs2Error::NonCanonicalLayout);
     }
     Ok(())

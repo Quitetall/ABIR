@@ -96,4 +96,20 @@ fn writer_rejects_noncanonical_generation_extents() {
         },
     );
     assert_eq!(result, Err(Bcs2Error::NonCanonicalLayout));
+
+    let overlap = encode_generation_footer(
+        &[0_u8; 200],
+        GenerationFooter {
+            generation: 1,
+            previous_offset: 16,
+            previous_digest: [1; 32],
+            catalog_offset: 100,
+            catalog_len: 50,
+            index_offset: 150,
+            index_len: 50,
+            root_content_id: ContentId::from_bytes([2; 32]),
+            digest: [0; 32],
+        },
+    );
+    assert_eq!(overlap, Err(Bcs2Error::NonCanonicalLayout));
 }
