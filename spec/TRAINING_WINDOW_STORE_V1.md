@@ -46,9 +46,11 @@ The catalog schema is `org.quitetall.abir.training.snapshot-v1`. It contains:
 - one or more rows sorted by logical row identity;
 - `sealed: true`.
 
-Each row binds logical row, group, split, label, payload, element type, shape,
-and logical byte length. Fixed-width shapes must multiply exactly to the byte
-length. Shared payload IDs are permitted only when element and length metadata
+Each row binds logical row, group, split, label, payload, element type, byte
+order, shape, and logical byte length. Fixed-width shapes must multiply exactly
+to the byte length. Multi-byte fixed-width values require explicit little- or
+big-endian order; one-byte and non-numeric values use `not-applicable`. Shared
+payload IDs are permitted only when element, byte order, and length metadata
 agree.
 
 Opening a store recomputes the catalog root, rejects external references,

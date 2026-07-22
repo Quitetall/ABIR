@@ -41,8 +41,9 @@
     "row": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["group", "label", "logical_bytes", "logical_id", "payload", "element", "shape", "split"],
+      "required": ["byte_order", "group", "label", "logical_bytes", "logical_id", "payload", "element", "shape", "split"],
       "properties": {
+        "byte_order": { "enum": ["little", "big", "not-applicable"] },
         "group": { "$ref": "#/$defs/contentId" },
         "label": { "$ref": "#/$defs/contentId" },
         "logical_bytes": { "type": "integer", "minimum": 1 },

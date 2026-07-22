@@ -1,5 +1,5 @@
 use crate::{ContentKey, TrainingError, TrainingRow, TrainingSnapshot};
-use abir::ElementType;
+use abir::{ByteOrder, ElementType};
 use abir_bcs::{Bcs2View, FrameKind, ResourceBounds, RootKind, StorageContract};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,6 +17,10 @@ impl<'a> TrainingRowLease<'a> {
 
     pub const fn element(self) -> ElementType {
         self.row.element
+    }
+
+    pub const fn byte_order(self) -> ByteOrder {
+        self.row.byte_order
     }
 
     pub const fn metadata(self) -> &'a TrainingRow {

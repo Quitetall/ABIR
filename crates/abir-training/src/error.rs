@@ -19,6 +19,7 @@ pub enum TrainingError {
     ExtraPayload(ContentId),
     InvalidAdaptiveKnob(String),
     InvalidAuthorizedPurpose,
+    InvalidByteOrder(String),
     InvalidContentKey,
     InvalidDecisionSequence { expected: u64, actual: u64 },
     InvalidElement(String),
@@ -61,6 +62,7 @@ impl fmt::Display for TrainingError {
             Self::ExtraPayload(id) => write!(f, "extra payload frame {id}"),
             Self::InvalidAdaptiveKnob(knob) => write!(f, "invalid adaptive knob {knob:?}"),
             Self::InvalidAuthorizedPurpose => f.write_str("invalid authorized purpose"),
+            Self::InvalidByteOrder(value) => write!(f, "invalid byte order {value:?}"),
             Self::InvalidContentKey => f.write_str("invalid 64-digit lowercase content key"),
             Self::InvalidDecisionSequence { expected, actual } => write!(
                 f,

@@ -1,4 +1,4 @@
-use abir::{payload_content_id, ContentId, ElementType};
+use abir::{payload_content_id, ByteOrder, ContentId, ElementType};
 use abir_bcs::{Bcs2View, ResourceBounds, SemanticPayloadFrame};
 use abir_training::{
     encode_snapshot, ContentKey, DatasetSubscription, DecisionLog, DecisionRecord, MicroSnapshot,
@@ -12,6 +12,7 @@ fn key(seed: u8) -> ContentKey {
 
 fn row(logical_seed: u8, group_seed: u8, bytes: &[u8]) -> TrainingRow {
     TrainingRow {
+        byte_order: ByteOrder::Little,
         group: key(group_seed),
         label: key(9),
         logical_bytes: bytes.len() as u64,
@@ -110,7 +111,40 @@ fn encoded_snapshot_opens_and_rows_lease_original_frame_bytes() {
     assert_eq!(lease.bytes(), row_bytes);
     assert_eq!(lease.bytes().as_ptr(), frame_ptr);
     assert_eq!(lease.shape(), &[2]);
+    assert_eq!(lease.byte_order(), ByteOrder::Little);
     assert_eq!(store.rows().len(), 1);
+}
+
+#[test]
+fn row_byte_order_is_bound_and_invalid_numeric_order_fails_closed() {
+    let row_bytes = [0_u8, 1, 0, 2];
+    let mut big_endian = row(10, 20, &row_bytes);
+    big_endian.byte_order = ByteOrder::Big;
+    let snapshot = snapshot(TrainingProfile::Balanced, vec![big_endian.clone()]);
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &row_bytes)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let store = TrainingWindowStore::open(&encoded, ResourceBounds::default()).unwrap();
+    assert_eq!(
+        store.row(big_endian.logical_id).unwrap().byte_order(),
+        ByteOrder::Big
+    );
+
+    let mut invalid = row(11, 20, &row_bytes);
+    invalid.byte_order = ByteOrder::NotApplicable;
+    assert!(matches!(
+        TrainingSnapshot::seal(
+            vec![key(1)],
+            key(2),
+            TrainingProfile::Balanced,
+            vec![invalid],
+            key(3),
+        ),
+        Err(TrainingError::InvalidRowExtent(_))
+    ));
 }
 
 #[test]

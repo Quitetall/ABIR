@@ -1,5 +1,5 @@
 use crate::TrainingError;
-use abir::{ContentId, ElementType};
+use abir::{ByteOrder, ContentId, ElementType};
 use abir_bcs::{encode_semantic_bundle, ProfileId, ResourceBounds, SemanticPayloadFrame};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -194,6 +194,8 @@ impl TrainingSpec {
 /// Metadata for one independently addressable training row.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TrainingRow {
+    #[serde(with = "byte_order_serde")]
+    pub byte_order: ByteOrder,
     pub group: ContentKey,
     pub label: ContentKey,
     pub logical_bytes: u64,
@@ -209,6 +211,18 @@ impl TrainingRow {
     fn validate(&self) -> Result<(), TrainingError> {
         if self.shape.is_empty() || self.shape.contains(&0) || self.logical_bytes == 0 {
             return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+        }
+        match self.element.byte_width() {
+            Some(width) if width > 1 && self.byte_order == ByteOrder::NotApplicable => {
+                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+            }
+            Some(1) if self.byte_order != ByteOrder::NotApplicable => {
+                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+            }
+            None if self.byte_order != ByteOrder::NotApplicable => {
+                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+            }
+            _ => {}
         }
         if let Some(width) = self.element.byte_width() {
             let expected = self
@@ -393,7 +407,7 @@ fn validate_frame_closure(
 fn validate_payload_metadata(rows: &[TrainingRow]) -> Result<(), TrainingError> {
     let mut payloads = BTreeMap::new();
     for row in rows {
-        let metadata = (row.element, row.logical_bytes);
+        let metadata = (row.element, row.byte_order, row.logical_bytes);
         if let Some(previous) = payloads.insert(row.payload, metadata) {
             if previous != metadata {
                 return Err(TrainingError::DuplicatePayload(row.payload.0));
@@ -508,6 +522,37 @@ mod element_serde {
             "utf8" => Ok(ElementType::Utf8),
             "bytes" => Ok(ElementType::Bytes),
             other => Err(TrainingError::InvalidElement(other.to_owned())),
+        }
+    }
+}
+
+mod byte_order_serde {
+    use super::TrainingError;
+    use abir::ByteOrder;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(byte_order: &ByteOrder, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match byte_order {
+            ByteOrder::Little => "little",
+            ByteOrder::Big => "big",
+            ByteOrder::NotApplicable => "not-applicable",
+        })
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ByteOrder, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "little" => Ok(ByteOrder::Little),
+            "big" => Ok(ByteOrder::Big),
+            "not-applicable" => Ok(ByteOrder::NotApplicable),
+            other => Err(serde::de::Error::custom(TrainingError::InvalidByteOrder(
+                other.to_owned(),
+            ))),
         }
     }
 }
