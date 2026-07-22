@@ -692,6 +692,9 @@ mod tests {
         let imported = adapter
             .import(&source(), ValidationLimits::default())
             .unwrap();
+        // Parser coverage and exact source restoration are not semantic
+        // promotion. All profiles remain forensic/stream/hardware until their
+        // complete mapping and independent conformance evidence are accepted.
         assert_eq!(
             imported.report.semantic_coverage,
             SemanticCoverage::ForensicOnly
@@ -807,7 +810,7 @@ mod tests {
                 .iter()
                 .filter(|profile| profile.status == ProfileStatus::Semantic)
                 .count(),
-            4
+            0
         );
     }
 }

@@ -48,7 +48,7 @@ def positive_receipt(*, expected: str = "accept") -> dict[str, object]:
             "observed_outcome": expected,
             "expected_outcome_observed": True,
         },
-        "semantic_profile_promoted": True,
+        "semantic_profile_promoted": False,
         "pass": True,
         "diagnostics": [],
     }
@@ -75,8 +75,15 @@ class AdapterValidationContractTests(unittest.TestCase):
         assert isinstance(evidence, dict)
         evidence["authority"] = "parser-only"
         receipt["independent_evidence"] = evidence
+        receipt["semantic_profile_promoted"] = True
         errors = receipt_errors(receipt)
         self.assertTrue(any("pass" in error for error in errors), errors)
+        self.assertTrue(any("semantic_profile_promoted" in error for error in errors), errors)
+
+    def test_forensic_profile_cannot_promote_on_validator_success(self) -> None:
+        receipt = positive_receipt()
+        receipt["semantic_profile_promoted"] = True
+        errors = receipt_errors(receipt)
         self.assertTrue(any("semantic_profile_promoted" in error for error in errors), errors)
 
     def test_malformed_schema_fields_are_rejected(self) -> None:

@@ -163,12 +163,10 @@ def _verify_schemas_and_registry() -> None:
         for profile in registry["profiles"]
         if profile["status"] == "semantic"
     }
-    assert semantic == {
-        "edfplus.1.signal",
-        "bids.1.11.1.single-edf-eeg",
-        "nwb.2.10.0.single-integer-timeseries",
-        "dicom.ps3.2026c.ecg-i16",
-    }
+    # No profile is promoted merely because the current bounded parser accepts
+    # it. Promotion is earned only after exact semantic mapping and independent
+    # conformance evidence agree with the registry.
+    assert not semantic
 
 
 def main(argv: list[str] | None = None) -> int:
