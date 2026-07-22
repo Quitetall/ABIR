@@ -27,6 +27,7 @@ version = "0.1.0"
 dependencies = [
  "abir",
  "abir-bcs",
+ "abir-store",
  "serde_json",
  "sha2",
 ]

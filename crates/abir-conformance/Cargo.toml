@@ -8,6 +8,7 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 abir = { path = "../abir", version = "0.1.0" }
 abir-bcs = { path = "../abir-bcs", version = "0.1.0" }
+abir-store = { path = "../abir-store", version = "0.1.0" }
 serde_json = "1"
 sha2 = "0.10"
 
