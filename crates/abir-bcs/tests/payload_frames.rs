@@ -4,11 +4,33 @@ use abir::{
     Presence, Recording, RecordingTag, SemanticAxis, Stream, StreamTag, Tensor, ValidationLimits,
 };
 use abir_bcs::{
-    encode_dataset_with_payloads, Bcs2Error, Bcs2View, FrameKind, ProfileId, ResourceBounds,
+    encode_dataset_with_payloads, encode_semantic_bundle, Bcs2Error, Bcs2View, FrameKind,
+    ProfileId, ResourceBounds, RootKind, SemanticPayloadFrame,
 };
 
 fn id<T>(value: u8) -> ObjectId<T> {
     ObjectId::from_bytes([value; 16])
+}
+
+#[test]
+fn profile_bundle_carries_canonical_catalog_and_typed_payloads() {
+    let catalog = br#"{"schema":"abir.training.snapshot.v1"}"#;
+    let root = abir::ContentId::from_bytes([77; 32]);
+    let row = [4_u8, 3, 2, 1];
+    let encoded = encode_semantic_bundle(
+        root,
+        catalog,
+        ProfileId::TRAINING_COMPACT_V1,
+        &[SemanticPayloadFrame::new(ElementType::I16, &row)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let view = Bcs2View::parse(&encoded, 0, ResourceBounds::default()).unwrap();
+    assert_eq!(view.root_kind(), RootKind::Bundle);
+    assert_eq!(view.root_content_id(), root);
+    assert_eq!(view.semantic_json(), catalog);
+    assert_eq!(view.frames()[0].bytes(), row);
+    assert_eq!(view.frames()[0].element(), Some(ElementType::I16));
 }
 
 fn fixture() -> (abir::AbirDataset, [u8; 8], abir::ContentId) {

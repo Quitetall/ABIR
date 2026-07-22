@@ -1,9 +1,10 @@
 use crate::wire::{
-    element_wire_code, get_u64, put_u32, put_u64, INDEX_ENTRY_LEN, INDEX_LEN, INDEX_MAGIC,
+    element_wire_code, encode_raw_root, get_u64, put_u32, put_u64, INDEX_ENTRY_LEN, INDEX_LEN,
+    INDEX_MAGIC,
 };
 use crate::{
     encode_dataset, raw_storage_id, Bcs2Error, Bcs2View, FrameKind, ProfileId, ResourceBounds,
-    StorageContract, BCS2_HEADER_LEN,
+    RootKind, StorageContract, BCS2_HEADER_LEN,
 };
 use abir::{
     verify_payload_content, AbirDataset, ContentId, ElementType, PayloadAccess, PayloadLease,
@@ -14,6 +15,30 @@ use alloc::{vec, vec::Vec};
 struct SemanticPayload {
     element: ElementType,
     bytes: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SemanticPayloadFrame<'a> {
+    element: ElementType,
+    bytes: &'a [u8],
+}
+
+impl<'a> SemanticPayloadFrame<'a> {
+    pub const fn new(element: ElementType, bytes: &'a [u8]) -> Self {
+        Self { element, bytes }
+    }
+
+    pub const fn element(self) -> ElementType {
+        self.element
+    }
+
+    pub const fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    pub fn content_id(self) -> ContentId {
+        abir::payload_content_id(self.element, self.bytes)
+    }
 }
 
 /// Encodes one immutable dataset and closes every semantic payload descriptor
@@ -56,6 +81,47 @@ pub fn encode_dataset_with_payloads<A: PayloadAccess>(
     }
 
     let base = encode_dataset(dataset, profile, bounds)?;
+    repack_with_payloads(&base, &payloads, bounds)
+}
+
+/// Encodes a profile-owned canonical catalog as a BCS2 Bundle carrying a
+/// complete set of typed semantic payload frames.
+///
+/// The profile owner defines and verifies `root_content_id` from
+/// `canonical_catalog`; BCS2 verifies every payload identity and physical
+/// extent. This is the registered extension seam for training snapshots and
+/// other non-dataset roots.
+pub fn encode_semantic_bundle(
+    root_content_id: ContentId,
+    canonical_catalog: &[u8],
+    profile: ProfileId,
+    frames: &[SemanticPayloadFrame<'_>],
+    bounds: ResourceBounds,
+) -> Result<Vec<u8>, Bcs2Error> {
+    let mut payloads = BTreeMap::new();
+    for frame in frames {
+        let content_id = frame.content_id();
+        let payload = SemanticPayload {
+            element: frame.element(),
+            bytes: frame.bytes().to_vec(),
+        };
+        if let Some(previous) = payloads.insert(content_id, payload) {
+            let current = payloads
+                .get(&content_id)
+                .ok_or(Bcs2Error::FrameIdentityMismatch)?;
+            if previous.element != current.element || previous.bytes != current.bytes {
+                return Err(Bcs2Error::DuplicateFrame);
+            }
+        }
+    }
+    let base = encode_raw_root(
+        RootKind::Bundle,
+        profile,
+        root_content_id,
+        canonical_catalog,
+        core::iter::empty::<&[u8]>(),
+        bounds,
+    )?;
     repack_with_payloads(&base, &payloads, bounds)
 }
 

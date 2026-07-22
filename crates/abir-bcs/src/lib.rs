@@ -38,7 +38,7 @@ pub use blob::{encode_blob, BlobView};
 pub use pack::repack_with_frames;
 
 #[cfg(feature = "alloc")]
-pub use payload::encode_dataset_with_payloads;
+pub use payload::{encode_dataset_with_payloads, encode_semantic_bundle, SemanticPayloadFrame};
 
 #[cfg(feature = "alloc")]
 pub use privacy::{decrypt_bcs2, encrypt_bcs2, EncryptedEnvelopeView, CAP_XCHACHA20_POLY1305};
