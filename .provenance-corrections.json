@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "corrections": [
+    {
+      "commit": "ed04e58ca4d05ba9ce6bb1daf2931e533b88adbd",
+      "message_sha256": "46607e4b66d11701af5c1d1fa61f2b9266f7a71b5fab15bcd2b2f09c49261605",
+      "reason": "The generated Cargo.lock contribution declared generator while the AI actor declaration accidentally omitted that role.",
+      "actors": [
+        {
+          "id": "ai:openai-codex-root",
+          "add_roles": ["generator"]
+        }
+      ]
+    }
+  ]
+}

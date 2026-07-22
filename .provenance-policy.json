@@ -2,6 +2,7 @@
   "schema_version": 1,
   "activated_at": "2026-07-20T00:00:00Z",
   "activation_path": ".provenance-policy.json",
+  "corrections_path": ".provenance-corrections.json",
   "merge_commits": "first-parent",
   "scope": "ABIR repository"
 }

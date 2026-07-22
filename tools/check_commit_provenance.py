@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,7 @@ STATUS_OPERATIONS = {
 }
 POLICY_VERSION = 1
 ACTIVATION_PATH = ".provenance-policy.json"
+CORRECTIONS_PATH = ".provenance-corrections.json"
 PROVENANCE_PREFIXES = ("Contributor:", "AI-Assisted-By:", "File-Contribution:")
 TRAILER_LINE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*:\s+\S.*$")
 
@@ -525,7 +527,96 @@ def _load_policy(path: Path) -> dict[str, Any]:
         raise RuntimeError("provenance policy activated_at must include a timezone")
     if policy.get("activation_path") != ACTIVATION_PATH:
         raise RuntimeError(f"provenance policy activation_path must be {ACTIVATION_PATH!r}")
+    corrections_path = policy.get("corrections_path")
+    if corrections_path is not None and corrections_path != CORRECTIONS_PATH:
+        raise RuntimeError(f"provenance policy corrections_path must be {CORRECTIONS_PATH!r}")
     return policy
+
+
+def _load_role_corrections(repo: Path, policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if policy.get("corrections_path") is None:
+        return {}
+    path = repo / CORRECTIONS_PATH
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"provenance corrections missing: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid provenance corrections JSON: {exc}") from exc
+    if not isinstance(document, dict) or document.get("schema_version") != 1:
+        raise RuntimeError("provenance corrections must use schema_version 1")
+    records = document.get("corrections")
+    if not isinstance(records, list):
+        raise RuntimeError("provenance corrections must contain a corrections array")
+    corrections: dict[str, dict[str, Any]] = {}
+    for index, record in enumerate(records, start=1):
+        label = f"provenance correction[{index}]"
+        if not isinstance(record, dict):
+            raise RuntimeError(f"{label} must be an object")
+        commit = record.get("commit")
+        message_sha256 = record.get("message_sha256")
+        reason = record.get("reason")
+        actors = record.get("actors")
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise RuntimeError(f"{label} requires a full lowercase commit hash")
+        if commit in corrections:
+            raise RuntimeError(f"duplicate provenance correction for {commit}")
+        if not isinstance(message_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", message_sha256
+        ):
+            raise RuntimeError(f"{label} requires message_sha256")
+        if not _nonempty_string(reason):
+            raise RuntimeError(f"{label} requires a reason")
+        if not isinstance(actors, list) or not actors:
+            raise RuntimeError(f"{label} requires actor role additions")
+        for actor_index, actor in enumerate(actors, start=1):
+            if not isinstance(actor, dict) or not _nonempty_string(actor.get("id")):
+                raise RuntimeError(f"{label}.actors[{actor_index}] requires id")
+            roles = actor.get("add_roles")
+            if not _string_list(roles) or any(role not in FILE_ROLES for role in roles):
+                raise RuntimeError(
+                    f"{label}.actors[{actor_index}] has invalid add_roles"
+                )
+        corrections[commit] = record
+    return corrections
+
+
+def _apply_role_correction(
+    message: str, commit: str, correction: dict[str, Any]
+) -> tuple[str, list[str]]:
+    errors: list[str] = []
+    actual_digest = hashlib.sha256(message.encode("utf-8")).hexdigest()
+    if actual_digest != correction["message_sha256"]:
+        return message, [f"provenance correction message hash mismatch for {commit}"]
+    additions = {
+        actor["id"]: set(actor["add_roles"]) for actor in correction["actors"]
+    }
+    found: set[str] = set()
+    lines = message.splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith("AI-Assisted-By:"):
+            continue
+        try:
+            actor = json.loads(line.split(":", 1)[1].strip())
+        except json.JSONDecodeError:
+            continue
+        actor_id = actor.get("id") if isinstance(actor, dict) else None
+        if actor_id not in additions:
+            continue
+        roles = actor.get("roles")
+        if not _string_list(roles):
+            errors.append(f"provenance correction actor {actor_id!r} has invalid source roles")
+            continue
+        actor["roles"] = sorted(set(roles) | additions[actor_id])
+        lines[index] = f"AI-Assisted-By: {_compact_json(actor)}"
+        found.add(actor_id)
+    missing = sorted(set(additions) - found)
+    if missing:
+        errors.append(f"provenance correction actor not found in {commit}: {missing}")
+    corrected = "\n".join(lines)
+    if message.endswith("\n"):
+        corrected += "\n"
+    return corrected, errors
 
 
 def _policy_is_in_history(repo: Path, commit: str, policy: dict[str, Any]) -> bool:
@@ -544,10 +635,15 @@ def validate_commit(
 ) -> tuple[str, list[str]]:
     if not enforce_all and not _policy_is_in_history(repo, commit, policy):
         return "pre-policy", []
-    message = _run_git(repo, "show", "-s", "--format=%B", commit).decode(
+    resolved = _run_git(repo, "rev-parse", commit).decode("ascii").strip()
+    message = _run_git(repo, "show", "-s", "--format=%B", resolved).decode(
         "utf-8", errors="replace"
     )
-    return "checked", validate_message(message, commit_changes(commit, repo))
+    correction_errors: list[str] = []
+    correction = _load_role_corrections(repo, policy).get(resolved)
+    if correction is not None:
+        message, correction_errors = _apply_role_correction(message, resolved, correction)
+    return "checked", correction_errors + validate_message(message, commit_changes(resolved, repo))
 
 
 def validate_gitlink_range(
