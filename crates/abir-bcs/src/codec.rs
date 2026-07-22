@@ -4,7 +4,7 @@ use crate::{
 };
 use abir::{
     canonical_debug_json, interchange_content_id, logical_content_id, parse_canonical_dataset,
-    ContentId,
+    AbirDataset, ContentId,
 };
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
@@ -283,6 +283,7 @@ impl CodecBundleCatalog {
 #[derive(Debug)]
 pub struct CodecBundleView<'a> {
     catalog: CodecBundleCatalog,
+    dataset: AbirDataset,
     frame_index: BTreeMap<ContentId, usize>,
     view: Bcs2View<'a>,
 }
@@ -337,7 +338,7 @@ impl<'a> CodecBundleView<'a> {
         {
             return Err(CodecBundleError::InvalidFrameExtent);
         }
-        verify_semantics(&catalog, semantics.bytes())?;
+        let dataset = verify_semantics(&catalog, semantics.bytes())?;
         for packet in &catalog.packets {
             let frame = &view.frames()[frame_index[&packet.content_id]];
             if u64::try_from(frame.bytes().len()).ok() != Some(packet.logical_bytes) {
@@ -346,6 +347,7 @@ impl<'a> CodecBundleView<'a> {
         }
         Ok(Self {
             catalog,
+            dataset,
             frame_index,
             view,
         })
@@ -353,6 +355,14 @@ impl<'a> CodecBundleView<'a> {
 
     pub fn catalog(&self) -> &CodecBundleCatalog {
         &self.catalog
+    }
+
+    /// The canonical ABIR dataset parsed and identity-verified while opening.
+    ///
+    /// Callers should reuse this instance instead of parsing
+    /// [`Self::canonical_semantics`] again.
+    pub const fn dataset(&self) -> &AbirDataset {
+        &self.dataset
     }
 
     pub fn canonical_semantics(&self) -> &'a [u8] {
@@ -457,7 +467,10 @@ pub fn encode_codec_bundle(
     Ok(bytes)
 }
 
-fn verify_semantics(catalog: &CodecBundleCatalog, bytes: &[u8]) -> Result<(), CodecBundleError> {
+fn verify_semantics(
+    catalog: &CodecBundleCatalog,
+    bytes: &[u8],
+) -> Result<AbirDataset, CodecBundleError> {
     let dataset =
         parse_canonical_dataset(bytes).map_err(|_| CodecBundleError::InvalidCanonicalSemantics)?;
     if canonical_debug_json(&dataset).map_err(|_| CodecBundleError::SemanticEncoding)? != bytes {
@@ -469,7 +482,7 @@ fn verify_semantics(catalog: &CodecBundleCatalog, bytes: &[u8]) -> Result<(), Co
     if logical != catalog.source_semantic_id || interchange != catalog.source_interchange_id {
         return Err(CodecBundleError::SourceIdentityMismatch);
     }
-    Ok(())
+    Ok(dataset)
 }
 
 fn validate_fidelity(fidelity: &CodecFidelity) -> Result<(), CodecBundleError> {
@@ -868,6 +881,51 @@ mod tests {
         assert_eq!(forward.packet(1), Some(second));
         assert_eq!(reverse.packet(0), Some(second));
         assert_eq!(reverse.packet(1), Some(first));
+    }
+
+    #[test]
+    fn opened_bundle_retains_one_verified_dataset_instance() {
+        let semantics = semantics();
+        let packet = b"packet-0".as_slice();
+        let bytes = encode_lml(&semantics, &[packet]);
+        let opened = CodecBundleView::open(&bytes, ResourceBounds::default()).unwrap();
+
+        assert!(core::ptr::eq(opened.dataset(), opened.dataset()));
+        assert_eq!(canonical_debug_json(opened.dataset()).unwrap(), semantics);
+        assert_eq!(
+            logical_content_id(opened.dataset()).unwrap(),
+            opened.catalog().source_semantic_id()
+        );
+        assert_eq!(
+            interchange_content_id(opened.dataset()).unwrap(),
+            opened.catalog().source_interchange_id()
+        );
+    }
+
+    #[test]
+    fn opened_bundle_rejects_malformed_canonical_semantics() {
+        let valid_semantics = semantics();
+        let malformed_semantics = br#"{"schema":"not-an-abir-dataset"}"#;
+        let packet = b"packet-0".as_slice();
+        let mut catalog = lml_catalog(&valid_semantics, &[packet]);
+        catalog.semantics_frame = FrameBinding {
+            content_id: raw_content_id(malformed_semantics),
+            logical_bytes: malformed_semantics.len() as u64,
+        };
+        let bytes = super::super::wire::encode_raw_root(
+            RootKind::Bundle,
+            ProfileId::LML_LOSSLESS_V1,
+            catalog.content_id().expect("root"),
+            &catalog.canonical_json().expect("catalog"),
+            [malformed_semantics.as_slice(), packet],
+            ResourceBounds::default(),
+        )
+        .expect("structurally valid BCS2");
+
+        assert!(matches!(
+            CodecBundleView::open(&bytes, ResourceBounds::default()),
+            Err(CodecBundleError::InvalidCanonicalSemantics)
+        ));
     }
 
     #[test]
