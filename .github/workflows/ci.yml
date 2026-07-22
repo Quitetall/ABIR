@@ -52,6 +52,9 @@ jobs:
       - name: Install Python validation tools
         run: python -m pip install --upgrade pip maturin pytest numpy jsonschema
 
+      - name: Verify Adapter contract manifest and schemas
+        run: python tools/verify_adapter_contract.py
+
       - name: Build and install Python extension
         run: |
           maturin build -m crates/abir-python/Cargo.toml --release --out dist

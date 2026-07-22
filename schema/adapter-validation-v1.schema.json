@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quitetall.org/abir/schema/adapter-validation-v1.schema.json",
+  "title": "ABIR Adapter validation artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "internal_valid", "independent_validator", "independent_valid", "diagnostics"],
+  "properties": {
+    "profile": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
+    "internal_valid": {"type": "boolean"},
+    "independent_validator": {"type": "string", "minLength": 1},
+    "independent_valid": {"type": ["boolean", "null"]},
+    "diagnostics": {"type": "array", "items": {"type": "string"}}
+  }
+}

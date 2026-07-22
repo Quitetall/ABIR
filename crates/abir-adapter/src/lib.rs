@@ -75,6 +75,27 @@ impl AdapterProfileRegistry {
                     "invalid or duplicate Adapter profile".to_owned(),
                 ));
             }
+            let has_core = [
+                AdapterCapability::Inspect,
+                AdapterCapability::Import,
+                AdapterCapability::PlanExport,
+                AdapterCapability::Export,
+                AdapterCapability::Validate,
+            ]
+            .into_iter()
+            .all(|capability| profile.capabilities.contains(&capability));
+            if !has_core
+                || (profile.status == ProfileStatus::Stream
+                    && !profile.capabilities.contains(&AdapterCapability::Stream))
+                || (profile.status == ProfileStatus::Hardware
+                    && (!profile.capabilities.contains(&AdapterCapability::Stream)
+                        || !profile.capabilities.contains(&AdapterCapability::Hardware)))
+            {
+                return Err(AdapterError::InvalidSource(format!(
+                    "Adapter profile {} has capabilities inconsistent with status",
+                    profile.id.0
+                )));
+            }
         }
         Ok(registry)
     }
@@ -775,10 +796,18 @@ mod tests {
             "../../../registries/adapter-profiles-v1.json"
         ))
         .unwrap();
-        assert_eq!(registry.profiles.len(), 7);
+        assert_eq!(registry.profiles.len(), 11);
         assert!(registry.profiles.iter().all(|profile| {
             profile.capabilities.contains(&AdapterCapability::Inspect)
                 && profile.capabilities.contains(&AdapterCapability::Validate)
         }));
+        assert_eq!(
+            registry
+                .profiles
+                .iter()
+                .filter(|profile| profile.status == ProfileStatus::Semantic)
+                .count(),
+            4
+        );
     }
 }

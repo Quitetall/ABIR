@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quitetall.org/abir/schema/adapter-mapping-v1.schema.json",
+  "title": "ABIR Adapter mapping report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_profile", "target_profile", "semantic_coverage", "entries", "preserved_unknowns", "sample_values_changed", "timing_changed"],
+  "properties": {
+    "source_profile": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
+    "target_profile": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
+    "semantic_coverage": {"enum": ["exact-semantic", "projected-semantic", "forensic-only"]},
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_path", "target", "disposition", "reason"],
+        "properties": {
+          "source_path": {"type": "string", "minLength": 1},
+          "target": {"type": "string", "minLength": 1},
+          "disposition": {"enum": ["exact", "projected", "lossy", "quarantined", "unsupported", "user-decision"]},
+          "reason": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "preserved_unknowns": {"type": "integer", "minimum": 0},
+    "sample_values_changed": {"type": "boolean"},
+    "timing_changed": {"type": "boolean"}
+  }
+}
