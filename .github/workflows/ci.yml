@@ -42,6 +42,7 @@ jobs:
         run: |
           rustup target add riscv32imac-unknown-none-elf
           cargo check -p abir --no-default-features --features alloc --target riscv32imac-unknown-none-elf
+          cargo check -p abir-bcs --no-default-features --features alloc --target riscv32imac-unknown-none-elf
 
       - name: Check fuzz target compiles
         run: cargo check --manifest-path fuzz/Cargo.toml --bin dataset_draft

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://abir.quitetall.org/schema/bcs2-codec-bundle-v1.schema.json",
+  "title": "ABIR BCS2 codec bundle catalog generation 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fidelity", "implementation", "model_provenance", "packets", "parameters", "profile", "schema", "semantics_frame", "source_interchange_id", "source_semantic_id"],
+  "properties": {
+    "fidelity": {"$ref": "#/$defs/fidelity"},
+    "implementation": {"$ref": "#/$defs/implementation"},
+    "model_provenance": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/model_provenance"}]},
+    "packets": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/packet"}},
+    "parameters": {"type": "array", "items": {"$ref": "#/$defs/parameter"}},
+    "profile": {"enum": ["lml-lossless", "lmq-progressive"]},
+    "schema": {"const": "org.quitetall.abir.bcs2.codec-bundle-v1"},
+    "semantics_frame": {"$ref": "#/$defs/frame"},
+    "source_interchange_id": {"$ref": "#/$defs/content_id"},
+    "source_semantic_id": {"$ref": "#/$defs/content_id"}
+  },
+  "$defs": {
+    "content_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+    "frame": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_id", "logical_bytes"],
+      "properties": {"content_id": {"$ref": "#/$defs/content_id"}, "logical_bytes": {"type": "integer", "minimum": 1}}
+    },
+    "packet": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_id", "logical_bytes", "ordinal"],
+      "properties": {"content_id": {"$ref": "#/$defs/content_id"}, "logical_bytes": {"type": "integer", "minimum": 1}, "ordinal": {"type": "integer", "minimum": 0, "maximum": 4294967295}}
+    },
+    "implementation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["build_id", "implementation_id", "kernel_id"],
+      "properties": {"build_id": {"$ref": "#/$defs/identifier"}, "implementation_id": {"$ref": "#/$defs/content_id"}, "kernel_id": {"$ref": "#/$defs/identifier"}}
+    },
+    "exact_value": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "boolean"}, "value": {"type": "boolean"}}},
+        {"type": "object", "additionalProperties": false, "required": ["hex", "type"], "properties": {"hex": {"type": "string", "pattern": "^(?:[0-9a-f]{2})+$"}, "type": {"const": "bytes"}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "integer"}, "value": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)$"}}},
+        {"type": "object", "additionalProperties": false, "required": ["denominator", "numerator", "type"], "properties": {"denominator": {"type": "string", "pattern": "^[1-9][0-9]*$"}, "numerator": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)$"}, "type": {"const": "rational"}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "text"}, "value": {"type": "string", "minLength": 1, "maxLength": 4096}}}
+      ]
+    },
+    "parameter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$"}, "value": {"$ref": "#/$defs/exact_value"}}
+    },
+    "fidelity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bound", "contract_id", "kind", "metric"],
+      "properties": {"bound": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/exact_value"}]}, "contract_id": {"$ref": "#/$defs/content_id"}, "kind": {"enum": ["exact", "bounded", "transformed"]}, "metric": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}}
+    },
+    "model_provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["checkpoint_content_id", "checkpoint_sha256", "pccp_change_id", "pccp_evidence_id", "pccp_status"],
+      "properties": {"checkpoint_content_id": {"$ref": "#/$defs/content_id"}, "checkpoint_sha256": {"$ref": "#/$defs/content_id"}, "pccp_change_id": {"type": "string", "minLength": 1, "maxLength": 128}, "pccp_evidence_id": {"$ref": "#/$defs/content_id"}, "pccp_status": {"enum": ["candidate", "gate-pass", "rejected"]}}
+    }
+  }
+}

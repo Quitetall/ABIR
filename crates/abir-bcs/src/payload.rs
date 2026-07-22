@@ -95,6 +95,15 @@ pub fn encode_semantic_bundle(
     frames: &[SemanticPayloadFrame<'_>],
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
+    // Codec Bundle roots have a profile-owned root identity and exact raw-frame
+    // closure. They must be constructed through `encode_codec_bundle`; this
+    // generic payload API intentionally cannot accept caller-selected roots.
+    if matches!(
+        profile,
+        ProfileId::LML_LOSSLESS_V1 | ProfileId::LMQ_PROGRESSIVE_V1
+    ) {
+        return Err(Bcs2Error::ProfileRootMismatch);
+    }
     let mut payloads = BTreeMap::<ContentId, SemanticPayload>::new();
     for frame in frames {
         let content_id = frame.content_id();

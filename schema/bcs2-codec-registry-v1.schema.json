@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://abir.quitetall.org/schema/bcs2-codec-registry-v1.schema.json",
+  "title": "ABIR BCS2 codec profile registry generation 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["generation", "profiles"],
+  "properties": {
+    "generation": {"const": 1},
+    "profiles": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["catalog_schema", "fidelity", "id", "model_provenance", "name", "root_kind"],
+        "properties": {
+          "catalog_schema": {"const": "org.quitetall.abir.bcs2.codec-bundle-v1"},
+          "fidelity": {"enum": ["exact", "bounded-or-transformed"]},
+          "id": {"enum": [65537, 131073]},
+          "model_provenance": {"enum": ["forbidden", "required"]},
+          "name": {"enum": ["bcs.lml.lossless.v1", "bcs.lmq.progressive.v1"]},
+          "root_kind": {"const": "bundle"}
+        }
+      }
+    }
+  }
+}

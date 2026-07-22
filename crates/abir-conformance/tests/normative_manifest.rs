@@ -204,6 +204,48 @@ fn bcs2_training_registry_matches_rust_contract() {
 }
 
 #[test]
+fn bcs2_codec_registry_matches_typed_bundle_contract() {
+    let root = root();
+    let registry: Value = serde_json::from_slice(
+        &fs::read(root.join("registries/bcs2-codecs-v1.json")).expect("read codec registry"),
+    )
+    .expect("parse codec registry");
+    let profiles = registry["profiles"].as_array().expect("profiles array");
+    let expected = [
+        (
+            ProfileId::LML_LOSSLESS_V1,
+            "bcs.lml.lossless.v1",
+            "exact",
+            "forbidden",
+        ),
+        (
+            ProfileId::LMQ_PROGRESSIVE_V1,
+            "bcs.lmq.progressive.v1",
+            "bounded-or-transformed",
+            "required",
+        ),
+    ];
+    assert_eq!(profiles.len(), expected.len());
+    for (profile, name, fidelity, model_provenance) in expected {
+        let entry = profiles
+            .iter()
+            .find(|entry| entry["id"].as_u64() == Some(u64::from(profile.get())))
+            .unwrap_or_else(|| panic!("missing codec profile {name}"));
+        assert_eq!(entry["name"], name);
+        assert_eq!(
+            entry["catalog_schema"],
+            "org.quitetall.abir.bcs2.codec-bundle-v1"
+        );
+        assert_eq!(entry["root_kind"], "bundle");
+        assert_eq!(entry["fidelity"], fidelity);
+        assert_eq!(entry["model_provenance"], model_provenance);
+        assert!(profile.accepts(RootKind::Bundle));
+        assert!(profile.is_portable());
+        assert!(!profile.allows_external_references());
+    }
+}
+
+#[test]
 fn stable_registries_have_unique_entries() {
     let root = root();
     for relative in [

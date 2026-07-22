@@ -75,6 +75,9 @@ reachability claims.
 Bundle roots may instead carry a profile-owned canonical catalog. The profile
 verifier must recompute the Bundle root `ContentId` from that catalog, while the
 BCS2 reader continues to verify every typed frame and its declared identity.
+The registered codec Bundle catalog is specified by `CODEC_BUNDLE_V1.md`.
+`bcs.lml.lossless.v1` and `bcs.lmq.progressive.v1` admit Bundle roots only
+through that typed catalog and its exact-closure verifier.
 
 The empty frame index is 48 bytes: bytes 0–7 are `BCS2IDX\0`, bytes 8–11 are
 the little-endian frame count, bytes 12–15 are zero, and bytes 16–47 are the

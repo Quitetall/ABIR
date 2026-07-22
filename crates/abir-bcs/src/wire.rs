@@ -132,11 +132,16 @@ impl ProfileId {
 
     pub const fn accepts(self, root: RootKind) -> bool {
         match self {
-            Self::LML_LOSSLESS_V1 => matches!(root, RootKind::Dataset | RootKind::Recording),
+            Self::LML_LOSSLESS_V1 => {
+                matches!(
+                    root,
+                    RootKind::Dataset | RootKind::Recording | RootKind::Bundle
+                )
+            }
             Self::LMQ_PROGRESSIVE_V1 => {
                 matches!(
                     root,
-                    RootKind::Dataset | RootKind::Recording | RootKind::Stream
+                    RootKind::Dataset | RootKind::Recording | RootKind::Stream | RootKind::Bundle
                 )
             }
             Self::TRAINING_BALANCED_V1

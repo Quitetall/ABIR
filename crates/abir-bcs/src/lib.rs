@@ -6,6 +6,8 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 mod blob;
 #[cfg(feature = "alloc")]
+mod codec;
+#[cfg(feature = "alloc")]
 mod forensic;
 #[cfg(feature = "alloc")]
 mod generation;
@@ -33,6 +35,13 @@ pub use forensic::{
 
 #[cfg(feature = "alloc")]
 pub use blob::{encode_blob, BlobView};
+
+#[cfg(feature = "alloc")]
+pub use codec::{
+    encode_codec_bundle, CodecBundleCatalog, CodecBundleError, CodecBundleInput, CodecBundleView,
+    CodecFidelity, CodecFidelityKind, CodecImplementation, CodecParameter, CodecParameterValue,
+    CodecProfile, ModelProvenance, PccpStatus,
+};
 
 #[cfg(feature = "alloc")]
 pub use pack::repack_with_frames;

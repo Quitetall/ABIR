@@ -3,8 +3,8 @@
   "wire_major": 2,
   "id_family_prefixes": {"1": "lml", "2": "lmq", "3": "training", "4": "stream", "5": "forensic"},
   "profiles": [
-    {"id": 65537, "name": "bcs.lml.lossless.v1", "root_kinds": ["dataset", "recording"], "portable": true, "external_references": false},
-    {"id": 131073, "name": "bcs.lmq.progressive.v1", "root_kinds": ["dataset", "recording", "stream"], "portable": true, "external_references": false},
+    {"id": 65537, "name": "bcs.lml.lossless.v1", "root_kinds": ["dataset", "recording", "bundle"], "portable": true, "external_references": false},
+    {"id": 131073, "name": "bcs.lmq.progressive.v1", "root_kinds": ["dataset", "recording", "stream", "bundle"], "portable": true, "external_references": false},
     {"id": 196609, "name": "bcs.training.balanced.v1", "root_kinds": ["dataset", "bundle"], "portable": false, "external_references": true},
     {"id": 196610, "name": "bcs.training.compact.v1", "root_kinds": ["dataset", "bundle"], "portable": true, "external_references": false},
     {"id": 196611, "name": "bcs.training.speed.v1", "root_kinds": ["dataset", "bundle"], "portable": false, "external_references": true},

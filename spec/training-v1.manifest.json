@@ -6,6 +6,6 @@
   "artifacts": [
     {"path": "spec/TRAINING_WINDOW_STORE_V1.md", "sha256": "10e5c3040c11ac19251c1933ed0669b704ab208159abf2d7e10be06d8b1ff7d8"},
     {"path": "schema/training-snapshot-v1.schema.json", "sha256": "a5340782aaa0637e00a9b491b5d1e45f1675bc792dd4d23143dabda9cfa121ed"},
-    {"path": "registries/bcs2-profiles-v1.json", "sha256": "b8cef1965fdee72efc661f62087e0b207ab256c1814edd21dbccc7b2226bfb78"}
+    {"path": "registries/bcs2-profiles-v1.json", "sha256": "300b0890de8ed536c96cc94427339463ed10334c63f575c1efe797a07f5611e1"}
   ]
 }

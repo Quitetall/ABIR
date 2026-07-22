@@ -1,0 +1,21 @@
+{
+  "generated_by": "cargo run -p abir-conformance --bin generate_codec_bundle_vectors -- fixtures/bcs2/codec-v1",
+  "schema_version": 1,
+  "vectors": [
+    {
+      "bytes": 3100,
+      "catalog": "lml-lossless.catalog.json",
+      "name": "lml-lossless.bcs2",
+      "root_content_id": "f79124f2666ba8a4313992713024b0fd1658591fdd45445363fcb15cea69c411",
+      "sha256": "37c724025bb3075d17b7f9009d34963395af930901e58538596c51e43a6a31bd"
+    },
+    {
+      "bytes": 3557,
+      "catalog": "lmq-progressive.catalog.json",
+      "name": "lmq-progressive.bcs2",
+      "root_content_id": "1e2b13243519582f979be5cb1f2f48a7ce8a233100c204a2e0ce9380ddb0a868",
+      "sha256": "31e1f2f01a2a96983b820e6af9ca074dff67f8d278c7fe35de691a6239f07488"
+    }
+  ],
+  "wire_major": 2
+}

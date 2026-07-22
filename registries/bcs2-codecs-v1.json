@@ -1,0 +1,21 @@
+{
+  "generation": 1,
+  "profiles": [
+    {
+      "catalog_schema": "org.quitetall.abir.bcs2.codec-bundle-v1",
+      "fidelity": "exact",
+      "id": 65537,
+      "model_provenance": "forbidden",
+      "name": "bcs.lml.lossless.v1",
+      "root_kind": "bundle"
+    },
+    {
+      "catalog_schema": "org.quitetall.abir.bcs2.codec-bundle-v1",
+      "fidelity": "bounded-or-transformed",
+      "id": 131073,
+      "model_provenance": "required",
+      "name": "bcs.lmq.progressive.v1",
+      "root_kind": "bundle"
+    }
+  ]
+}
