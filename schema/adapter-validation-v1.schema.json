@@ -1,15 +1,149 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://quitetall.org/abir/schema/adapter-validation-v1.schema.json",
-  "title": "ABIR Adapter validation artifact v1",
+  "title": "ABIR Adapter independent-validation receipt v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["profile", "internal_valid", "independent_validator", "independent_valid", "diagnostics"],
+  "required": [
+    "schema_version",
+    "profile",
+    "edition",
+    "adapter_revision",
+    "fixture",
+    "internal_valid",
+    "independent_evidence",
+    "semantic_profile_promoted",
+    "pass",
+    "diagnostics"
+  ],
   "properties": {
+    "schema_version": {"const": 1},
     "profile": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
+    "edition": {"type": "string", "minLength": 1},
+    "adapter_revision": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "expected_outcome"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "expected_outcome": {"enum": ["accept", "reject"]}
+      }
+    },
     "internal_valid": {"type": "boolean"},
-    "independent_validator": {"type": "string", "minLength": 1},
-    "independent_valid": {"type": ["boolean", "null"]},
-    "diagnostics": {"type": "array", "items": {"type": "string"}}
-  }
+    "independent_evidence": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/independentEvidence"}
+      ]
+    },
+    "semantic_profile_promoted": {"type": "boolean"},
+    "pass": {"type": "boolean"},
+    "diagnostics": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "independentEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validator_name",
+        "validator_version",
+        "validator_executable_sha256",
+        "schema_or_dictionary_sha256",
+        "argv",
+        "executed_at_utc",
+        "exit_code",
+        "stdout_sha256",
+        "stderr_sha256",
+        "error_count",
+        "warning_count",
+        "authority",
+        "observed_outcome",
+        "expected_outcome_observed"
+      ],
+      "properties": {
+        "validator_name": {"type": "string", "minLength": 1},
+        "validator_version": {"type": "string", "minLength": 1},
+        "validator_executable_sha256": {"$ref": "#/$defs/sha256"},
+        "schema_or_dictionary_sha256": {"$ref": "#/$defs/sha256"},
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "executed_at_utc": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "exit_code": {"type": "integer"},
+        "stdout_sha256": {"$ref": "#/$defs/sha256"},
+        "stderr_sha256": {"$ref": "#/$defs/sha256"},
+        "error_count": {"type": "integer", "minimum": 0},
+        "warning_count": {"type": "integer", "minimum": 0},
+        "authority": {"enum": ["parser-only", "conformance"]},
+        "observed_outcome": {"enum": ["accept", "reject", "indeterminate"]},
+        "expected_outcome_observed": {"type": "boolean"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"independent_evidence": {"type": "null"}}},
+      "then": {
+        "properties": {
+          "semantic_profile_promoted": {"const": false},
+          "pass": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "independent_evidence": {
+            "type": "object",
+            "properties": {"authority": {"const": "parser-only"}},
+            "required": ["authority"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic_profile_promoted": {"const": false},
+          "pass": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"semantic_profile_promoted": {"const": true}}},
+      "then": {
+        "properties": {
+          "pass": {"const": true},
+          "independent_evidence": {
+            "type": "object",
+            "properties": {
+              "authority": {"const": "conformance"},
+              "expected_outcome_observed": {"const": true}
+            },
+            "required": ["authority", "expected_outcome_observed"]
+          }
+        }
+      }
+    }
+  ]
 }
