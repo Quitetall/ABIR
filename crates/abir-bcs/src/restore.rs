@@ -161,18 +161,7 @@ fn preflight_tree(
             });
         }
         if entry.file_type == ForensicFileType::Symlink {
-            let target =
-                entry
-                    .symlink_target
-                    .as_deref()
-                    .ok_or_else(|| RestoreError::UnsafeSymlink {
-                        path: entry.path.clone(),
-                    })?;
-            if validate_restore_path(target).is_err() {
-                return Err(RestoreError::UnsafeSymlink {
-                    path: entry.path.clone(),
-                });
-            }
+            preflight_symlink(entry)?;
         }
         for (present, feature) in [
             (entry.owner.is_some(), "ownership"),
@@ -205,6 +194,30 @@ fn preflight_tree(
         }
     }
     Ok(omissions)
+}
+
+#[cfg(unix)]
+fn preflight_symlink(entry: &ForensicEntryMetadata) -> Result<(), RestoreError> {
+    let target = entry
+        .symlink_target
+        .as_deref()
+        .ok_or_else(|| RestoreError::UnsafeSymlink {
+            path: entry.path.clone(),
+        })?;
+    if validate_restore_path(target).is_err() {
+        return Err(RestoreError::UnsafeSymlink {
+            path: entry.path.clone(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn preflight_symlink(entry: &ForensicEntryMetadata) -> Result<(), RestoreError> {
+    Err(RestoreError::UnsupportedNode {
+        path: entry.path.clone(),
+        file_type: entry.file_type,
+    })
 }
 
 fn restore_regular(
