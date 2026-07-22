@@ -1,10 +1,11 @@
 use abir::{payload_content_id, ByteOrder, ContentId, ElementType};
 use abir_bcs::{Bcs2View, ResourceBounds, SemanticPayloadFrame};
 use abir_training::{
-    encode_snapshot, ContentKey, DatasetSubscription, DecisionLog, DecisionLogReplayState,
-    DecisionRecord, MicroSnapshot, SubscriptionCorrection, TrainingAssociatedPayload,
-    TrainingError, TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingSnapshot,
-    TrainingSpec, TrainingWindowStore,
+    encode_snapshot, ContentKey, ContinualPromotion, DatasetSubscription, DecisionLog,
+    DecisionLogReplayState, DecisionRecord, DecisionReplayReceipt, MicroSnapshot,
+    SourceEquivalenceReceipt, SubscriptionCorrection, TrainingAssociatedPayload, TrainingError,
+    TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingSnapshot, TrainingSpec,
+    TrainingWindowStore,
 };
 
 fn key(seed: u8) -> ContentKey {
@@ -422,6 +423,116 @@ fn decision_replay_requires_consecutive_rank_zero_pre_activation_records() {
 }
 
 #[test]
+fn durable_decision_log_reopens_and_yields_a_snapshot_bound_replay_receipt() {
+    let spec = training_spec(vec!["worker-count"]);
+    let records = vec![DecisionRecord {
+        activation_barrier: 10,
+        decision: key(30),
+        durable_before_activation: true,
+        knob: "worker-count".to_owned(),
+        rank: 0,
+        sequence: 0,
+    }];
+    let log = DecisionLog::seal(&spec, records.clone()).unwrap();
+    let reopened = DecisionLog::from_canonical_json(&log.canonical_json().unwrap()).unwrap();
+    let receipt = DecisionReplayReceipt::verify(&spec, &reopened, &records).unwrap();
+    let snapshot = TrainingSnapshot::seal(
+        vec![key(1)],
+        ContentKey::from(spec.content_id().unwrap()),
+        TrainingProfile::Balanced,
+        vec![row(10, 20, &[1, 0])],
+        ContentKey::from(log.content_id().unwrap()),
+    )
+    .unwrap();
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &[1, 0])],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let store = TrainingWindowStore::open(&encoded, ResourceBounds::default()).unwrap();
+
+    assert_eq!(receipt.record_count(), 1);
+    assert_eq!(receipt.decision_log_id(), store.decision_log_id());
+    assert_eq!(
+        store.verify_decision_replay(&spec, &reopened, &records),
+        Ok(receipt)
+    );
+
+    let mut changed = records;
+    changed[0].decision = key(31);
+    assert_eq!(
+        store.verify_decision_replay(&spec, &reopened, &changed),
+        Err(TrainingError::DecisionReplayMismatch)
+    );
+}
+
+#[test]
+fn validated_stores_produce_source_equivalence_receipts_only_for_exact_windows() {
+    let bytes = [1_u8, 0, 2, 0];
+    let left_snapshot = TrainingSnapshot::seal(
+        vec![key(1)],
+        key(3),
+        TrainingProfile::Balanced,
+        vec![row(10, 20, &bytes)],
+        key(4),
+    )
+    .unwrap();
+    let right_snapshot = TrainingSnapshot::seal(
+        vec![key(2)],
+        key(3),
+        TrainingProfile::Balanced,
+        vec![row(10, 20, &bytes)],
+        key(4),
+    )
+    .unwrap();
+    let left_artifact = encode_snapshot(
+        &left_snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &bytes)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let right_artifact = encode_snapshot(
+        &right_snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &bytes)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let left = TrainingWindowStore::open(&left_artifact, ResourceBounds::default()).unwrap();
+    let right = TrainingWindowStore::open(&right_artifact, ResourceBounds::default()).unwrap();
+    let receipt = SourceEquivalenceReceipt::verify(&left, &right).unwrap();
+
+    assert_eq!(
+        receipt.first_snapshot_id(),
+        left_snapshot.content_id().unwrap().into()
+    );
+    assert_eq!(
+        receipt.second_snapshot_id(),
+        right_snapshot.content_id().unwrap().into()
+    );
+    assert_ne!(receipt.first_snapshot_id(), receipt.second_snapshot_id());
+    assert_ne!(
+        receipt.first_dataset_roots_id(),
+        receipt.second_dataset_roots_id()
+    );
+    assert_eq!(receipt.row_count(), 1);
+
+    let other_bytes = [9_u8, 0, 2, 0];
+    let other_snapshot = snapshot(TrainingProfile::Balanced, vec![row(10, 20, &other_bytes)]);
+    let other_artifact = encode_snapshot(
+        &other_snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &other_bytes)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let other = TrainingWindowStore::open(&other_artifact, ResourceBounds::default()).unwrap();
+    assert_eq!(
+        SourceEquivalenceReceipt::verify(&left, &other),
+        Err(TrainingError::SourceSnapshotMismatch)
+    );
+}
+
+#[test]
 fn continual_subscription_seals_ordered_corrections_as_new_generations() {
     let logical_id = key(40);
     let first_snapshot = key(41);
@@ -477,6 +588,91 @@ fn continual_subscription_seals_ordered_corrections_as_new_generations() {
         }),
         Err(TrainingError::NonMonotonicWatermark { .. })
     ));
+}
+
+#[test]
+fn continual_promotion_requires_every_ordered_snapshot_and_decision_log() {
+    let spec = training_spec(vec![]);
+    let log = DecisionLog::seal(&spec, Vec::new()).unwrap();
+    let row_bytes = [1_u8, 0];
+    let first = TrainingSnapshot::seal(
+        vec![key(61)],
+        ContentKey::from(spec.content_id().unwrap()),
+        TrainingProfile::Stream,
+        vec![row(62, 63, &row_bytes)],
+        ContentKey::from(log.content_id().unwrap()),
+    )
+    .unwrap();
+    let first_artifact = encode_snapshot(
+        &first,
+        &[SemanticPayloadFrame::new(ElementType::I16, &row_bytes)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let first_store =
+        TrainingWindowStore::open(&first_artifact, ResourceBounds::default()).unwrap();
+    let verified_first = first_store.verified_snapshot();
+    let mut subscription = DatasetSubscription::new(key(60));
+    subscription
+        .append(MicroSnapshot {
+            correction: None,
+            generation: 0,
+            logical_id: key(64),
+            sequence: 0,
+            snapshot_id: ContentKey::from(first.content_id().unwrap()),
+            watermark: 100,
+        })
+        .unwrap();
+    let closed = subscription.close().unwrap();
+    let reopened_subscription =
+        abir_training::ClosedSubscription::from_canonical_json(&closed.canonical_json().unwrap())
+            .unwrap();
+    let reopened_log = DecisionLog::from_canonical_json(&log.canonical_json().unwrap()).unwrap();
+    let replay = DecisionReplayReceipt::verify(&spec, &reopened_log, log.records()).unwrap();
+    let promotion = ContinualPromotion::seal(
+        &reopened_subscription,
+        &spec,
+        &[verified_first.clone()],
+        &[reopened_log.clone()],
+        &[replay.clone()],
+    )
+    .unwrap();
+
+    assert_eq!(promotion.entry_count(), 1);
+    assert_eq!(
+        promotion.closed_subscription_id(),
+        closed.content_id().unwrap().into()
+    );
+    assert_eq!(
+        promotion.entries()[0].snapshot_id,
+        first.content_id().unwrap().into()
+    );
+    assert_eq!(
+        promotion.entries()[0].decision_log_id,
+        log.content_id().unwrap().into()
+    );
+    assert_eq!(
+        ContinualPromotion::seal(&reopened_subscription, &spec, &[], &[], &[]),
+        Err(TrainingError::IncompleteContinualPromotion {
+            expected: 1,
+            snapshots: 0,
+            decision_logs: 0,
+            replay_receipts: 0,
+        })
+    );
+
+    let wrong_log = DecisionLog::seal(&training_spec(vec!["workers"]), Vec::new()).unwrap();
+    let wrong_log = DecisionLog::from_canonical_json(&wrong_log.canonical_json().unwrap()).unwrap();
+    assert_eq!(
+        ContinualPromotion::seal(
+            &reopened_subscription,
+            &spec,
+            &[verified_first],
+            &[wrong_log],
+            &[replay]
+        ),
+        Err(TrainingError::DecisionSpecMismatch)
+    );
 }
 
 #[test]

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quitetall.org/abir/schema/training-acceptance-v1.schema.json",
+  "title": "ABIR Training Acceptance v1 artifacts",
+  "$defs": {
+    "contentId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "decisionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activation_barrier", "decision", "durable_before_activation", "knob", "rank", "sequence"],
+      "properties": {
+        "activation_barrier": {"type": "integer", "minimum": 0},
+        "decision": {"$ref": "#/$defs/contentId"},
+        "durable_before_activation": {"const": true},
+        "knob": {"type": "string", "minLength": 1, "maxLength": 128},
+        "rank": {"const": 0},
+        "sequence": {"type": "integer", "minimum": 0}
+      }
+    },
+    "decisionLog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["records", "schema", "sealed", "spec_id"],
+      "properties": {
+        "records": {"type": "array", "items": {"$ref": "#/$defs/decisionRecord"}},
+        "schema": {"const": "org.quitetall.abir.training.decision-log-v1"},
+        "sealed": {"const": true},
+        "spec_id": {"$ref": "#/$defs/contentId"}
+      }
+    },
+    "decisionReplayReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_log_id", "record_count", "schema", "spec_id", "verified"],
+      "properties": {
+        "decision_log_id": {"$ref": "#/$defs/contentId"},
+        "record_count": {"type": "integer", "minimum": 0},
+        "schema": {"const": "org.quitetall.abir.training.decision-replay-receipt-v1"},
+        "spec_id": {"$ref": "#/$defs/contentId"},
+        "verified": {"const": true}
+      }
+    },
+    "sourceEquivalenceReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first_dataset_root_count", "first_dataset_roots_id", "first_snapshot_id", "logical_windows_id", "row_count", "schema", "second_dataset_root_count", "second_dataset_roots_id", "second_snapshot_id", "verified"],
+      "properties": {
+        "first_dataset_root_count": {"type": "integer", "minimum": 1},
+        "first_dataset_roots_id": {"$ref": "#/$defs/contentId"},
+        "first_snapshot_id": {"$ref": "#/$defs/contentId"},
+        "logical_windows_id": {"$ref": "#/$defs/contentId"},
+        "row_count": {"type": "integer", "minimum": 1},
+        "schema": {"const": "org.quitetall.abir.training.source-equivalence-receipt-v1"},
+        "second_dataset_root_count": {"type": "integer", "minimum": 1},
+        "second_dataset_roots_id": {"$ref": "#/$defs/contentId"},
+        "second_snapshot_id": {"$ref": "#/$defs/contentId"},
+        "verified": {"const": true}
+      }
+    },
+    "subscriptionCorrection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prior_generation", "prior_snapshot_id"],
+      "properties": {
+        "prior_generation": {"type": "integer", "minimum": 0},
+        "prior_snapshot_id": {"$ref": "#/$defs/contentId"}
+      }
+    },
+    "microSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correction", "generation", "logical_id", "sequence", "snapshot_id", "watermark"],
+      "properties": {
+        "correction": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/subscriptionCorrection"}
+          ]
+        },
+        "generation": {"type": "integer", "minimum": 0},
+        "logical_id": {"$ref": "#/$defs/contentId"},
+        "sequence": {"type": "integer", "minimum": 0},
+        "snapshot_id": {"$ref": "#/$defs/contentId"},
+        "watermark": {"type": "integer", "minimum": 0}
+      }
+    },
+    "closedSubscription": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "schema", "sealed", "subscription_id"],
+      "properties": {
+        "events": {"type": "array", "items": {"$ref": "#/$defs/microSnapshot"}},
+        "schema": {"const": "org.quitetall.abir.training.subscription-v1"},
+        "sealed": {"const": true},
+        "subscription_id": {"$ref": "#/$defs/contentId"}
+      }
+    },
+    "promotionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_log_id", "decision_replay_receipt_id", "generation", "logical_id", "sequence", "snapshot_id", "watermark"],
+      "properties": {
+        "decision_log_id": {"$ref": "#/$defs/contentId"},
+        "decision_replay_receipt_id": {"$ref": "#/$defs/contentId"},
+        "generation": {"type": "integer", "minimum": 0},
+        "logical_id": {"$ref": "#/$defs/contentId"},
+        "sequence": {"type": "integer", "minimum": 0},
+        "snapshot_id": {"$ref": "#/$defs/contentId"},
+        "watermark": {"type": "integer", "minimum": 0}
+      }
+    },
+    "continualPromotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["closed_subscription_id", "entries", "schema", "sealed", "spec_id"],
+      "properties": {
+        "closed_subscription_id": {"$ref": "#/$defs/contentId"},
+        "entries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/promotionEntry"}},
+        "schema": {"const": "org.quitetall.abir.training.continual-promotion-v1"},
+        "sealed": {"const": true},
+        "spec_id": {"$ref": "#/$defs/contentId"}
+      }
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/decisionLog"},
+    {"$ref": "#/$defs/decisionReplayReceipt"},
+    {"$ref": "#/$defs/sourceEquivalenceReceipt"},
+    {"$ref": "#/$defs/closedSubscription"},
+    {"$ref": "#/$defs/continualPromotion"}
+  ]
+}

@@ -466,3 +466,186 @@ def test_training_v2_schema_admits_typed_labels_and_v1_rejects_them():
 
     catalog["label_payloads"][0]["presence"] = "unknown-at-source"
     assert list(jsonschema.Draft202012Validator(v2).iter_errors(catalog))
+
+
+def _acceptance_spec(*, knobs=("worker-count",)):
+    return {
+        "augmentation": "01" * 32,
+        "authorized_purpose": "representation-learning",
+        "cohort": "02" * 32,
+        "feature": "03" * 32,
+        "fitted_state": "04" * 32,
+        "grouping": "05" * 32,
+        "label": "06" * 32,
+        "policy": "07" * 32,
+        "preprocessing": "08" * 32,
+        "sampler": "09" * 32,
+        "seed": 42,
+        "split": "0a" * 32,
+        "view": "0b" * 32,
+        "window": "0c" * 32,
+        "allowed_adaptive_knobs": list(knobs),
+    }
+
+
+def _validate_acceptance_artifact(artifact):
+    root = Path(__file__).parents[2]
+    schema = json.loads((root / "schema/training-acceptance-v1.schema.json").read_text())
+    jsonschema.Draft202012Validator.check_schema(schema)
+    jsonschema.validate(json.loads(artifact), schema)
+
+
+def test_public_decision_replay_reopens_durable_log_and_fails_closed():
+    spec = _acceptance_spec()
+    records = [{
+        "activation_barrier": 10,
+        "decision": "0d" * 32,
+        "durable_before_activation": True,
+        "knob": "worker-count",
+        "rank": 0,
+        "sequence": 0,
+    }]
+    sealed = abir.seal_training_decision_log(spec=spec, records=records)
+    snapshot = abir.seal_training_snapshot(
+        dataset_roots=["31" * 32],
+        spec_id=sealed["spec_id"],
+        profile="balanced",
+        rows=[{
+            "logical_id": "32" * 32,
+            "group": "33" * 32,
+            "label": "34" * 32,
+            "split": "35" * 32,
+            "element": "i16",
+            "byte_order": "little",
+            "shape": [1],
+            "payload": bytes([1, 0]),
+        }],
+        label_payloads=[],
+        decision_log_id=sealed["decision_log_id"],
+    )
+    receipt = abir.verify_training_decision_replay(
+        snapshot=snapshot["artifact"],
+        spec=spec,
+        decision_log=sealed["decision_log"],
+        records=records,
+    )
+
+    assert receipt["decision_log_id"] == sealed["decision_log_id"]
+    assert receipt["record_count"] == 1
+    assert len(receipt["receipt_id"]) == 64
+    _validate_acceptance_artifact(receipt["receipt"])
+
+    changed = [dict(records[0], decision="0e" * 32)]
+    with pytest.raises(ValueError, match="decision replay identity mismatch"):
+        abir.verify_training_decision_replay(
+            snapshot=snapshot["artifact"],
+            spec=spec,
+            decision_log=sealed["decision_log"],
+            records=changed,
+        )
+
+    with pytest.raises(ValueError, match="unknown training metadata field"):
+        abir.seal_training_decision_log(
+            spec=dict(spec, optimizer_schedule="unbound"), records=records
+        )
+    with pytest.raises(ValueError, match="unknown training metadata field"):
+        abir.seal_training_decision_log(
+            spec=spec, records=[dict(records[0], worker_epoch=3)]
+        )
+
+
+def test_public_source_equivalence_requires_exact_validated_windows():
+    row = {
+        "logical_id": "21" * 32,
+        "group": "22" * 32,
+        "label": "23" * 32,
+        "split": "24" * 32,
+        "element": "i16",
+        "byte_order": "little",
+        "shape": [2],
+        "payload": bytes([1, 0, 2, 0]),
+    }
+    common = {
+        "spec_id": "25" * 32,
+        "profile": "balanced",
+        "rows": [row],
+        "label_payloads": [],
+        "decision_log_id": "26" * 32,
+    }
+    first = abir.seal_training_snapshot(dataset_roots=["27" * 32], **common)
+    second = abir.seal_training_snapshot(dataset_roots=["28" * 32], **common)
+    receipt = abir.verify_training_source_equivalence(
+        first["artifact"], second["artifact"]
+    )
+    assert receipt["row_count"] == 1
+    assert receipt["first_snapshot_id"] == first["snapshot_id"]
+    assert receipt["second_snapshot_id"] == second["snapshot_id"]
+    assert receipt["first_snapshot_id"] != receipt["second_snapshot_id"]
+    assert receipt["first_dataset_roots_id"] != receipt["second_dataset_roots_id"]
+    assert len(receipt["logical_windows_id"]) == 64
+    assert len(receipt["receipt_id"]) == 64
+    _validate_acceptance_artifact(receipt["receipt"])
+
+    other = abir._training_fixture_bytes(payload_bytes=10)
+    with pytest.raises(ValueError, match="source-equivalent windows"):
+        abir.verify_training_source_equivalence(first["artifact"], other)
+
+
+def test_public_continual_promotion_binds_closed_snapshot_and_log_sequence():
+    spec = _acceptance_spec(knobs=())
+    decision = abir.seal_training_decision_log(spec=spec, records=[])
+    logical_id = "11" * 32
+    snapshot = abir.seal_training_snapshot(
+        dataset_roots=["12" * 32],
+        spec_id=decision["spec_id"],
+        profile="stream",
+        rows=[{
+            "logical_id": logical_id,
+            "group": "13" * 32,
+            "label": "14" * 32,
+            "split": "15" * 32,
+            "element": "i16",
+            "byte_order": "little",
+            "shape": [1],
+            "payload": bytes([1, 0]),
+        }],
+        label_payloads=[],
+        decision_log_id=decision["decision_log_id"],
+    )
+    result = abir.seal_training_continual_promotion(
+        subscription_id="16" * 32,
+        events=[{
+            "correction": None,
+            "generation": 0,
+            "logical_id": "17" * 32,
+            "sequence": 0,
+            "snapshot_id": snapshot["snapshot_id"],
+            "watermark": 100,
+        }],
+        spec=spec,
+        snapshots=[snapshot["artifact"]],
+        decision_logs=[decision["decision_log"]],
+        decision_replays=[[]],
+    )
+    assert result["entry_count"] == 1
+    assert len(result["promotion_id"]) == 64
+    assert len(result["closed_subscription_id"]) == 64
+    _validate_acceptance_artifact(result["closed_subscription"])
+    _validate_acceptance_artifact(result["promotion"])
+
+    with pytest.raises(ValueError, match="expected 1 snapshots"):
+        abir.seal_training_continual_promotion(
+            subscription_id="16" * 32,
+            events=[{
+                "correction": None,
+                "generation": 0,
+                "logical_id": "17" * 32,
+                "sequence": 0,
+                "snapshot_id": snapshot["snapshot_id"],
+                "watermark": 100,
+            }],
+            spec=spec,
+            snapshots=[],
+            decision_logs=[],
+            decision_replays=[],
+        )

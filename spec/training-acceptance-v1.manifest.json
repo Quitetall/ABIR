@@ -1,0 +1,10 @@
+{
+  "manifest_version": 1,
+  "training_acceptance_version": "1",
+  "hash_algorithm": "sha256",
+  "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
+  "artifacts": [
+    {"path": "schema/training-acceptance-v1.schema.json", "sha256": "63d17cb02a3963cacadb4a6f788f1d3d40f4a57b6e1cf7145399eae472676791"},
+    {"path": "spec/TRAINING_ACCEPTANCE_V1.md", "sha256": "b8a7301d4de93396f24fabc73a949817ad543eaf6fc42ce61336512715d72e4a"}
+  ]
+}

@@ -5,6 +5,7 @@
 //! catalog/frame closure and then lends the original frame bytes without a
 //! copy.
 
+mod acceptance;
 mod compiler;
 mod continual;
 mod decision;
@@ -12,6 +13,10 @@ mod error;
 mod model;
 mod store;
 
+pub use acceptance::{
+    ContinualPromotion, ContinualPromotionEntry, DecisionReplayReceipt, SourceEquivalenceReceipt,
+    VerifiedTrainingSnapshot,
+};
 pub use compiler::{
     compile_execution_plan, CacheBudget, ClosurePolicy, CompiledExecutionPlan, PayloadAccessPolicy,
     PlanCompileError, PlanOverrides, PrefetchPolicy, RowGrouping,
@@ -19,7 +24,7 @@ pub use compiler::{
 pub use continual::{
     ClosedSubscription, DatasetSubscription, MicroSnapshot, SubscriptionCorrection,
 };
-pub use decision::{DecisionLog, DecisionRecord};
+pub use decision::{DecisionLog, DecisionRecord, ReopenedDecisionLog};
 pub use error::TrainingError;
 pub use model::{
     encode_snapshot, ContentKey, TrainingAssociatedPayload, TrainingInput,

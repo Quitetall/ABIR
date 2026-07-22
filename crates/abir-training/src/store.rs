@@ -1,6 +1,7 @@
 use crate::{
-    model::expected_payloads, ContentKey, TrainingError, TrainingLabelPayloadAssociation,
-    TrainingRow, TrainingSnapshot,
+    model::expected_payloads, ContentKey, DecisionRecord, DecisionReplayReceipt,
+    ReopenedDecisionLog, TrainingError, TrainingLabelPayloadAssociation, TrainingRow,
+    TrainingSnapshot, TrainingSpec, VerifiedTrainingSnapshot,
 };
 use abir::{ByteOrder, ElementType, Presence};
 use abir_bcs::{Bcs2View, FrameKind, ResourceBounds, RootKind, StorageContract};
@@ -220,6 +221,27 @@ impl<'a> TrainingWindowStore<'a> {
 
     pub const fn decision_log_replay_state(&self) -> DecisionLogReplayState {
         DecisionLogReplayState::IdentityBound
+    }
+
+    /// Verifies replay against the exact decision-log identity bound by this snapshot.
+    pub fn verify_decision_replay(
+        &self,
+        spec: &TrainingSpec,
+        log: &ReopenedDecisionLog,
+        replayed: &[DecisionRecord],
+    ) -> Result<DecisionReplayReceipt, TrainingError> {
+        let receipt = DecisionReplayReceipt::verify(spec, log, replayed)?;
+        if receipt.decision_log_id() != self.decision_log_id()
+            || receipt.spec_id() != self.spec_id()
+        {
+            return Err(TrainingError::DecisionReplayMismatch);
+        }
+        Ok(receipt)
+    }
+
+    /// Produces an opaque promotion input only after full store verification.
+    pub fn verified_snapshot(&self) -> VerifiedTrainingSnapshot {
+        VerifiedTrainingSnapshot::from_store(self)
     }
 
     pub fn row(&self, logical_id: ContentKey) -> Option<TrainingRowLease<'_>> {

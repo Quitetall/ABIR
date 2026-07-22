@@ -1,8 +1,10 @@
 use abir_bcs::{ResourceBounds, SemanticPayloadFrame};
 use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType, Presence};
 use abir_training::{
-    encode_snapshot, ContentKey, TrainingAssociatedPayload, TrainingLabelPayloadAssociation,
-    TrainingRow, TrainingSnapshot,
+    encode_snapshot, ContentKey, ContinualPromotion, DatasetSubscription, DecisionLog,
+    DecisionRecord, DecisionReplayReceipt, MicroSnapshot, SourceEquivalenceReceipt,
+    SubscriptionCorrection, TrainingAssociatedPayload, TrainingLabelPayloadAssociation,
+    TrainingRow, TrainingSnapshot, TrainingSpec,
 };
 use abir_training::{DecisionLogReplayState, TrainingProfile, TrainingWindowStore};
 use memmap2::MmapOptions;
@@ -618,6 +620,27 @@ fn required_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<String
     required_item(dictionary, key)?.extract()
 }
 
+fn require_exact_keys(dictionary: &Bound<'_, PyDict>, expected: &[&str]) -> PyResult<()> {
+    for (key, _) in dictionary.iter() {
+        let key: String = key
+            .extract()
+            .map_err(|_| PyValueError::new_err("training metadata keys must be strings"))?;
+        if !expected.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "unknown training metadata field {key:?}"
+            )));
+        }
+    }
+    for key in expected {
+        if !dictionary.contains(key)? {
+            return Err(PyValueError::new_err(format!(
+                "missing required field {key:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn required_shape(dictionary: &Bound<'_, PyDict>) -> PyResult<Vec<u64>> {
     required_item(dictionary, "shape")?
         .downcast::<PyList>()
@@ -844,6 +867,365 @@ fn parse_bound_label<'py>(dictionary: &Bound<'py, PyDict>) -> PyResult<BoundLabe
         },
         payload: Some(payload),
     })
+}
+
+fn parse_training_spec(dictionary: &Bound<'_, PyDict>) -> PyResult<TrainingSpec> {
+    require_exact_keys(
+        dictionary,
+        &[
+            "augmentation",
+            "authorized_purpose",
+            "cohort",
+            "feature",
+            "fitted_state",
+            "grouping",
+            "label",
+            "policy",
+            "preprocessing",
+            "sampler",
+            "seed",
+            "split",
+            "view",
+            "window",
+            "allowed_adaptive_knobs",
+        ],
+    )?;
+    let key = |name: &str| -> PyResult<ContentKey> {
+        Ok(ContentKey::new(super::parse_content_id(&required_string(
+            dictionary, name,
+        )?)?))
+    };
+    let allowed_adaptive_knobs = required_item(dictionary, "allowed_adaptive_knobs")?
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("allowed_adaptive_knobs must be a list"))?
+        .extract()?;
+    Ok(TrainingSpec {
+        augmentation: key("augmentation")?,
+        authorized_purpose: required_string(dictionary, "authorized_purpose")?,
+        cohort: key("cohort")?,
+        feature: key("feature")?,
+        fitted_state: key("fitted_state")?,
+        grouping: key("grouping")?,
+        label: key("label")?,
+        policy: key("policy")?,
+        preprocessing: key("preprocessing")?,
+        sampler: key("sampler")?,
+        seed: required_item(dictionary, "seed")?.extract()?,
+        split: key("split")?,
+        view: key("view")?,
+        window: key("window")?,
+        allowed_adaptive_knobs,
+    })
+}
+
+fn preflight_acceptance_count(count: usize, kind: &str) -> PyResult<()> {
+    if count > ResourceBounds::default().max_index_entries as usize {
+        return Err(PyValueError::new_err(format!(
+            "training acceptance {kind} exceeds the ABIR BCS2 index resource bound"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_decision_records(records: &Bound<'_, PyList>) -> PyResult<Vec<DecisionRecord>> {
+    records
+        .iter()
+        .map(|value| {
+            let record = value
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("each decision record must be a dictionary"))?;
+            require_exact_keys(
+                record,
+                &[
+                    "activation_barrier",
+                    "decision",
+                    "durable_before_activation",
+                    "knob",
+                    "rank",
+                    "sequence",
+                ],
+            )?;
+            Ok(DecisionRecord {
+                activation_barrier: required_item(record, "activation_barrier")?.extract()?,
+                decision: ContentKey::new(super::parse_content_id(&required_string(
+                    record, "decision",
+                )?)?),
+                durable_before_activation: required_item(record, "durable_before_activation")?
+                    .extract()?,
+                knob: required_string(record, "knob")?,
+                rank: required_item(record, "rank")?.extract()?,
+                sequence: required_item(record, "sequence")?.extract()?,
+            })
+        })
+        .collect()
+}
+
+fn parse_micro_snapshots(events: &Bound<'_, PyList>) -> PyResult<Vec<MicroSnapshot>> {
+    events
+        .iter()
+        .map(|value| {
+            let event = value.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("each micro-snapshot event must be a dictionary")
+            })?;
+            require_exact_keys(
+                event,
+                &[
+                    "correction",
+                    "generation",
+                    "logical_id",
+                    "sequence",
+                    "snapshot_id",
+                    "watermark",
+                ],
+            )?;
+            let correction = match event.get_item("correction")? {
+                None => None,
+                Some(value) if value.is_none() => None,
+                Some(value) => {
+                    let correction = value.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err("correction must be a dictionary or None")
+                    })?;
+                    require_exact_keys(correction, &["prior_generation", "prior_snapshot_id"])?;
+                    Some(SubscriptionCorrection {
+                        prior_generation: required_item(correction, "prior_generation")?
+                            .extract()?,
+                        prior_snapshot_id: ContentKey::new(super::parse_content_id(
+                            &required_string(correction, "prior_snapshot_id")?,
+                        )?),
+                    })
+                }
+            };
+            Ok(MicroSnapshot {
+                correction,
+                generation: required_item(event, "generation")?.extract()?,
+                logical_id: ContentKey::new(super::parse_content_id(&required_string(
+                    event,
+                    "logical_id",
+                )?)?),
+                sequence: required_item(event, "sequence")?.extract()?,
+                snapshot_id: ContentKey::new(super::parse_content_id(&required_string(
+                    event,
+                    "snapshot_id",
+                )?)?),
+                watermark: required_item(event, "watermark")?.extract()?,
+            })
+        })
+        .collect()
+}
+
+#[pyfunction]
+#[pyo3(signature = (*, spec, records))]
+pub(crate) fn seal_training_decision_log<'py>(
+    py: Python<'py>,
+    spec: &Bound<'py, PyDict>,
+    records: &Bound<'py, PyList>,
+) -> PyResult<Bound<'py, PyDict>> {
+    preflight_acceptance_count(records.len(), "decision record count")?;
+    let spec = parse_training_spec(spec)?;
+    let log = DecisionLog::seal(&spec, parse_decision_records(records)?).map_err(training_error)?;
+    let result = PyDict::new_bound(py);
+    result.set_item(
+        "spec_id",
+        spec.content_id().map_err(training_error)?.to_string(),
+    )?;
+    result.set_item(
+        "decision_log_id",
+        log.content_id().map_err(training_error)?.to_string(),
+    )?;
+    result.set_item(
+        "decision_log",
+        PyBytes::new_bound(py, &log.canonical_json().map_err(training_error)?),
+    )?;
+    Ok(result)
+}
+
+#[pyfunction]
+#[pyo3(signature = (*, snapshot, spec, decision_log, records))]
+pub(crate) fn verify_training_decision_replay<'py>(
+    py: Python<'py>,
+    snapshot: &Bound<'py, PyBytes>,
+    spec: &Bound<'py, PyDict>,
+    decision_log: &Bound<'py, PyBytes>,
+    records: &Bound<'py, PyList>,
+) -> PyResult<Bound<'py, PyDict>> {
+    preflight_acceptance_count(records.len(), "decision replay record count")?;
+    let spec = parse_training_spec(spec)?;
+    let log = DecisionLog::from_canonical_json(decision_log.as_bytes()).map_err(training_error)?;
+    let records = parse_decision_records(records)?;
+    let store = TrainingWindowStore::open(snapshot.as_bytes(), ResourceBounds::default())
+        .map_err(training_error)?;
+    let receipt = store
+        .verify_decision_replay(&spec, &log, &records)
+        .map_err(training_error)?;
+    let result = PyDict::new_bound(py);
+    result.set_item("decision_log_id", receipt.decision_log_id().to_string())?;
+    result.set_item("spec_id", receipt.spec_id().to_string())?;
+    result.set_item("record_count", receipt.record_count())?;
+    result.set_item(
+        "receipt_id",
+        receipt.content_id().map_err(training_error)?.to_string(),
+    )?;
+    result.set_item(
+        "receipt",
+        PyBytes::new_bound(py, &receipt.canonical_json().map_err(training_error)?),
+    )?;
+    Ok(result)
+}
+
+#[pyfunction]
+pub(crate) fn verify_training_source_equivalence<'py>(
+    py: Python<'py>,
+    first: &Bound<'py, PyBytes>,
+    second: &Bound<'py, PyBytes>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let first = TrainingWindowStore::open(first.as_bytes(), ResourceBounds::default())
+        .map_err(training_error)?;
+    let second = TrainingWindowStore::open(second.as_bytes(), ResourceBounds::default())
+        .map_err(training_error)?;
+    let receipt = SourceEquivalenceReceipt::verify(&first, &second).map_err(training_error)?;
+    let result = PyDict::new_bound(py);
+    result.set_item("first_snapshot_id", receipt.first_snapshot_id().to_string())?;
+    result.set_item(
+        "second_snapshot_id",
+        receipt.second_snapshot_id().to_string(),
+    )?;
+    result.set_item(
+        "logical_windows_id",
+        receipt.logical_windows_id().to_string(),
+    )?;
+    result.set_item(
+        "first_dataset_roots_id",
+        receipt.first_dataset_roots_id().to_string(),
+    )?;
+    result.set_item(
+        "second_dataset_roots_id",
+        receipt.second_dataset_roots_id().to_string(),
+    )?;
+    result.set_item("row_count", receipt.row_count())?;
+    result.set_item(
+        "first_dataset_root_count",
+        receipt.first_dataset_root_count(),
+    )?;
+    result.set_item(
+        "second_dataset_root_count",
+        receipt.second_dataset_root_count(),
+    )?;
+    result.set_item(
+        "receipt_id",
+        receipt.content_id().map_err(training_error)?.to_string(),
+    )?;
+    result.set_item(
+        "receipt",
+        PyBytes::new_bound(py, &receipt.canonical_json().map_err(training_error)?),
+    )?;
+    Ok(result)
+}
+
+#[pyfunction]
+#[pyo3(signature = (*, subscription_id, events, spec, snapshots, decision_logs, decision_replays))]
+pub(crate) fn seal_training_continual_promotion<'py>(
+    py: Python<'py>,
+    subscription_id: &str,
+    events: &Bound<'py, PyList>,
+    spec: &Bound<'py, PyDict>,
+    snapshots: &Bound<'py, PyList>,
+    decision_logs: &Bound<'py, PyList>,
+    decision_replays: &Bound<'py, PyList>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let bounds = ResourceBounds::default();
+    for (count, kind) in [
+        (events.len(), "micro-snapshot count"),
+        (snapshots.len(), "snapshot count"),
+        (decision_logs.len(), "decision log count"),
+        (decision_replays.len(), "decision replay count"),
+    ] {
+        if count > bounds.max_generations as usize {
+            return Err(PyValueError::new_err(format!(
+                "training acceptance {kind} exceeds the continual generation bound"
+            )));
+        }
+    }
+    let spec = parse_training_spec(spec)?;
+    let mut subscription =
+        DatasetSubscription::new(ContentKey::new(super::parse_content_id(subscription_id)?));
+    for event in parse_micro_snapshots(events)? {
+        subscription.append(event).map_err(training_error)?;
+    }
+    let closed = subscription.close().map_err(training_error)?;
+    let mut snapshot_values = Vec::with_capacity(snapshots.len());
+    let mut total_rows = 0_usize;
+    for value in snapshots.iter() {
+        let bytes = value.downcast::<PyBytes>().map_err(|_| {
+            PyValueError::new_err("each continual snapshot must be immutable bytes")
+        })?;
+        let store = TrainingWindowStore::open(bytes.as_bytes(), ResourceBounds::default())
+            .map_err(training_error)?;
+        total_rows = total_rows
+            .checked_add(store.rows().len())
+            .ok_or_else(|| PyValueError::new_err("continual row count overflow"))?;
+        preflight_acceptance_count(total_rows, "aggregate snapshot row count")?;
+        snapshot_values.push(store.verified_snapshot());
+    }
+    let mut decision_log_values = Vec::with_capacity(decision_logs.len());
+    let mut total_records = 0_usize;
+    for value in decision_logs.iter() {
+        let bytes = value.downcast::<PyBytes>().map_err(|_| {
+            PyValueError::new_err("each continual decision log must be immutable bytes")
+        })?;
+        let log = DecisionLog::from_canonical_json(bytes.as_bytes()).map_err(training_error)?;
+        total_records = total_records
+            .checked_add(log.records().len())
+            .ok_or_else(|| PyValueError::new_err("continual decision record count overflow"))?;
+        preflight_acceptance_count(total_records, "aggregate decision record count")?;
+        decision_log_values.push(log);
+    }
+    let replay_values = decision_replays
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let records = value.downcast::<PyList>().map_err(|_| {
+                PyValueError::new_err("each continual decision replay must be a list")
+            })?;
+            let log = decision_log_values.get(index).ok_or_else(|| {
+                PyValueError::new_err("decision replay has no corresponding decision log")
+            })?;
+            if records.len() != log.records().len() {
+                return Err(PyValueError::new_err(
+                    "decision replay record count does not match its decision log",
+                ));
+            }
+            preflight_acceptance_count(records.len(), "nested decision replay record count")?;
+            DecisionReplayReceipt::verify(&spec, log, &parse_decision_records(records)?)
+                .map_err(training_error)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let promotion = ContinualPromotion::seal(
+        &closed,
+        &spec,
+        &snapshot_values,
+        &decision_log_values,
+        &replay_values,
+    )
+    .map_err(training_error)?;
+    let result = PyDict::new_bound(py);
+    result.set_item(
+        "closed_subscription_id",
+        promotion.closed_subscription_id().to_string(),
+    )?;
+    result.set_item(
+        "closed_subscription",
+        PyBytes::new_bound(py, &closed.canonical_json().map_err(training_error)?),
+    )?;
+    result.set_item("entry_count", promotion.entry_count())?;
+    result.set_item(
+        "promotion_id",
+        promotion.content_id().map_err(training_error)?.to_string(),
+    )?;
+    result.set_item(
+        "promotion",
+        PyBytes::new_bound(py, &promotion.canonical_json().map_err(training_error)?),
+    )?;
+    Ok(result)
 }
 
 /// Seal exact primary rows and typed label associations into a validated BCS2

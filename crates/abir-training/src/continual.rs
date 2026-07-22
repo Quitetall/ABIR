@@ -1,5 +1,6 @@
 use crate::{ContentKey, TrainingError};
 use abir::ContentId;
+use abir_bcs::ResourceBounds;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -128,6 +129,7 @@ impl ClosedSubscription {
         for event in &closed.events {
             replay.append(event.clone())?;
         }
+        closed.canonical_json()?;
         Ok(closed)
     }
 
@@ -135,10 +137,23 @@ impl ClosedSubscription {
         &self.events
     }
 
+    /// Reopens a canonical closed sequence and replays every ordering rule.
+    pub fn from_canonical_json(catalog: &[u8]) -> Result<Self, TrainingError> {
+        ensure_catalog_bound(catalog)?;
+        let subscription: Self = serde_json::from_slice(catalog)?;
+        subscription.validate()?;
+        if subscription.canonical_json()? != catalog {
+            return Err(TrainingError::CanonicalSubscription);
+        }
+        Ok(subscription)
+    }
+
     pub fn canonical_json(&self) -> Result<Vec<u8>, TrainingError> {
         self.validate()?;
         let value = serde_json::to_value(self)?;
-        Ok(serde_json::to_vec(&value)?)
+        let catalog = serde_json::to_vec(&value)?;
+        ensure_catalog_bound(&catalog)?;
+        Ok(catalog)
     }
 
     pub fn content_id(&self) -> Result<ContentId, TrainingError> {
@@ -158,4 +173,11 @@ impl ClosedSubscription {
         }
         Ok(())
     }
+}
+
+fn ensure_catalog_bound(catalog: &[u8]) -> Result<(), TrainingError> {
+    if catalog.len() > ResourceBounds::default().max_catalog_bytes as usize {
+        return Err(TrainingError::AcceptanceResourceBound);
+    }
+    Ok(())
 }

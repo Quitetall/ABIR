@@ -57,7 +57,7 @@ fn bcs2_manifest_hashes_match() {
 #[test]
 fn training_manifest_hashes_match() {
     let root = root();
-    for version in ["v1", "v2"] {
+    for version in ["v1", "v2", "acceptance-v1"] {
         let manifest_path = format!("spec/training-{version}.manifest.json");
         let manifest: Value = serde_json::from_slice(
             &fs::read(root.join(&manifest_path)).expect("read training manifest"),

@@ -1,5 +1,6 @@
 use crate::{ContentKey, TrainingError, TrainingSpec};
 use abir::ContentId;
+use abir_bcs::ResourceBounds;
 use serde::{Deserialize, Serialize};
 
 const DECISION_SCHEMA: &str = "org.quitetall.abir.training.decision-log-v1";
@@ -24,15 +25,21 @@ pub struct DecisionLog {
     spec_id: ContentKey,
 }
 
+/// A decision log reopened from its exact canonical byte representation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReopenedDecisionLog(DecisionLog);
+
 impl DecisionLog {
     pub fn seal(spec: &TrainingSpec, records: Vec<DecisionRecord>) -> Result<Self, TrainingError> {
         validate_records(spec, &records)?;
-        Ok(Self {
+        let log = Self {
             records,
             schema: DECISION_SCHEMA.to_owned(),
             sealed: true,
             spec_id: ContentKey::from(spec.content_id()?),
-        })
+        };
+        log.canonical_json()?;
+        Ok(log)
     }
 
     pub fn records(&self) -> &[DecisionRecord] {
@@ -46,7 +53,20 @@ impl DecisionLog {
     pub fn canonical_json(&self) -> Result<Vec<u8>, TrainingError> {
         self.validate()?;
         let value = serde_json::to_value(self)?;
-        Ok(serde_json::to_vec(&value)?)
+        let catalog = serde_json::to_vec(&value)?;
+        ensure_catalog_bound(&catalog)?;
+        Ok(catalog)
+    }
+
+    /// Reopens a durable canonical log without treating it as replay evidence.
+    pub fn from_canonical_json(catalog: &[u8]) -> Result<ReopenedDecisionLog, TrainingError> {
+        ensure_catalog_bound(catalog)?;
+        let log: Self = serde_json::from_slice(catalog)?;
+        log.validate()?;
+        if log.canonical_json()? != catalog {
+            return Err(TrainingError::CanonicalDecisionLog);
+        }
+        Ok(ReopenedDecisionLog(log))
     }
 
     pub fn content_id(&self) -> Result<ContentId, TrainingError> {
@@ -72,12 +92,57 @@ impl DecisionLog {
         self.content_id()
     }
 
+    pub(crate) fn validate_for_spec(&self, spec: &TrainingSpec) -> Result<(), TrainingError> {
+        if ContentKey::from(spec.content_id()?) != self.spec_id {
+            return Err(TrainingError::DecisionSpecMismatch);
+        }
+        self.validate()?;
+        validate_records(spec, &self.records)
+    }
+
     fn validate(&self) -> Result<(), TrainingError> {
         if self.schema != DECISION_SCHEMA || !self.sealed {
             return Err(TrainingError::NotSealed);
         }
         validate_intrinsic_records(&self.records)
     }
+}
+
+impl ReopenedDecisionLog {
+    pub fn records(&self) -> &[DecisionRecord] {
+        self.0.records()
+    }
+
+    pub const fn spec_id(&self) -> ContentKey {
+        self.0.spec_id()
+    }
+
+    pub fn canonical_json(&self) -> Result<Vec<u8>, TrainingError> {
+        self.0.canonical_json()
+    }
+
+    pub fn content_id(&self) -> Result<ContentId, TrainingError> {
+        self.0.content_id()
+    }
+
+    pub(crate) fn replay_identity(
+        &self,
+        spec: &TrainingSpec,
+        replayed: &[DecisionRecord],
+    ) -> Result<ContentId, TrainingError> {
+        self.0.replay_identity(spec, replayed)
+    }
+
+    pub(crate) fn validate_for_spec(&self, spec: &TrainingSpec) -> Result<(), TrainingError> {
+        self.0.validate_for_spec(spec)
+    }
+}
+
+fn ensure_catalog_bound(catalog: &[u8]) -> Result<(), TrainingError> {
+    if catalog.len() > ResourceBounds::default().max_catalog_bytes as usize {
+        return Err(TrainingError::AcceptanceResourceBound);
+    }
+    Ok(())
 }
 
 fn validate_records(spec: &TrainingSpec, records: &[DecisionRecord]) -> Result<(), TrainingError> {

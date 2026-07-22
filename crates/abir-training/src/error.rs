@@ -3,12 +3,15 @@ use core::fmt;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TrainingError {
+    AcceptanceResourceBound,
     ActivationBarrierRegression {
         previous: u64,
         next: u64,
     },
     Bcs2(String),
     CanonicalCatalog,
+    CanonicalDecisionLog,
+    CanonicalSubscription,
     ClosedSubscription,
     ContentIdMismatch,
     CorrectionGeneration,
@@ -22,6 +25,7 @@ pub enum TrainingError {
         concept: String,
     },
     DuplicatePayload(ContentId),
+    EmptyContinualPromotion,
     ExternalReference(ContentId),
     ExtraPayload(ContentId),
     InvalidAdaptiveKnob(String),
@@ -32,18 +36,27 @@ pub enum TrainingError {
         expected: u64,
         actual: u64,
     },
+    InvalidDecisionReplayReceipt,
     InvalidElement(String),
     InvalidLabelConcept(String),
     InvalidLabelPresence(ContentId),
     InvalidLabelPresenceName(String),
     InvalidProfile,
+    InvalidContinualPromotion,
     InvalidRowExtent(ContentId),
     InvalidSnapshot,
+    InvalidSourceEquivalenceReceipt,
     InvalidSubscriptionSequence {
         expected: u64,
         actual: u64,
     },
     MissingPayload(ContentId),
+    IncompleteContinualPromotion {
+        expected: usize,
+        snapshots: usize,
+        decision_logs: usize,
+        replay_receipts: usize,
+    },
     NonMonotonicWatermark {
         previous: u64,
         next: u64,
@@ -51,8 +64,12 @@ pub enum TrainingError {
     NotBundle,
     NotSealed,
     ProfileMismatch,
+    PromotionDecisionLogMismatch(u64),
+    PromotionDecisionReplayMismatch(u64),
+    PromotionSnapshotMismatch(u64),
     RankNotZero(u32),
     Serialization(String),
+    SourceSnapshotMismatch,
     UnknownCorrection(ContentId),
     UnknownLabelRow(ContentId),
 }
@@ -60,11 +77,20 @@ pub enum TrainingError {
 impl fmt::Display for TrainingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AcceptanceResourceBound => {
+                f.write_str("training acceptance input exceeds its resource bound")
+            }
             Self::ActivationBarrierRegression { previous, next } => {
                 write!(f, "activation barrier regressed from {previous} to {next}")
             }
             Self::Bcs2(error) => write!(f, "BCS2 error: {error}"),
             Self::CanonicalCatalog => f.write_str("training catalog is not canonical JSON"),
+            Self::CanonicalDecisionLog => {
+                f.write_str("training decision log is not canonical JSON")
+            }
+            Self::CanonicalSubscription => {
+                f.write_str("training subscription is not canonical JSON")
+            }
             Self::ClosedSubscription => f.write_str("dataset subscription is already closed"),
             Self::ContentIdMismatch => f.write_str("training content identity mismatch"),
             Self::CorrectionGeneration => f.write_str("correction must create the next generation"),
@@ -87,6 +113,9 @@ impl fmt::Display for TrainingError {
                 )
             }
             Self::DuplicatePayload(id) => write!(f, "conflicting duplicate payload {id}"),
+            Self::EmptyContinualPromotion => {
+                f.write_str("continual promotion requires at least one micro-snapshot")
+            }
             Self::ExternalReference(id) => write!(f, "undeclared external reference {id}"),
             Self::ExtraPayload(id) => write!(f, "extra payload frame {id}"),
             Self::InvalidAdaptiveKnob(knob) => write!(f, "invalid adaptive knob {knob:?}"),
@@ -97,6 +126,9 @@ impl fmt::Display for TrainingError {
                 f,
                 "decision sequence is not consecutive: expected {expected}, got {actual}"
             ),
+            Self::InvalidDecisionReplayReceipt => {
+                f.write_str("invalid decision replay receipt")
+            }
             Self::InvalidElement(element) => write!(f, "unknown element type {element}"),
             Self::InvalidLabelConcept(concept) => {
                 write!(f, "invalid label payload concept {concept:?}")
@@ -111,23 +143,51 @@ impl fmt::Display for TrainingError {
                 write!(f, "invalid label payload presence {presence:?}")
             }
             Self::InvalidProfile => f.write_str("not a registered training profile"),
+            Self::InvalidContinualPromotion => f.write_str("invalid continual promotion"),
             Self::InvalidRowExtent(id) => write!(f, "invalid logical extent for row {id}"),
             Self::InvalidSnapshot => f.write_str("invalid sealed training snapshot"),
+            Self::InvalidSourceEquivalenceReceipt => {
+                f.write_str("invalid source equivalence receipt")
+            }
             Self::InvalidSubscriptionSequence { expected, actual } => write!(
                 f,
                 "micro-snapshot sequence is not consecutive: expected {expected}, got {actual}"
             ),
             Self::MissingPayload(id) => write!(f, "missing payload frame {id}"),
+            Self::IncompleteContinualPromotion {
+                expected,
+                snapshots,
+                decision_logs,
+                replay_receipts,
+            } => write!(
+                f,
+                "continual promotion expected {expected} snapshots, decision logs, and replay receipts, got {snapshots} snapshots, {decision_logs} decision logs, and {replay_receipts} replay receipts"
+            ),
             Self::NonMonotonicWatermark { previous, next } => {
                 write!(f, "watermark regressed from {previous} to {next}")
             }
             Self::NotBundle => f.write_str("BCS2 root is not a bundle"),
             Self::NotSealed => f.write_str("training snapshot is not sealed"),
             Self::ProfileMismatch => f.write_str("catalog and BCS2 profiles differ"),
+            Self::PromotionDecisionLogMismatch(sequence) => write!(
+                f,
+                "continual promotion decision log does not match snapshot at sequence {sequence}"
+            ),
+            Self::PromotionDecisionReplayMismatch(sequence) => write!(
+                f,
+                "continual promotion decision replay does not match snapshot at sequence {sequence}"
+            ),
+            Self::PromotionSnapshotMismatch(sequence) => write!(
+                f,
+                "continual promotion snapshot does not match subscription at sequence {sequence}"
+            ),
             Self::RankNotZero(rank) => {
                 write!(f, "pre-activation decision was recorded on rank {rank}")
             }
             Self::Serialization(error) => write!(f, "serialization error: {error}"),
+            Self::SourceSnapshotMismatch => {
+                f.write_str("training stores do not expose source-equivalent windows")
+            }
             Self::UnknownCorrection(id) => write!(f, "correction has no prior generation for {id}"),
             Self::UnknownLabelRow(id) => {
                 write!(f, "label payload association references unknown row {id}")
