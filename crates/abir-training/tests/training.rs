@@ -143,7 +143,7 @@ fn row_byte_order_is_bound_and_invalid_numeric_order_fails_closed() {
             vec![invalid],
             key(3),
         ),
-        Err(TrainingError::InvalidRowExtent(_))
+        Err(TrainingError::InvalidByteOrder(_))
     ));
 }
 

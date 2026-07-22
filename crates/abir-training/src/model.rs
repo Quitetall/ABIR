@@ -214,13 +214,22 @@ impl TrainingRow {
         }
         match self.element.byte_width() {
             Some(width) if width > 1 && self.byte_order == ByteOrder::NotApplicable => {
-                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+                return Err(TrainingError::InvalidByteOrder(format!(
+                    "{:?} requires explicit little or big endian order",
+                    self.element
+                )));
             }
             Some(1) if self.byte_order != ByteOrder::NotApplicable => {
-                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+                return Err(TrainingError::InvalidByteOrder(format!(
+                    "{:?} requires not-applicable byte order",
+                    self.element
+                )));
             }
             None if self.byte_order != ByteOrder::NotApplicable => {
-                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+                return Err(TrainingError::InvalidByteOrder(format!(
+                    "{:?} requires not-applicable byte order",
+                    self.element
+                )));
             }
             _ => {}
         }

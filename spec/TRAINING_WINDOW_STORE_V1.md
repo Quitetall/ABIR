@@ -53,6 +53,10 @@ big-endian order; one-byte and non-numeric values use `not-applicable`. Shared
 payload IDs are permitted only when element, byte order, and length metadata
 agree.
 
+Early development snapshots created before byte order became mandatory are not
+accepted as v1. They were never production defaults and must be re-sealed from
+their immutable dataset root and `TrainingSpec`; source data is unchanged.
+
 Opening a store recomputes the catalog root, rejects external references,
 requires an exact payload-frame closure, verifies every payload ContentId,
 element type, and length, and exposes borrowed frame bytes. Extra, missing,
