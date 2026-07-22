@@ -5,6 +5,6 @@
     {"path": "registries/bcs2-profiles-v1.json", "sha256": "11ebc062fa1e0ad81a52ff771d9f71359ac33ec542d684a6105e519f9cecaafe"},
     {"path": "schema/bcs2-crypto-v1.schema.json", "sha256": "9ee9aedf2f94f5c99e94e33db91eaf8384668c65bd51482c9111a8a5679b6e38"},
     {"path": "schema/bcs2-profile-v1.schema.json", "sha256": "0a436d158956be62ed04b016a1dfc25e4a19c368b2be97316f46503369020dee"},
-    {"path": "spec/BCS2_V1.md", "sha256": "49a1c27cffbfbb2189e349b677019193856a500a6ea7ab7d47965c61cb90f618"}
+    {"path": "spec/BCS2_V1.md", "sha256": "7d6745ef8a73aa4c3bf9f783587703a44659de63087b6eefdd167cc56360cad0"}
   ]
 }

@@ -4,6 +4,8 @@
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
+mod blob;
+#[cfg(feature = "alloc")]
 mod generation;
 #[cfg(feature = "alloc")]
 mod pack;
@@ -18,6 +20,9 @@ pub use generation::{
 };
 
 #[cfg(feature = "alloc")]
+pub use blob::{encode_blob, BlobView};
+
+#[cfg(feature = "alloc")]
 pub use pack::repack_with_frames;
 
 #[cfg(feature = "alloc")]
@@ -26,6 +31,7 @@ pub use privacy::{decrypt_bcs2, encrypt_bcs2, EncryptedEnvelopeView, CAP_XCHACHA
 #[cfg(feature = "alloc")]
 pub use wire::{
     append_dataset_generation, encode_dataset, encode_dataset_with_references,
-    encode_generational_dataset, Bcs2Error, Bcs2View, FrameView, PrivacyMode, ProfileId,
-    ResourceBounds, RootKind, StorageContract, BCS2_HEADER_LEN, BCS2_MAGIC,
+    encode_generational_dataset, raw_content_id, raw_storage_id, Bcs2Error, Bcs2View, FrameKind,
+    FrameView, PrivacyMode, ProfileId, ResourceBounds, RootKind, StorageContract, BCS2_HEADER_LEN,
+    BCS2_MAGIC,
 };

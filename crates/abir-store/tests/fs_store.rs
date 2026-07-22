@@ -1,5 +1,8 @@
 use abir::{ContentId, DatasetDraft, DatasetTag, ObjectId, ValidationLimits};
-use abir_bcs::{encode_dataset, encode_dataset_with_references, ProfileId, ResourceBounds};
+use abir_bcs::{
+    encode_blob, encode_dataset, encode_dataset_with_references, BlobView, ProfileId,
+    ResourceBounds,
+};
 use abir_store::{FsAbirStore, StoreError};
 
 fn artifact(seed: u8, references: impl IntoIterator<Item = ContentId>) -> Vec<u8> {
@@ -170,4 +173,28 @@ fn filesystem_store_exports_and_imports_portable_closure() {
     let reopened =
         FsAbirStore::open(destination_directory.path(), 0, ResourceBounds::default()).unwrap();
     assert_eq!(reopened.object_count(), 2);
+}
+
+#[test]
+fn filesystem_store_preserves_zero_copy_blob_payload_after_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = FsAbirStore::open(directory.path(), 0, ResourceBounds::default()).unwrap();
+    let blob = encode_blob(
+        b"disk image",
+        "application/octet-stream",
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let (content, storage) = store.insert(&blob).unwrap();
+    drop(store);
+
+    let reopened = FsAbirStore::open(directory.path(), 0, ResourceBounds::default()).unwrap();
+    let lease = reopened.lease_storage(storage).unwrap();
+    assert_eq!(lease.content_id(), content);
+    assert_eq!(
+        BlobView::parse(lease.bytes(), 0, ResourceBounds::default())
+            .unwrap()
+            .bytes(),
+        b"disk image"
+    );
 }

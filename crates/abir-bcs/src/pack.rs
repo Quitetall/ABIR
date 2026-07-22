@@ -1,5 +1,7 @@
 use crate::wire::{get_u64, put_u32, put_u64, INDEX_ENTRY_LEN, INDEX_LEN, INDEX_MAGIC};
-use crate::{Bcs2Error, Bcs2View, PrivacyMode, ResourceBounds, StorageContract, BCS2_HEADER_LEN};
+use crate::{
+    Bcs2Error, Bcs2View, FrameKind, PrivacyMode, ResourceBounds, StorageContract, BCS2_HEADER_LEN,
+};
 use abir::{ContentId, StorageId};
 use alloc::collections::BTreeMap;
 use alloc::{vec, vec::Vec};
@@ -30,7 +32,17 @@ pub fn repack_with_frames(
     if !root.profile().is_portable() {
         return Err(Bcs2Error::ProfileNotPortable);
     }
+    if root
+        .frames()
+        .iter()
+        .any(|frame| frame.kind() == FrameKind::EmbeddedBcs2)
+    {
+        return Err(Bcs2Error::DuplicateFrame);
+    }
     if !root.frames().is_empty() {
+        if embedded_objects.is_empty() && root.references().is_empty() {
+            return Ok(root_bytes.to_vec());
+        }
         return Err(Bcs2Error::DuplicateFrame);
     }
     if embedded_objects.len() > root.bounds().max_index_entries as usize {
@@ -43,7 +55,12 @@ pub fn repack_with_frames(
             return Err(Bcs2Error::BoundsExceeded);
         }
         let view = Bcs2View::parse(bytes, supported_capabilities, accepted_bounds)?;
-        if !view.frames().is_empty() || view.root_content_id() == root.root_content_id() {
+        if view
+            .frames()
+            .iter()
+            .any(|frame| frame.kind() == FrameKind::EmbeddedBcs2)
+            || view.root_content_id() == root.root_content_id()
+        {
             return Err(Bcs2Error::DuplicateFrame);
         }
         let item = Embedded {

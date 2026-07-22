@@ -75,12 +75,14 @@ the little-endian frame count, bytes 12–15 are zero, and bytes 16–47 are the
 BLAKE3-256 catalog digest. Non-empty indexes append 128-byte entries sorted
 strictly by logical object `ContentId`. Entry bytes 0–31 contain `ContentId`,
 32–63 contain `StorageId`, 64–71 contain the frame offset, 72–79 contain frame
-length, byte 80 is frame kind (1 is embedded BCS2), byte 81 is flags, bytes
+length, byte 80 is frame kind (1 is embedded BCS2; 2 is a raw blob), byte 81 is flags, bytes
 82–95 are zero, and bytes 96–127 contain the raw BLAKE3-256 frame digest. Frame
 payloads occur contiguously between catalog and index in entry order. Readers
-verify both digests, recompute `StorageId`, parse each embedded BCS2 artifact,
-and require its root `ContentId` to equal the entry. Nested packs are forbidden
-in generation 2 so verification depth remains bounded.
+verify both digests and recompute kind-specific identities. Embedded BCS2 frames
+are parsed and their root `ContentId` must equal the entry. Raw frames use
+domain-separated BLAKE3-256 logical and physical identities and may be empty.
+An embedded BCS2 artifact may contain raw frames but cannot contain another
+embedded BCS2 frame; thus generation-2 verification depth remains bounded.
 
 Profile identifiers reserve their high 16 bits for the family: 1 is LML, 2 is
 LMQ, 3 is training, 4 is stream, and 5 is forensic. The low 16 bits identify a
@@ -161,6 +163,13 @@ xattrs, links, sparse extents, flags, and special-node declarations.
 ForensicImage carries an exact image payload. Unsafe materialization requires a
 sandboxed restore operation. Exact restore fails if required metadata cannot be
 reproduced.
+
+A forensic image or exact source-file payload is a Blob-root BCS2 artifact under
+`bcs.forensic.image.v1`. Its canonical semantic JSON records raw content ID,
+byte length, and a restricted ASCII media type; its single kind-2 frame carries
+the exact bytes zero-copy. The Blob root `ContentId` domain-separates and hashes
+media type, length, and raw content ID, preventing metadata relabeling. Empty
+files remain representable as zero-length raw frames.
 
 ## Canonicality and failure
 

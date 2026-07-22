@@ -1,6 +1,7 @@
 use abir::{DatasetDraft, DatasetTag, ObjectId, ValidationLimits};
 use abir_bcs::{
-    encode_dataset, encode_dataset_with_references, Bcs2View, ProfileId, ResourceBounds,
+    encode_blob, encode_dataset, encode_dataset_with_references, Bcs2View, BlobView, ProfileId,
+    ResourceBounds,
 };
 use abir_store::{AbirStore, StoreError};
 use std::sync::Arc;
@@ -162,4 +163,32 @@ fn portable_import_rejects_missing_frames_before_publication() {
         Err(StoreError::IncompletePortableBundle(child_id))
     );
     assert_eq!(store.object_count(), 0);
+}
+
+#[test]
+fn self_contained_blob_round_trips_through_portable_store_api() {
+    let blob = encode_blob(
+        b"source image",
+        "application/octet-stream",
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let mut source = AbirStore::default();
+    let (content, _) = source
+        .insert_bcs2(Arc::from(blob), 0, ResourceBounds::default())
+        .unwrap();
+    let portable = source
+        .export_portable(content, 0, ResourceBounds::default())
+        .unwrap();
+    let mut destination = AbirStore::default();
+    destination
+        .import_portable(Arc::from(portable), 0, ResourceBounds::default())
+        .unwrap();
+    let lease = destination.lease(content).unwrap();
+    assert_eq!(
+        BlobView::parse(lease.bytes(), 0, ResourceBounds::default())
+            .unwrap()
+            .bytes(),
+        b"source image"
+    );
 }

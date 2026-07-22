@@ -14,6 +14,8 @@ const WIRE_MAJOR: u16 = 2;
 const WIRE_MINOR: u16 = 0;
 const SEMANTIC_GENERATION: u32 = 1;
 const STORAGE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.storage\0";
+const RAW_CONTENT_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.raw-content\0";
+const RAW_STORAGE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.raw-storage\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -418,12 +420,23 @@ pub struct Bcs2View<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FrameView<'a> {
+    kind: FrameKind,
     content_id: ContentId,
     storage_id: StorageId,
     bytes: &'a [u8],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FrameKind {
+    EmbeddedBcs2 = 1,
+    RawBlob = 2,
+}
+
 impl<'a> FrameView<'a> {
+    pub const fn kind(&self) -> FrameKind {
+        self.kind
+    }
     pub const fn content_id(&self) -> ContentId {
         self.content_id
     }
@@ -448,7 +461,7 @@ impl<'a> Bcs2View<'a> {
         bytes: &'a [u8],
         supported_capabilities: u64,
         accepted_bounds: ResourceBounds,
-        allow_frames: bool,
+        allow_embedded_frames: bool,
     ) -> Result<Self, Bcs2Error> {
         if bytes.len() < BCS2_HEADER_LEN + INDEX_LEN {
             return Err(Bcs2Error::TooShort);
@@ -608,9 +621,6 @@ impl<'a> Bcs2View<'a> {
         if frame_count > bounds.max_index_entries as usize {
             return Err(Bcs2Error::BoundsExceeded);
         }
-        if frame_count != 0 && !allow_frames {
-            return Err(Bcs2Error::DuplicateFrame);
-        }
         let expected_index_len = INDEX_LEN
             .checked_add(
                 frame_count
@@ -626,8 +636,16 @@ impl<'a> Bcs2View<'a> {
         for entry_number in 0..frame_count {
             let entry_offset = INDEX_LEN + entry_number * INDEX_ENTRY_LEN;
             let entry = &index[entry_offset..entry_offset + INDEX_ENTRY_LEN];
-            if entry[80] != 1 || entry[81] != 0 || entry[82..96].iter().any(|byte| *byte != 0) {
+            let frame_kind = match entry[80] {
+                1 => FrameKind::EmbeddedBcs2,
+                2 => FrameKind::RawBlob,
+                _ => return Err(Bcs2Error::CatalogCorrupt),
+            };
+            if entry[81] != 0 || entry[82..96].iter().any(|byte| *byte != 0) {
                 return Err(Bcs2Error::CatalogCorrupt);
+            }
+            if frame_kind == FrameKind::EmbeddedBcs2 && !allow_embedded_frames {
+                return Err(Bcs2Error::DuplicateFrame);
             }
             let content_id = content_id_at(entry, 0)?;
             if frames
@@ -640,7 +658,7 @@ impl<'a> Bcs2View<'a> {
             let frame_offset = to_usize(get_u64(entry, 64)?)?;
             let frame_len = to_usize(get_u64(entry, 72)?)?;
             if frame_offset != expected_frame_offset
-                || frame_len == 0
+                || (frame_kind == FrameKind::EmbeddedBcs2 && frame_len == 0)
                 || frame_len > bounds.max_frame_bytes as usize
             {
                 return Err(Bcs2Error::NonCanonicalLayout);
@@ -654,15 +672,26 @@ impl<'a> Bcs2View<'a> {
             if blake3::hash(frame).as_bytes() != &entry[96..128] {
                 return Err(Bcs2Error::FrameDigestMismatch);
             }
-            if storage_id_for(frame) != storage_id {
-                return Err(Bcs2Error::FrameIdentityMismatch);
-            }
-            let embedded =
-                Self::parse_inner(frame, supported_capabilities, accepted_bounds, false)?;
-            if embedded.root_content_id != content_id || embedded.storage_id() != storage_id {
-                return Err(Bcs2Error::FrameIdentityMismatch);
+            match frame_kind {
+                FrameKind::EmbeddedBcs2 => {
+                    if storage_id_for(frame) != storage_id {
+                        return Err(Bcs2Error::FrameIdentityMismatch);
+                    }
+                    let embedded =
+                        Self::parse_inner(frame, supported_capabilities, accepted_bounds, false)?;
+                    if embedded.root_content_id != content_id || embedded.storage_id() != storage_id
+                    {
+                        return Err(Bcs2Error::FrameIdentityMismatch);
+                    }
+                }
+                FrameKind::RawBlob => {
+                    if raw_content_id(frame) != content_id || raw_storage_id(frame) != storage_id {
+                        return Err(Bcs2Error::FrameIdentityMismatch);
+                    }
+                }
             }
             frames.push(FrameView {
+                kind: frame_kind,
                 content_id,
                 storage_id,
                 bytes: frame,
@@ -784,6 +813,20 @@ pub(crate) fn storage_id_for(bytes: &[u8]) -> StorageId {
     StorageId::from_bytes(*hasher.finalize().as_bytes())
 }
 
+pub fn raw_content_id(bytes: &[u8]) -> ContentId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(RAW_CONTENT_HASH_DOMAIN);
+    hasher.update(bytes);
+    ContentId::from_bytes(*hasher.finalize().as_bytes())
+}
+
+pub fn raw_storage_id(bytes: &[u8]) -> StorageId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(RAW_STORAGE_HASH_DOMAIN);
+    hasher.update(bytes);
+    StorageId::from_bytes(*hasher.finalize().as_bytes())
+}
+
 fn get_u16(bytes: &[u8], offset: usize) -> Result<u16, Bcs2Error> {
     let value = bytes.get(offset..offset + 2).ok_or(Bcs2Error::TooShort)?;
     Ok(u16::from_le_bytes([value[0], value[1]]))
@@ -801,7 +844,7 @@ pub(crate) fn get_u64(bytes: &[u8], offset: usize) -> Result<u64, Bcs2Error> {
     ]))
 }
 
-fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+pub(crate) fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 

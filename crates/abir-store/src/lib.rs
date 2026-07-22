@@ -1,5 +1,5 @@
 use abir::{ContentId, StorageId};
-use abir_bcs::{repack_with_frames, Bcs2Error, Bcs2View, ResourceBounds};
+use abir_bcs::{repack_with_frames, Bcs2Error, Bcs2View, FrameKind, ResourceBounds};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -259,8 +259,12 @@ pub(crate) fn validate_portable_bundle(
     if !view.profile().is_portable() {
         return Err(StoreError::Wire(Bcs2Error::ProfileNotPortable));
     }
-    let frame_ids: BTreeSet<_> = view
+    let embedded_frames: Vec<_> = view
         .frames()
+        .iter()
+        .filter(|frame| frame.kind() == FrameKind::EmbeddedBcs2)
+        .collect();
+    let frame_ids: BTreeSet<_> = embedded_frames
         .iter()
         .map(|frame| frame.content_id())
         .collect();
@@ -270,8 +274,7 @@ pub(crate) fn validate_portable_bundle(
         if !reached.insert(content_id) {
             continue;
         }
-        let frame = view
-            .frames()
+        let frame = embedded_frames
             .iter()
             .find(|frame| frame.content_id() == content_id)
             .ok_or(StoreError::IncompletePortableBundle(content_id))?;
@@ -281,8 +284,7 @@ pub(crate) fn validate_portable_bundle(
     if let Some(extra) = frame_ids.difference(&reached).next() {
         return Err(StoreError::ExtraPortableFrame(*extra));
     }
-    let frame_bytes = view
-        .frames()
+    let frame_bytes = embedded_frames
         .iter()
         .map(|frame| Arc::<[u8]>::from(frame.bytes()))
         .collect();
