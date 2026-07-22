@@ -566,6 +566,11 @@ impl PayloadAccess for FsAbirStore {
             .by_storage
             .get(&storage_id)
             .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let range = meta
+            .payloads
+            .get(&descriptor.content_id())
+            .cloned()
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
         let lock = self
             .shared_lock()
             .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
@@ -573,19 +578,10 @@ impl PayloadAccess for FsAbirStore {
             .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
         let mmap = unsafe { MmapOptions::new().map(&file) }
             .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
-        let view = Bcs2View::parse(&mmap, self.supported_capabilities, self.limits)
-            .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
-        let frame = view
-            .frames()
-            .iter()
-            .find(|frame| {
-                frame.kind() == FrameKind::SemanticPayload
-                    && frame.content_id() == descriptor.content_id()
-            })
+        let payload = mmap
+            .get(range.clone())
             .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
-        let start = frame.bytes().as_ptr() as usize - mmap.as_ptr() as usize;
-        let range = start..start + frame.bytes().len();
-        if let Err(error) = verify_payload_content(descriptor, &mmap[range.clone()]) {
+        if let Err(error) = verify_payload_content(descriptor, payload) {
             return match error {
                 abir::PayloadVerificationError::LengthMismatch { expected, actual } => {
                     Err(PayloadAccessError::LengthMismatch { expected, actual })

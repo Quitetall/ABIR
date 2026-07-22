@@ -35,6 +35,8 @@ pub fn encode_dataset_with_payloads<A: PayloadAccess>(
             element: descriptor.element(),
             bytes: lease.bytes().to_vec(),
         };
+        // `insert` yields the displaced entry while `get` yields the entry just
+        // written, so equal identities cannot hide conflicting bytes or types.
         if let Some(previous) = payloads.insert(descriptor.content_id(), payload) {
             let current = payloads
                 .get(&descriptor.content_id())
