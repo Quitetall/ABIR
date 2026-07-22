@@ -33,6 +33,23 @@ fn profile_bundle_carries_canonical_catalog_and_typed_payloads() {
     assert_eq!(view.frames()[0].element(), Some(ElementType::I16));
 }
 
+#[test]
+fn profile_bundle_deduplicates_identical_payload_frames() {
+    let row = [9_u8, 8, 7, 6];
+    let frame = SemanticPayloadFrame::new(ElementType::I16, &row);
+    let encoded = encode_semantic_bundle(
+        abir::ContentId::from_bytes([78; 32]),
+        br#"{"schema":"abir.training.snapshot.v1"}"#,
+        ProfileId::TRAINING_COMPACT_V1,
+        &[frame, frame],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let view = Bcs2View::parse(&encoded, 0, ResourceBounds::default()).unwrap();
+    assert_eq!(view.frames().len(), 1);
+    assert_eq!(view.frames()[0].bytes(), row);
+}
+
 fn fixture() -> (abir::AbirDataset, [u8; 8], abir::ContentId) {
     let bytes = [0_u8, 1, 2, 3, 4, 5, 6, 7];
     let content_id = payload_content_id(ElementType::I16, &bytes);

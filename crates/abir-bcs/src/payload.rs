@@ -49,7 +49,7 @@ pub fn encode_dataset_with_payloads<A: PayloadAccess>(
     profile: ProfileId,
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
-    let mut payloads = BTreeMap::new();
+    let mut payloads = BTreeMap::<ContentId, SemanticPayload>::new();
     for descriptor in dataset.atoms().iter().filter_map(abir::Atom::payload) {
         let lease = access
             .lease(descriptor)
@@ -60,15 +60,12 @@ pub fn encode_dataset_with_payloads<A: PayloadAccess>(
             element: descriptor.element(),
             bytes: lease.bytes().to_vec(),
         };
-        // `insert` yields the displaced entry while `get` yields the entry just
-        // written, so equal identities cannot hide conflicting bytes or types.
-        if let Some(previous) = payloads.insert(descriptor.content_id(), payload) {
-            let current = payloads
-                .get(&descriptor.content_id())
-                .ok_or(Bcs2Error::FrameIdentityMismatch)?;
-            if previous.element != current.element || previous.bytes != current.bytes {
+        if let Some(previous) = payloads.get(&descriptor.content_id()) {
+            if previous.element != payload.element || previous.bytes != payload.bytes {
                 return Err(Bcs2Error::DuplicateFrame);
             }
+        } else {
+            payloads.insert(descriptor.content_id(), payload);
         }
     }
     let expected: BTreeSet<_> = dataset.payload_content_ids().into_iter().collect();
@@ -98,20 +95,19 @@ pub fn encode_semantic_bundle(
     frames: &[SemanticPayloadFrame<'_>],
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
-    let mut payloads = BTreeMap::new();
+    let mut payloads = BTreeMap::<ContentId, SemanticPayload>::new();
     for frame in frames {
         let content_id = frame.content_id();
         let payload = SemanticPayload {
             element: frame.element(),
             bytes: frame.bytes().to_vec(),
         };
-        if let Some(previous) = payloads.insert(content_id, payload) {
-            let current = payloads
-                .get(&content_id)
-                .ok_or(Bcs2Error::FrameIdentityMismatch)?;
-            if previous.element != current.element || previous.bytes != current.bytes {
+        if let Some(previous) = payloads.get(&content_id) {
+            if previous.element != payload.element || previous.bytes != payload.bytes {
                 return Err(Bcs2Error::DuplicateFrame);
             }
+        } else {
+            payloads.insert(content_id, payload);
         }
     }
     let base = encode_raw_root(
