@@ -4,7 +4,14 @@
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
+mod generation;
+#[cfg(feature = "alloc")]
 mod wire;
+
+#[cfg(feature = "alloc")]
+pub use generation::{
+    encode_generation_footer, GenerationChain, GenerationFooter, GENERATION_FOOTER_LEN,
+};
 
 #[cfg(feature = "alloc")]
 pub use wire::{

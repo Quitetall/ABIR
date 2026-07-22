@@ -95,6 +95,16 @@ the same logical root.
 An external pin or signature is required to prove which footer was latest;
 internal chaining alone cannot disprove tail truncation.
 
+Generation footer is 160 bytes. Offsets 0–7 contain `BCS2GEN\0`; 8–11 contain
+wire major/minor; 12–15 contain footer length; 16–23 generation number; 24–31
+previous-footer offset; 32–63 previous-footer digest; 64–79 catalog offset and
+length; 80–95 index offset and length; 96–127 root `ContentId`; and 128–159
+generation digest. Digest is domain-separated BLAKE3-256 over first 128 footer
+bytes followed by referenced catalog and index bytes. Generation zero requires
+zero previous offset/digest. Later generations require both and decrement
+without gaps while traversing backward. Verifiers take an external latest
+offset and maximum generation count.
+
 ## Store and closure
 
 `AbirStore` indexes loose objects and packs by both IDs, leases payloads, and
