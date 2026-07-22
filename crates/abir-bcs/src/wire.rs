@@ -391,10 +391,11 @@ impl<'a> Bcs2View<'a> {
             return Err(Bcs2Error::CatalogCorrupt);
         }
         let embedded_root = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
-        if embedded_root != root_content_id.as_bytes()
-            || decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 3
-        {
+        if embedded_root != root_content_id.as_bytes() {
             return Err(Bcs2Error::RootIdentityMismatch);
+        }
+        if decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 3 {
+            return Err(Bcs2Error::CatalogCorrupt);
         }
         let reference_count = decoder
             .array()
