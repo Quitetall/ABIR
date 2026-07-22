@@ -3,6 +3,9 @@ use abir_bcs::{Bcs2Error, Bcs2View, ResourceBounds};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod fs;
+pub use fs::{FsAbirStore, MmapLease};
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum StoreError {
     Wire(Bcs2Error),
@@ -10,6 +13,22 @@ pub enum StoreError {
     MissingStorage(StorageId),
     ConflictingStorageIdentity(StorageId),
     IncompleteClosure(ContentId),
+    ConflictingClosure(ContentId),
+    Io {
+        operation: &'static str,
+        kind: std::io::ErrorKind,
+    },
+    InvalidObjectName,
+    StoreBusy,
+}
+
+impl StoreError {
+    fn io(operation: &'static str, error: std::io::Error) -> Self {
+        Self::Io {
+            operation,
+            kind: error.kind(),
+        }
+    }
 }
 
 impl From<Bcs2Error> for StoreError {
@@ -64,16 +83,27 @@ impl AbirStore {
         let view = Bcs2View::parse(&bytes, supported_capabilities, limits)?;
         let content_id = view.root_content_id();
         let storage_id = view.storage_id();
+        let references: BTreeSet<_> = view.references().iter().copied().collect();
         if let Some(existing) = self.by_storage.get(&storage_id) {
             if existing.bytes.as_ref() != bytes.as_ref() || existing.content_id != content_id {
                 return Err(StoreError::ConflictingStorageIdentity(storage_id));
             }
             return Ok((content_id, storage_id));
         }
+        if let Some(existing_storage) = self.by_content.get(&content_id).and_then(|ids| ids.first())
+        {
+            let existing = self
+                .by_storage
+                .get(existing_storage)
+                .ok_or(StoreError::MissingStorage(*existing_storage))?;
+            if existing.references != references {
+                return Err(StoreError::ConflictingClosure(content_id));
+            }
+        }
         let object = StoredObject {
             content_id,
             storage_id,
-            references: view.references().iter().copied().collect(),
+            references,
             bytes,
         };
         self.by_storage.insert(storage_id, object);

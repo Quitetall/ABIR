@@ -97,3 +97,19 @@ fn leases_are_zero_copy_and_hold_unpinned_storage_alive() {
         Err(StoreError::MissingObject(id)) if id == content
     ));
 }
+
+#[test]
+fn physical_variants_cannot_redefine_logical_closure() {
+    let mut store = AbirStore::default();
+    let plain = artifact(7, ProfileId::LML_LOSSLESS_V1);
+    let foreign = abir::ContentId::from_bytes([77; 32]);
+    let conflicting = artifact_with_references(7, ProfileId::TRAINING_COMPACT_V1, [foreign]);
+    let (content, _) = store
+        .insert_bcs2(plain, 0, ResourceBounds::default())
+        .unwrap();
+    assert_eq!(
+        store.insert_bcs2(conflicting, 0, ResourceBounds::default()),
+        Err(StoreError::ConflictingClosure(content))
+    );
+    assert_eq!(store.physical_variants(content), 1);
+}

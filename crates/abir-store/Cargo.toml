@@ -8,6 +8,11 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 abir = { path = "../abir", version = "0.1.0" }
 abir-bcs = { path = "../abir-bcs", version = "0.1.0" }
+memmap2 = "0.9"
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = "=3.15.0"
 
 [lib]
 name = "abir_store"
