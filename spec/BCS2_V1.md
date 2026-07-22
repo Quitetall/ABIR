@@ -164,6 +164,34 @@ ForensicImage carries an exact image payload. Unsafe materialization requires a
 sandboxed restore operation. Exact restore fails if required metadata cannot be
 reproduced.
 
+A forensic tree is a Bundle-root artifact under `bcs.forensic.tree.v1`. Its
+canonical semantic JSON identifies a single raw metadata frame, entry count,
+and metadata generation. The metadata frame is deterministic CBOR: a fixed
+three-element array containing version 1, a bounded platform identifier, and a
+path-sorted entry array. Every entry is a fixed 15-element array containing, in
+order, relative path bytes, node type, mode, optional uid/gid, four optional
+nanosecond timestamps (access, modification, status-change, birth), optional
+ACL bytes, sorted xattrs, optional hardlink and symlink targets, complete sparse
+extent map, flags, optional device numbers, optional unknown-node declaration,
+optional raw payload ContentId, and optional payload length. Indefinite CBOR,
+non-minimal integer encodings, duplicate paths or xattrs, unsafe relative paths,
+inconsistent hardlink metadata, incomplete sparse maps, and fields forbidden by
+the declared node type are noncanonical.
+
+Regular-file bytes are kind-2 raw frames. Equal file contents are stored once;
+the metadata refers to the same ContentId from every path. The Bundle root
+ContentId domain-separates and hashes the metadata-frame ContentId, so all
+observable metadata and file identities contribute to logical identity. A
+reader exposes file frames as borrowed slices. Tree artifacts contain exactly
+the metadata and referenced file frames: missing or unreachable extra frames
+fail closed.
+
+Restore is a separate, explicit operation whose destination must already be an
+empty real directory. Paths and link targets are preflighted before the first
+write. Portable restore reports every intentionally omitted attribute. Exact
+restore first rejects platform mismatch, unsupported metadata, unsafe links,
+and unsupported node types; it never silently weakens an exact request.
+
 A forensic image or exact source-file payload is a Blob-root BCS2 artifact under
 `bcs.forensic.image.v1`. Its canonical semantic JSON records raw content ID,
 byte length, and a restricted ASCII media type; its single kind-2 frame carries

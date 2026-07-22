@@ -6,17 +6,27 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 mod blob;
 #[cfg(feature = "alloc")]
+mod forensic;
+#[cfg(feature = "alloc")]
 mod generation;
 #[cfg(feature = "alloc")]
 mod pack;
 #[cfg(feature = "alloc")]
 mod privacy;
+#[cfg(feature = "std")]
+mod restore;
 #[cfg(feature = "alloc")]
 mod wire;
 
 #[cfg(feature = "alloc")]
 pub use generation::{
     encode_generation_footer, GenerationChain, GenerationFooter, GENERATION_FOOTER_LEN,
+};
+
+#[cfg(feature = "alloc")]
+pub use forensic::{
+    encode_forensic_tree, ForensicEntry, ForensicEntryMetadata, ForensicFileType,
+    ForensicTimestamp, ForensicTree, ForensicTreeView, ForensicXattr, SparseExtent,
 };
 
 #[cfg(feature = "alloc")]
@@ -27,6 +37,11 @@ pub use pack::repack_with_frames;
 
 #[cfg(feature = "alloc")]
 pub use privacy::{decrypt_bcs2, encrypt_bcs2, EncryptedEnvelopeView, CAP_XCHACHA20_POLY1305};
+
+#[cfg(feature = "std")]
+pub use restore::{
+    restore_forensic_tree_sandboxed, RestoreError, RestoreMode, RestoreOmission, RestoreReport,
+};
 
 #[cfg(feature = "alloc")]
 pub use wire::{

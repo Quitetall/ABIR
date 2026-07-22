@@ -1,4 +1,5 @@
 use abir::{canonical_debug_json, logical_content_id, AbirDataset, ContentId, StorageId};
+use alloc::collections::BTreeMap;
 use alloc::{vec, vec::Vec};
 use core::fmt;
 use minicbor::{Decoder, Encoder};
@@ -825,6 +826,126 @@ pub fn raw_storage_id(bytes: &[u8]) -> StorageId {
     hasher.update(RAW_STORAGE_HASH_DOMAIN);
     hasher.update(bytes);
     StorageId::from_bytes(*hasher.finalize().as_bytes())
+}
+
+pub(crate) fn encode_raw_root<'a>(
+    root_kind: RootKind,
+    profile: ProfileId,
+    root_content_id: ContentId,
+    semantic_json: &[u8],
+    raw_frames: impl IntoIterator<Item = &'a [u8]>,
+    bounds: ResourceBounds,
+) -> Result<Vec<u8>, Bcs2Error> {
+    if !profile.accepts(root_kind) {
+        return Err(Bcs2Error::ProfileRootMismatch);
+    }
+    if bounds.max_catalog_bytes == 0
+        || bounds.max_index_entries == 0
+        || bounds.max_frame_bytes == 0
+        || bounds.max_generations == 0
+        || semantic_json.len() > bounds.max_catalog_bytes as usize
+    {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
+
+    let mut frames = BTreeMap::<ContentId, &'a [u8]>::new();
+    for frame in raw_frames {
+        if frame.len() > bounds.max_frame_bytes as usize {
+            return Err(Bcs2Error::BoundsExceeded);
+        }
+        let content_id = raw_content_id(frame);
+        if let Some(previous) = frames.insert(content_id, frame) {
+            if previous != frame {
+                return Err(Bcs2Error::DuplicateFrame);
+            }
+        }
+    }
+    if frames.len() > bounds.max_index_entries as usize {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
+
+    let mut encoder = Encoder::new(Vec::new());
+    encoder
+        .map(3)
+        .and_then(|encoder| encoder.u8(1))
+        .and_then(|encoder| encoder.bytes(semantic_json))
+        .and_then(|encoder| encoder.u8(2))
+        .and_then(|encoder| encoder.bytes(root_content_id.as_bytes()))
+        .and_then(|encoder| encoder.u8(3))
+        .and_then(|encoder| encoder.array(0))
+        .map_err(|_| Bcs2Error::SemanticEncoding)?;
+    let catalog = encoder.into_writer();
+    if catalog.len() > bounds.max_catalog_bytes as usize {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
+
+    let frame_bytes = frames.values().try_fold(0_usize, |total, frame| {
+        total
+            .checked_add(frame.len())
+            .ok_or(Bcs2Error::BoundsExceeded)
+    })?;
+    let index_len = INDEX_LEN
+        .checked_add(
+            frames
+                .len()
+                .checked_mul(INDEX_ENTRY_LEN)
+                .ok_or(Bcs2Error::BoundsExceeded)?,
+        )
+        .ok_or(Bcs2Error::BoundsExceeded)?;
+    let frame_offset = BCS2_HEADER_LEN
+        .checked_add(catalog.len())
+        .ok_or(Bcs2Error::BoundsExceeded)?;
+    let index_offset = frame_offset
+        .checked_add(frame_bytes)
+        .ok_or(Bcs2Error::BoundsExceeded)?;
+    let total = index_offset
+        .checked_add(index_len)
+        .ok_or(Bcs2Error::BoundsExceeded)?;
+    let mut bytes = vec![0_u8; total];
+    bytes[..8].copy_from_slice(&BCS2_MAGIC);
+    put_u16(&mut bytes, 8, WIRE_MAJOR);
+    put_u16(&mut bytes, 10, WIRE_MINOR);
+    put_u32(&mut bytes, 12, BCS2_HEADER_LEN as u32);
+    put_u32(&mut bytes, 16, profile.get());
+    put_u32(&mut bytes, 20, SEMANTIC_GENERATION);
+    bytes[40] = root_kind as u8;
+    bytes[41] = StorageContract::SealedImmutable as u8;
+    bytes[42] = PrivacyMode::Plaintext as u8;
+    bytes[43] = 1;
+    put_u32(&mut bytes, 44, bounds.max_catalog_bytes);
+    put_u32(&mut bytes, 48, bounds.max_index_entries);
+    put_u32(&mut bytes, 52, bounds.max_frame_bytes);
+    put_u64(&mut bytes, 56, BCS2_HEADER_LEN as u64);
+    put_u64(&mut bytes, 64, catalog.len() as u64);
+    put_u64(&mut bytes, 72, index_offset as u64);
+    put_u64(&mut bytes, 80, index_len as u64);
+    bytes[96..128].copy_from_slice(root_content_id.as_bytes());
+    bytes[BCS2_HEADER_LEN..frame_offset].copy_from_slice(&catalog);
+
+    bytes[index_offset..index_offset + 8].copy_from_slice(&INDEX_MAGIC);
+    put_u32(
+        &mut bytes,
+        index_offset + 8,
+        u32::try_from(frames.len()).map_err(|_| Bcs2Error::BoundsExceeded)?,
+    );
+    bytes[index_offset + 16..index_offset + 48].copy_from_slice(blake3::hash(&catalog).as_bytes());
+    let mut next_frame_offset = frame_offset;
+    for (entry_number, (content_id, frame)) in frames.iter().enumerate() {
+        let frame_end = next_frame_offset
+            .checked_add(frame.len())
+            .ok_or(Bcs2Error::BoundsExceeded)?;
+        bytes[next_frame_offset..frame_end].copy_from_slice(frame);
+        let entry = index_offset + INDEX_LEN + entry_number * INDEX_ENTRY_LEN;
+        bytes[entry..entry + 32].copy_from_slice(content_id.as_bytes());
+        bytes[entry + 32..entry + 64].copy_from_slice(raw_storage_id(frame).as_bytes());
+        put_u64(&mut bytes, entry + 64, next_frame_offset as u64);
+        put_u64(&mut bytes, entry + 72, frame.len() as u64);
+        bytes[entry + 80] = FrameKind::RawBlob as u8;
+        bytes[entry + 96..entry + 128].copy_from_slice(blake3::hash(frame).as_bytes());
+        next_frame_offset = frame_end;
+    }
+    Bcs2View::parse(&bytes, 0, bounds)?;
+    Ok(bytes)
 }
 
 fn get_u16(bytes: &[u8], offset: usize) -> Result<u16, Bcs2Error> {
