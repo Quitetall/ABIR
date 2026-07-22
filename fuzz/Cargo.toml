@@ -9,11 +9,19 @@ cargo-fuzz = true
 
 [dependencies]
 abir = { path = "../crates/abir" }
+abir-bcs = { path = "../crates/abir-bcs" }
 libfuzzer-sys = "0.4"
 
 [[bin]]
 name = "dataset_draft"
 path = "fuzz_targets/dataset_draft.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bcs2_wire"
+path = "fuzz_targets/bcs2_wire.rs"
 test = false
 doc = false
 bench = false

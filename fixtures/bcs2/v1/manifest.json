@@ -1,0 +1,37 @@
+{
+  "generated_by": "cargo run -p abir-conformance --bin generate_bcs2_vectors -- fixtures/bcs2/v1",
+  "schema_version": 1,
+  "vectors": [
+    {
+      "bytes": 716,
+      "name": "dataset.bcs2",
+      "root_content_id": "661adbbd0f25dc3cc16167629a7de8e8be9aac79d72b6656a807d2a3763a5f14",
+      "sha256": "d602e5b6f2175382e56427582d59ee779e9bc7ba6cd2e66d5c7289d943198244"
+    },
+    {
+      "bytes": 508,
+      "name": "forensic-image.bcs2",
+      "root_content_id": "5bf09eef4ee3c7204641f2ac806c500aab494f5ba5db1669dc429bb81664f0e3",
+      "sha256": "f458b0a873acbf8310b3181a7f6b181dca16f5b4310f04ed99129da7895ab803"
+    },
+    {
+      "bytes": 825,
+      "name": "forensic-tree.bcs2",
+      "root_content_id": "7730fd61eaae1557725283ea7e3f4b8e654afb998969bbb3637e315e5a84dbac",
+      "sha256": "df927d25ff322ba3bf4ab7c90f86be3dcf080bf0f4ba06f3e171937a9c013634"
+    },
+    {
+      "bytes": 1624,
+      "name": "generational-dataset.bcs2",
+      "root_content_id": "6125861d76449cc4387e2120e144d20b33733a5ae194fff242d2f03be9f4e3e8",
+      "sha256": "81c51792340859cfbd51fddf50e8040133520b101cf3a117f1d50d9ad6887898"
+    },
+    {
+      "bytes": 884,
+      "name": "encrypted-discoverable.bcs2",
+      "root_content_id": "661adbbd0f25dc3cc16167629a7de8e8be9aac79d72b6656a807d2a3763a5f14",
+      "sha256": "45a57a6fc151626e27edf508964feb31ba84cb90be70117efa137156c06dd22a"
+    }
+  ],
+  "wire_major": 2
+}

@@ -26,6 +26,7 @@ name = "abir-conformance"
 version = "0.1.0"
 dependencies = [
  "abir",
+ "abir-bcs",
  "serde_json",
  "sha2",
 ]

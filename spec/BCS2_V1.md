@@ -14,6 +14,8 @@ This prose, `registries/bcs2-profiles-v1.json`,
 `schema/bcs2-crypto-v1.schema.json`, binary-layout fixtures, and
 `spec/bcs2-v1.manifest.json` jointly define generation 2. Unknown required
 capabilities fail before allocation. Retired identifiers are never reused.
+The binary-layout fixtures and their whole-artifact SHA-256 identities are
+frozen by `fixtures/bcs2/v1/manifest.json` and must regenerate byte-for-byte.
 
 ## Envelope
 
