@@ -188,6 +188,15 @@ pub fn encode_dataset(
     profile: ProfileId,
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
+    encode_dataset_with_references(dataset, profile, bounds, [])
+}
+
+pub fn encode_dataset_with_references(
+    dataset: &AbirDataset,
+    profile: ProfileId,
+    bounds: ResourceBounds,
+    references: impl IntoIterator<Item = ContentId>,
+) -> Result<Vec<u8>, Bcs2Error> {
     if bounds.max_catalog_bytes == 0 || bounds.max_index_entries == 0 || bounds.max_frame_bytes == 0
     {
         return Err(Bcs2Error::BoundsExceeded);
@@ -201,14 +210,25 @@ pub fn encode_dataset(
         return Err(Bcs2Error::BoundsExceeded);
     }
     let root_id = logical_content_id(dataset).map_err(|_| Bcs2Error::SemanticEncoding)?;
+    let references: alloc::collections::BTreeSet<_> = references.into_iter().collect();
+    if references.len() > bounds.max_index_entries as usize {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
     let mut encoder = Encoder::new(Vec::new());
     encoder
-        .map(2)
+        .map(3)
         .and_then(|encoder| encoder.u8(1))
         .and_then(|encoder| encoder.bytes(&semantic_json))
         .and_then(|encoder| encoder.u8(2))
         .and_then(|encoder| encoder.bytes(root_id.as_bytes()))
+        .and_then(|encoder| encoder.u8(3))
+        .and_then(|encoder| encoder.array(references.len() as u64))
         .map_err(|_| Bcs2Error::SemanticEncoding)?;
+    for reference in references {
+        encoder
+            .bytes(reference.as_bytes())
+            .map_err(|_| Bcs2Error::SemanticEncoding)?;
+    }
     let catalog = encoder.into_writer();
     if catalog.len() > bounds.max_catalog_bytes as usize {
         return Err(Bcs2Error::BoundsExceeded);
@@ -257,6 +277,7 @@ pub struct Bcs2View<'a> {
     bounds: ResourceBounds,
     root_content_id: ContentId,
     semantic_json: &'a [u8],
+    references: Vec<ContentId>,
 }
 
 impl<'a> Bcs2View<'a> {
@@ -360,7 +381,7 @@ impl<'a> Bcs2View<'a> {
         root_bytes.copy_from_slice(&bytes[96..128]);
         let root_content_id = ContentId::from_bytes(root_bytes);
         let mut decoder = Decoder::new(catalog);
-        if decoder.map().map_err(|_| Bcs2Error::CatalogCorrupt)? != Some(2)
+        if decoder.map().map_err(|_| Bcs2Error::CatalogCorrupt)? != Some(3)
             || decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 1
         {
             return Err(Bcs2Error::CatalogCorrupt);
@@ -370,8 +391,30 @@ impl<'a> Bcs2View<'a> {
             return Err(Bcs2Error::CatalogCorrupt);
         }
         let embedded_root = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
-        if embedded_root != root_content_id.as_bytes() || decoder.position() != catalog.len() {
+        if embedded_root != root_content_id.as_bytes()
+            || decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 3
+        {
             return Err(Bcs2Error::RootIdentityMismatch);
+        }
+        let reference_count = decoder
+            .array()
+            .map_err(|_| Bcs2Error::CatalogCorrupt)?
+            .ok_or(Bcs2Error::CatalogCorrupt)?;
+        if reference_count > bounds.max_index_entries as u64 {
+            return Err(Bcs2Error::BoundsExceeded);
+        }
+        let mut references = Vec::with_capacity(reference_count as usize);
+        for _ in 0..reference_count {
+            let encoded = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+            let bytes: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+            let reference = ContentId::from_bytes(bytes);
+            if references.last().is_some_and(|prior| prior >= &reference) {
+                return Err(Bcs2Error::CatalogCorrupt);
+            }
+            references.push(reference);
+        }
+        if decoder.position() != catalog.len() {
+            return Err(Bcs2Error::CatalogCorrupt);
         }
         Ok(Self {
             bytes,
@@ -382,6 +425,7 @@ impl<'a> Bcs2View<'a> {
             bounds,
             root_content_id,
             semantic_json,
+            references,
         })
     }
 
@@ -405,6 +449,9 @@ impl<'a> Bcs2View<'a> {
     }
     pub const fn semantic_json(&self) -> &'a [u8] {
         self.semantic_json
+    }
+    pub fn references(&self) -> &[ContentId] {
+        &self.references
     }
     pub fn storage_id(&self) -> StorageId {
         let mut hasher = blake3::Hasher::new();

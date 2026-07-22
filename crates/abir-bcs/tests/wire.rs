@@ -1,13 +1,47 @@
 use abir::{DatasetDraft, DatasetTag, ObjectId, ValidationLimits};
 use abir_bcs::{
-    encode_dataset, Bcs2Error, Bcs2View, PrivacyMode, ProfileId, ResourceBounds, RootKind,
-    StorageContract,
+    encode_dataset, encode_dataset_with_references, Bcs2Error, Bcs2View, PrivacyMode, ProfileId,
+    ResourceBounds, RootKind, StorageContract,
 };
 
 fn dataset() -> abir::AbirDataset {
     DatasetDraft::new(ObjectId::<DatasetTag>::from_bytes([7; 16]))
         .validate(ValidationLimits::default())
         .expect("valid dataset")
+}
+
+#[test]
+fn closure_references_are_canonical_storage_bytes() {
+    let dataset = dataset();
+    let lower = abir::ContentId::from_bytes([1; 32]);
+    let higher = abir::ContentId::from_bytes([2; 32]);
+    let bytes = encode_dataset_with_references(
+        &dataset,
+        ProfileId::LML_LOSSLESS_V1,
+        ResourceBounds::default(),
+        [higher, lower, higher],
+    )
+    .expect("encode references");
+    let view = Bcs2View::parse(&bytes, 0, ResourceBounds::default()).expect("parse");
+    assert_eq!(view.references(), &[lower, higher]);
+    let without_references = encode_dataset(
+        &dataset,
+        ProfileId::LML_LOSSLESS_V1,
+        ResourceBounds::default(),
+    )
+    .expect("encode empty closure");
+    assert_ne!(
+        view.storage_id(),
+        Bcs2View::parse(&without_references, 0, ResourceBounds::default())
+            .unwrap()
+            .storage_id()
+    );
+    assert_eq!(
+        view.root_content_id(),
+        Bcs2View::parse(&without_references, 0, ResourceBounds::default())
+            .unwrap()
+            .root_content_id()
+    );
 }
 
 #[test]

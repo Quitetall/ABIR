@@ -60,11 +60,14 @@ declares kind, flags, logical object identifier, payload `ContentId`, byte
 length, and payload digest. Padding bytes are zero and are excluded from logical
 identity.
 
-The generation-2 base catalog is a canonical two-entry CBOR map. Key 1 is the
+The generation-2 base catalog is a canonical three-entry CBOR map. Key 1 is the
 RFC 8785 ABIR semantic debug projection as a byte string and key 2 is the
-32-byte logical root `ContentId`. Keys occur in ascending order. This preserves
-one independently inspectable semantic projection while later registered keys
-may add native catalog tables.
+32-byte logical root `ContentId`. Key 3 is the sorted, duplicate-free array of
+32-byte reachable-object `ContentId` references. Keys occur in ascending order.
+This preserves one independently inspectable semantic projection while later
+registered keys may add native catalog tables. Closure references are catalog
+bytes and therefore contribute to `StorageId`; stores never accept out-of-band
+reachability claims.
 
 The empty frame index is 48 bytes: bytes 0–7 are `BCS2IDX\0`, bytes 8–11 are
 the little-endian frame count, bytes 12–15 are zero, and bytes 16–47 are the
