@@ -44,7 +44,7 @@ fn main() {
 
     let mut store = AbirStore::default();
     let stored_bytes: Arc<[u8]> = Arc::from(artifact.clone());
-    let stored_pointer = stored_bytes.as_ptr();
+    let original_arc_pointer = stored_bytes.as_ptr();
     let start = Instant::now();
     let (content_id, storage_id) = store
         .insert_bcs2(Arc::clone(&stored_bytes), 0, bounds)
@@ -67,7 +67,7 @@ fn main() {
         "encode_ops_per_second": per_second(encode_elapsed),
         "store_insert_nanoseconds": insert_elapsed.as_nanos(),
         "store_lease_ops_per_second": per_second(lease_elapsed),
-        "store_lease_pointer_identity": lease.bytes().as_ptr() == stored_pointer,
+        "store_lease_pointer_identity": lease.bytes().as_ptr() == original_arc_pointer,
         "blob_payload_bytes": payload.len(),
         "blob_zero_copy_pointer_identity": zero_copy,
         "bcs2_view_stack_bytes": std::mem::size_of::<Bcs2View<'_>>(),

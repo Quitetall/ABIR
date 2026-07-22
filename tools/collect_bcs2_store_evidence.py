@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,6 +64,19 @@ def main() -> None:
             str(arguments.iterations),
         )
     )
+    with tempfile.TemporaryDirectory(prefix="abir-bcs2-fuzz-") as temporary:
+        corpus = Path(temporary) / "bcs2_wire"
+        shutil.copytree(ROOT / "fixtures/bcs2/v1", corpus)
+        run(
+            "cargo",
+            "+nightly",
+            "fuzz",
+            "run",
+            "bcs2_wire",
+            str(corpus),
+            "--",
+            f"-runs={arguments.fuzz_runs}",
+        )
     evidence = {
         "schema_version": 1,
         "stage": "bcs2-store",
@@ -80,6 +95,7 @@ def main() -> None:
             ),
         },
         "fuzz_runs": arguments.fuzz_runs,
+        "fuzz_completed": True,
         "measurements": measurements,
         "artifact_sha256": {
             relative: digest(ROOT / relative) for relative in ARTIFACTS
