@@ -1,0 +1,37 @@
+{
+  "artifact_sha256": {
+    "fixtures/bcs2/v1/manifest.json": "9caba34e3020513e31b85de128f28dca67198453d7645bd1010d8992b25229df",
+    "registries/bcs2-crypto-v1.json": "806567026f80e7243f1a3688e9eb333a973e16b02c785bcc86df48f1a83caea1",
+    "registries/bcs2-profiles-v1.json": "11ebc062fa1e0ad81a52ff771d9f71359ac33ec542d684a6105e519f9cecaafe",
+    "schema/bcs2-crypto-v1.schema.json": "9ee9aedf2f94f5c99e94e33db91eaf8384668c65bd51482c9111a8a5679b6e38",
+    "schema/bcs2-profile-v1.schema.json": "0a436d158956be62ed04b016a1dfc25e4a19c368b2be97316f46503369020dee",
+    "spec/BCS2_V1.md": "f016b6bea3e3d95d28e34a01dcf43005472e7050b3384be584be2697100c7076",
+    "spec/bcs2-v1.manifest.json": "98ff4317c09b76336ef0b6be1fd5345783270b957ed446e1f096939867a986ca",
+    "tools/verify_bcs2_vectors.py": "af22a62dd2a08b8ccff40db114094949952814ff178427c6e6389d6726335694"
+  },
+  "collected_at": "2026-07-22T07:09:37.355260+00:00",
+  "commands": {
+    "fuzz": "cargo +nightly fuzz run bcs2_wire <temporary-corpus> -- -runs=1000",
+    "independent_vectors": "python3 tools/verify_bcs2_vectors.py fixtures/bcs2/v1",
+    "measurement": "cargo run --release -p abir-conformance --bin measure_bcs2_store -- 100000"
+  },
+  "fuzz_completed": true,
+  "fuzz_runs": 1000,
+  "measurements": {
+    "artifact_bytes": 716,
+    "bcs2_view_stack_bytes": 160,
+    "blob_payload_bytes": 1048576,
+    "blob_view_stack_bytes": 192,
+    "blob_zero_copy_pointer_identity": true,
+    "encode_ops_per_second": 193827.9993670508,
+    "iterations": 100000,
+    "parse_ops_per_second": 2102738.101446179,
+    "store_insert_nanoseconds": 5272,
+    "store_lease_ops_per_second": 48776062.26947214,
+    "store_lease_pointer_identity": true
+  },
+  "schema_version": 1,
+  "stage": "bcs2-store",
+  "status": "BASELINE",
+  "tested_revision": "c9c77c19004f5f955afd989b540f0494850c6e5b"
+}
