@@ -259,6 +259,32 @@ fn catalog_and_relationship_structural_limits_fail_closed() {
 }
 
 #[test]
+fn event_catalog_records_honor_structural_limits() {
+    let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
+    let clock_id = id::<ClockTag>(2);
+    draft.add_clock(clock(clock_id));
+    draft.add_event(Event::new(
+        id::<EventTag>(3),
+        concept("stimulus"),
+        clock_id,
+        rational(0, 1),
+        rational(1, 1),
+        rational(0, 1),
+    ));
+
+    let report = draft
+        .validate(ValidationLimits {
+            max_catalog_records: 0,
+            ..ValidationLimits::default()
+        })
+        .unwrap_err();
+    assert!(report.failures().iter().any(|failure| {
+        failure.failure_code() == FailureCode::StructuralLimit
+            && failure.path() == "catalog_records"
+    }));
+}
+
+#[test]
 fn metadata_byte_limit_accounts_for_foreign_text() {
     let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
     draft.add_subject(

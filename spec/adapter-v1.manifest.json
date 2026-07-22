@@ -8,7 +8,7 @@
     {"path": "schema/adapter-profile-v1.schema.json", "sha256": "aaee42d529907a2915d80e131fbaf98e964f968dfc73f5b72bd9f14e8d023d74"},
     {"path": "schema/adapter-mapping-v1.schema.json", "sha256": "7848ba0584b5e9507ddb2c20f06e14e9f96bf56153a554179077f1688c3c6bfe"},
     {"path": "schema/adapter-validation-v1.schema.json", "sha256": "7f784b0201e416601562a709254537d398d84f37936066cb83325dee4037f188"},
-    {"path": "registries/adapter-profiles-v1.json", "sha256": "d4fd8344c63d05e82b6951dfd036049e80f82f024b1b71567abac1e5b69e8271"},
+    {"path": "registries/adapter-profiles-v1.json", "sha256": "716bf078b698383b6b5c4f04f516c2d55d724903a74b42e8c761305fef7f4b76"},
     {"path": "tools/verify_adapter_contract.py", "sha256": "28c61dc7e3fb55e583128fc326cef9ea1f28b1d36550e5f9bb9ef536f4cdde29"},
     {"path": "tools/test_adapter_validation_contract.py", "sha256": "61dbfe32c21a12cab4205817fa67a37af35c07982eca2288e1067a6b83bfb7f3"}
   ]

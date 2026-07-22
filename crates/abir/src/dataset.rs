@@ -281,6 +281,7 @@ impl DatasetDraft {
             self.sensors.len(),
             self.channels.len(),
             self.concept_dictionaries.len(),
+            self.events.len(),
         ]
         .into_iter()
         .try_fold(0_usize, usize::checked_add)

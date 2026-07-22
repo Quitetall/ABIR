@@ -796,7 +796,7 @@ mod tests {
             "../../../registries/adapter-profiles-v1.json"
         ))
         .unwrap();
-        assert_eq!(registry.profiles.len(), 11);
+        assert_eq!(registry.profiles.len(), 12);
         assert!(registry.profiles.iter().all(|profile| {
             profile.capabilities.contains(&AdapterCapability::Inspect)
                 && profile.capabilities.contains(&AdapterCapability::Validate)
