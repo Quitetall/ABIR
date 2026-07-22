@@ -32,7 +32,7 @@ pub use atom::{
     Tensor,
 };
 #[cfg(feature = "alloc")]
-pub use canonical::{canonical_debug_json, logical_content_id};
+pub use canonical::{canonical_debug_json, interchange_content_id, logical_content_id};
 #[cfg(feature = "alloc")]
 pub use catalog::{
     Acquisition, Calibration, CalibrationError, CatalogRecord, Channel, ChannelBasis, ChannelSpec,

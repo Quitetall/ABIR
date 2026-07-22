@@ -1,17 +1,27 @@
 use abir::{
-    canonical_debug_json, logical_content_id, Atom, AtomTag, ByteOrder, Clock, ClockTag, ConceptId,
-    ContentId, DatasetDraft, DatasetTag, ElementType, ExecutionRecord, Layout, ObjectId,
-    PayloadDescriptor, Presence, Rational, Recording, RecordingTag, SemanticAxis, Stream,
-    StreamTag, Tensor, ValidationLimits,
+    canonical_debug_json, interchange_content_id, logical_content_id, Atom, AtomTag, ByteOrder,
+    Clock, ClockTag, ConceptId, ContentId, DatasetDraft, DatasetTag, ElementType, ExecutionRecord,
+    Layout, ObjectId, PayloadDescriptor, Presence, Rational, Recording, RecordingTag, SemanticAxis,
+    SourceCapsule, SourceKey, Stream, StreamTag, Tensor, ValidationLimits,
 };
 
 fn id<T>(value: u8) -> ObjectId<T> {
     ObjectId::from_bytes([value; 16])
 }
 
-fn dataset(reverse: bool, layout: Layout, observed_execution: bool) -> abir::AbirDataset {
+fn dataset(
+    reverse: bool,
+    layout: Layout,
+    observed_execution: bool,
+    capsule: Option<u8>,
+    content_bias: u8,
+) -> abir::AbirDataset {
     let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
-    let values = if reverse { [20_u8, 10] } else { [10_u8, 20] };
+    let values = if reverse {
+        [20_u8 + content_bias, 10 + content_bias]
+    } else {
+        [10_u8 + content_bias, 20 + content_bias]
+    };
     for value in values {
         let recording_id = id::<RecordingTag>(value);
         let stream_id = id::<StreamTag>(value + 1);
@@ -66,13 +76,20 @@ fn dataset(reverse: bool, layout: Layout, observed_execution: bool) -> abir::Abi
             .with_hardware("test-cpu"),
         );
     }
+    if let Some(value) = capsule {
+        draft.add_source_capsule(SourceCapsule::new(
+            SourceKey::new("test.source", format!("fixture-{value}")).unwrap(),
+            ContentId::from_bytes([value; 32]),
+            Some("application/octet-stream"),
+        ));
+    }
     draft.validate(ValidationLimits::default()).unwrap()
 }
 
 #[test]
 fn logical_identity_ignores_insertion_storage_layout_and_observed_execution() {
-    let first = dataset(false, Layout::DenseRowMajor, false);
-    let second = dataset(true, Layout::DenseColumnMajor, true);
+    let first = dataset(false, Layout::DenseRowMajor, false, None, 0);
+    let second = dataset(true, Layout::DenseColumnMajor, true, None, 0);
     assert_eq!(
         logical_content_id(&first).unwrap(),
         logical_content_id(&second).unwrap()
@@ -85,7 +102,7 @@ fn logical_identity_ignores_insertion_storage_layout_and_observed_execution() {
 
 #[test]
 fn canonical_debug_json_uses_tagged_exact_numbers_and_sorted_catalogs() {
-    let dataset = dataset(true, Layout::DenseRowMajor, false);
+    let dataset = dataset(true, Layout::DenseRowMajor, false, None, 0);
     let bytes = canonical_debug_json(&dataset).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(value["semantic_version"], "1");
@@ -93,5 +110,25 @@ fn canonical_debug_json_uses_tagged_exact_numbers_and_sorted_catalogs() {
     assert_eq!(
         value["recordings"][0]["id"],
         id::<RecordingTag>(10).to_string()
+    );
+}
+
+#[test]
+fn interchange_identity_excludes_source_capsules_but_not_mapped_meaning() {
+    let first = dataset(false, Layout::DenseRowMajor, false, Some(1), 0);
+    let second = dataset(false, Layout::DenseRowMajor, false, Some(2), 0);
+    assert_ne!(
+        logical_content_id(&first).unwrap(),
+        logical_content_id(&second).unwrap()
+    );
+    assert_eq!(
+        interchange_content_id(&first).unwrap(),
+        interchange_content_id(&second).unwrap()
+    );
+
+    let changed = dataset(false, Layout::DenseRowMajor, false, Some(1), 1);
+    assert_ne!(
+        interchange_content_id(&first).unwrap(),
+        interchange_content_id(&changed).unwrap()
     );
 }

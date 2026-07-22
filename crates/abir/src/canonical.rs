@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use serde_json::{json, Value};
 
 const LOGICAL_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.semantic-v1\0";
+const INTERCHANGE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.semantic-v1.interchange\0";
 
 /// RFC 8785-compatible JSON for ABIR's restricted JSON domain.
 ///
@@ -28,10 +29,24 @@ pub fn logical_content_id(dataset: &AbirDataset) -> Result<crate::ContentId, ser
     Ok(crate::ContentId::from_bytes(*hasher.finalize().as_bytes()))
 }
 
+/// Identity of mapped ABIR meaning, excluding source capsules and observed
+/// execution. Adapters bind an exact-export plan to this value so retaining an
+/// original source object cannot make a changed dataset appear equivalent.
+pub fn interchange_content_id(
+    dataset: &AbirDataset,
+) -> Result<crate::ContentId, serde_json::Error> {
+    let bytes = serde_json::to_vec(&dataset_value(dataset, Projection::Interchange))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(INTERCHANGE_HASH_DOMAIN);
+    hasher.update(&bytes);
+    Ok(crate::ContentId::from_bytes(*hasher.finalize().as_bytes()))
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Projection {
     Debug,
     Logical,
+    Interchange,
 }
 
 fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
@@ -386,21 +401,23 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
                 .collect(),
         ),
     );
-    root.insert(
-        "source_capsules".into(),
-        Value::Array(
-            source_capsules
-                .into_iter()
-                .map(|capsule| {
-                    json!({
-                        "source": { "namespace": capsule.source().namespace(), "value": capsule.source().value() },
-                        "content_id": capsule.content_id().to_string(),
-                        "media_type": capsule.media_type()
+    if projection != Projection::Interchange {
+        root.insert(
+            "source_capsules".into(),
+            Value::Array(
+                source_capsules
+                    .into_iter()
+                    .map(|capsule| {
+                        json!({
+                            "source": { "namespace": capsule.source().namespace(), "value": capsule.source().value() },
+                            "content_id": capsule.content_id().to_string(),
+                            "media_type": capsule.media_type()
+                        })
                     })
-                })
-                .collect(),
-        ),
-    );
+                    .collect(),
+            ),
+        );
+    }
     if projection == Projection::Debug {
         root.insert(
             "observed_execution".into(),
@@ -619,7 +636,7 @@ fn channel_value(channel: &crate::ChannelSpec) -> Value {
 }
 
 fn payload_value(payload: &crate::PayloadDescriptor, projection: Projection) -> Value {
-    if projection == Projection::Logical {
+    if projection != Projection::Debug {
         return json!({
             "content_id": payload.content_id().to_string(),
             "element": element_name(payload.element()),
