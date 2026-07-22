@@ -15,6 +15,7 @@ pub use generation::{
 
 #[cfg(feature = "alloc")]
 pub use wire::{
-    encode_dataset, encode_dataset_with_references, Bcs2Error, Bcs2View, PrivacyMode, ProfileId,
-    ResourceBounds, RootKind, StorageContract, BCS2_HEADER_LEN, BCS2_MAGIC,
+    append_dataset_generation, encode_dataset, encode_dataset_with_references,
+    encode_generational_dataset, Bcs2Error, Bcs2View, PrivacyMode, ProfileId, ResourceBounds,
+    RootKind, StorageContract, BCS2_HEADER_LEN, BCS2_MAGIC,
 };

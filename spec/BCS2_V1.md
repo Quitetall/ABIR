@@ -92,6 +92,15 @@ successor. `SealedGenerational` appends only. `UnsealedWorkspace` cannot claim
 exact/audited sealing. `RewriteCompact` creates a new `StorageId` while retaining
 the same logical root.
 
+Generation zero places its catalog and index at the envelope-declared extents,
+then appends its footer. Each later generation appends catalog, index, and footer
+without altering any earlier byte. Publication concludes by updating only the
+envelope's latest-footer offset and root `ContentId`; readers treat those fields
+as a mutable publication pointer and accept the root only after the referenced
+footer and complete backward chain verify. A torn or stale pointer fails closed.
+The artifact ends exactly after the latest footer. Readers bound traversal by a
+caller-supplied generation limit before following the first footer.
+
 An external pin or signature is required to prove which footer was latest;
 internal chaining alone cannot disprove tail truncation.
 

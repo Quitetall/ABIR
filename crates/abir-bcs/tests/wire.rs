@@ -1,7 +1,8 @@
 use abir::{DatasetDraft, DatasetTag, ObjectId, ValidationLimits};
 use abir_bcs::{
-    encode_dataset, encode_dataset_with_references, Bcs2Error, Bcs2View, PrivacyMode, ProfileId,
-    ResourceBounds, RootKind, StorageContract,
+    append_dataset_generation, encode_dataset, encode_dataset_with_references,
+    encode_generational_dataset, Bcs2Error, Bcs2View, PrivacyMode, ProfileId, ResourceBounds,
+    RootKind, StorageContract,
 };
 
 fn dataset() -> abir::AbirDataset {
@@ -118,7 +119,7 @@ fn malformed_wire_fails_closed() {
     false_generation[41] = StorageContract::SealedGenerational as u8;
     assert_eq!(
         Bcs2View::parse(&false_generation, 0, ResourceBounds::default()).unwrap_err(),
-        Bcs2Error::StorageContractNotImplemented(StorageContract::SealedGenerational)
+        Bcs2Error::BoundsExceeded
     );
     assert_eq!(
         Bcs2View::parse(
@@ -131,6 +132,74 @@ fn malformed_wire_fails_closed() {
         )
         .unwrap_err(),
         Bcs2Error::BoundsExceeded
+    );
+}
+
+#[test]
+fn generational_dataset_exposes_only_the_verified_latest_root() {
+    let first = dataset();
+    let second = DatasetDraft::new(ObjectId::<DatasetTag>::from_bytes([8; 16]))
+        .validate(ValidationLimits::default())
+        .unwrap();
+    let mut artifact = encode_generational_dataset(
+        &first,
+        ProfileId::LML_LOSSLESS_V1,
+        ResourceBounds::default(),
+        [],
+    )
+    .unwrap();
+    let generation_zero = Bcs2View::parse(&artifact, 0, ResourceBounds::default()).unwrap();
+    assert_eq!(
+        generation_zero.storage_contract(),
+        StorageContract::SealedGenerational
+    );
+    assert_eq!(
+        generation_zero.generation_chain().unwrap().newest_first()[0].generation,
+        0
+    );
+
+    append_dataset_generation(&mut artifact, &second, [], 0, ResourceBounds::default()).unwrap();
+    let latest = Bcs2View::parse(&artifact, 0, ResourceBounds::default()).unwrap();
+    let chain = latest.generation_chain().unwrap().newest_first();
+    assert_eq!(chain.len(), 2);
+    assert_eq!(chain[0].generation, 1);
+    assert_eq!(chain[1].generation, 0);
+    assert_eq!(
+        latest.root_content_id(),
+        abir::logical_content_id(&second).unwrap()
+    );
+    assert_eq!(
+        latest.semantic_json(),
+        abir::canonical_debug_json(&second).unwrap()
+    );
+
+    let mut false_latest_root = artifact.clone();
+    false_latest_root[96] ^= 1;
+    assert_eq!(
+        Bcs2View::parse(&false_latest_root, 0, ResourceBounds::default()).unwrap_err(),
+        Bcs2Error::GenerationRootMismatch
+    );
+    assert!(Bcs2View::parse(
+        &artifact[..artifact.len() - 1],
+        0,
+        ResourceBounds::default()
+    )
+    .is_err());
+}
+
+#[test]
+fn append_rejects_immutable_artifacts() {
+    let mut artifact = encode_dataset(
+        &dataset(),
+        ProfileId::LML_LOSSLESS_V1,
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        append_dataset_generation(&mut artifact, &dataset(), [], 0, ResourceBounds::default()),
+        Err(Bcs2Error::StorageContractNotImplemented(
+            StorageContract::SealedImmutable
+        ))
     );
 }
 

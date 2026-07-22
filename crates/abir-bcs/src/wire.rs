@@ -3,6 +3,8 @@ use alloc::{vec, vec::Vec};
 use core::fmt;
 use minicbor::{Decoder, Encoder};
 
+use crate::{encode_generation_footer, GenerationChain, GenerationFooter, GENERATION_FOOTER_LEN};
+
 pub const BCS2_MAGIC: [u8; 8] = *b"ABIRBCS2";
 pub const BCS2_HEADER_LEN: usize = 128;
 const INDEX_MAGIC: [u8; 8] = *b"BCS2IDX\0";
@@ -171,6 +173,7 @@ pub enum Bcs2Error {
     CatalogCorrupt,
     CatalogDigestMismatch,
     RootIdentityMismatch,
+    GenerationRootMismatch,
     SemanticEncoding,
 }
 
@@ -267,6 +270,107 @@ pub fn encode_dataset_with_references(
     Ok(bytes)
 }
 
+/// Encodes generation zero of an append-only sealed artifact.
+pub fn encode_generational_dataset(
+    dataset: &AbirDataset,
+    profile: ProfileId,
+    bounds: ResourceBounds,
+    references: impl IntoIterator<Item = ContentId>,
+) -> Result<Vec<u8>, Bcs2Error> {
+    let mut bytes = encode_dataset_with_references(dataset, profile, bounds, references)?;
+    let catalog_offset = get_u64(&bytes, 56)?;
+    let catalog_len = get_u64(&bytes, 64)?;
+    let index_offset = get_u64(&bytes, 72)?;
+    let index_len = get_u64(&bytes, 80)?;
+    let root_content_id = content_id_at(&bytes, 96)?;
+    let footer_offset = bytes.len() as u64;
+    let footer = encode_generation_footer(
+        &bytes,
+        GenerationFooter {
+            generation: 0,
+            previous_offset: 0,
+            previous_digest: [0; 32],
+            catalog_offset,
+            catalog_len,
+            index_offset,
+            index_len,
+            root_content_id,
+            digest: [0; 32],
+        },
+    )?;
+    bytes.extend_from_slice(&footer);
+    bytes[41] = StorageContract::SealedGenerational as u8;
+    put_u64(&mut bytes, 88, footer_offset);
+    Ok(bytes)
+}
+
+/// Appends a new immutable generation and updates the envelope's latest pointer.
+pub fn append_dataset_generation(
+    artifact: &mut Vec<u8>,
+    dataset: &AbirDataset,
+    references: impl IntoIterator<Item = ContentId>,
+    supported_capabilities: u64,
+    accepted_bounds: ResourceBounds,
+) -> Result<(), Bcs2Error> {
+    let current = Bcs2View::parse(artifact, supported_capabilities, accepted_bounds)?;
+    if current.storage_contract != StorageContract::SealedGenerational {
+        return Err(Bcs2Error::StorageContractNotImplemented(
+            current.storage_contract,
+        ));
+    }
+    let latest_offset = get_u64(artifact, 88)?;
+    let previous = GenerationFooter::parse(artifact, latest_offset)?;
+    let next_generation = previous
+        .generation
+        .checked_add(1)
+        .ok_or(Bcs2Error::BoundsExceeded)?;
+    if next_generation >= accepted_bounds.max_index_entries as u64 {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
+    let encoded =
+        encode_dataset_with_references(dataset, current.profile, current.bounds, references)?;
+    let source_catalog_offset = to_usize(get_u64(&encoded, 56)?)?;
+    let source_catalog_len = to_usize(get_u64(&encoded, 64)?)?;
+    let source_index_offset = to_usize(get_u64(&encoded, 72)?)?;
+    let source_index_len = to_usize(get_u64(&encoded, 80)?)?;
+    let source_catalog_end = source_catalog_offset
+        .checked_add(source_catalog_len)
+        .ok_or(Bcs2Error::InvalidExtent)?;
+    let source_index_end = source_index_offset
+        .checked_add(source_index_len)
+        .ok_or(Bcs2Error::InvalidExtent)?;
+    let catalog = encoded
+        .get(source_catalog_offset..source_catalog_end)
+        .ok_or(Bcs2Error::InvalidExtent)?;
+    let index = encoded
+        .get(source_index_offset..source_index_end)
+        .ok_or(Bcs2Error::InvalidExtent)?;
+    let catalog_offset = artifact.len() as u64;
+    artifact.extend_from_slice(catalog);
+    let index_offset = artifact.len() as u64;
+    artifact.extend_from_slice(index);
+    let footer_offset = artifact.len() as u64;
+    let root_content_id = content_id_at(&encoded, 96)?;
+    let footer = encode_generation_footer(
+        artifact,
+        GenerationFooter {
+            generation: next_generation,
+            previous_offset: latest_offset,
+            previous_digest: previous.digest,
+            catalog_offset,
+            catalog_len: catalog.len() as u64,
+            index_offset,
+            index_len: index.len() as u64,
+            root_content_id,
+            digest: [0; 32],
+        },
+    )?;
+    artifact.extend_from_slice(&footer);
+    put_u64(artifact, 88, footer_offset);
+    artifact[96..128].copy_from_slice(root_content_id.as_bytes());
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct Bcs2View<'a> {
     bytes: &'a [u8],
@@ -278,6 +382,7 @@ pub struct Bcs2View<'a> {
     root_content_id: ContentId,
     semantic_json: &'a [u8],
     references: Vec<ContentId>,
+    generation_chain: Option<GenerationChain>,
 }
 
 impl<'a> Bcs2View<'a> {
@@ -319,7 +424,10 @@ impl<'a> Bcs2View<'a> {
         }
         let storage_contract = StorageContract::try_from(bytes[41])?;
         let privacy_mode = PrivacyMode::try_from(bytes[42])?;
-        if storage_contract != StorageContract::SealedImmutable {
+        if !matches!(
+            storage_contract,
+            StorageContract::SealedImmutable | StorageContract::SealedGenerational
+        ) {
             return Err(Bcs2Error::StorageContractNotImplemented(storage_contract));
         }
         if privacy_mode != PrivacyMode::Plaintext {
@@ -342,13 +450,62 @@ impl<'a> Bcs2View<'a> {
         {
             return Err(Bcs2Error::BoundsExceeded);
         }
-        let catalog_offset = to_usize(get_u64(bytes, 56)?)?;
-        let catalog_len = to_usize(get_u64(bytes, 64)?)?;
-        let index_offset = to_usize(get_u64(bytes, 72)?)?;
-        let index_len = to_usize(get_u64(bytes, 80)?)?;
-        if get_u64(bytes, 88)? != 0 {
-            return Err(Bcs2Error::NonCanonicalLayout);
-        }
+        let envelope_catalog_offset = get_u64(bytes, 56)?;
+        let envelope_catalog_len = get_u64(bytes, 64)?;
+        let envelope_index_offset = get_u64(bytes, 72)?;
+        let envelope_index_len = get_u64(bytes, 80)?;
+        let latest_footer_offset = get_u64(bytes, 88)?;
+        let mut generation_chain = None;
+        let (catalog_offset, catalog_len, index_offset, index_len, expected_end) =
+            if storage_contract == StorageContract::SealedGenerational {
+                let chain = GenerationChain::parse(
+                    bytes,
+                    latest_footer_offset,
+                    accepted_bounds.max_index_entries,
+                )?;
+                let latest = chain
+                    .newest_first()
+                    .first()
+                    .ok_or(Bcs2Error::CatalogCorrupt)?;
+                let envelope_root = content_id_at(bytes, 96)?;
+                if latest.root_content_id != envelope_root {
+                    return Err(Bcs2Error::GenerationRootMismatch);
+                }
+                let oldest = chain
+                    .newest_first()
+                    .last()
+                    .ok_or(Bcs2Error::CatalogCorrupt)?;
+                if oldest.catalog_offset != envelope_catalog_offset
+                    || oldest.catalog_len != envelope_catalog_len
+                    || oldest.index_offset != envelope_index_offset
+                    || oldest.index_len != envelope_index_len
+                {
+                    return Err(Bcs2Error::NonCanonicalLayout);
+                }
+                let expected_end = to_usize(latest_footer_offset)?
+                    .checked_add(GENERATION_FOOTER_LEN)
+                    .ok_or(Bcs2Error::InvalidExtent)?;
+                let extents = (
+                    to_usize(latest.catalog_offset)?,
+                    to_usize(latest.catalog_len)?,
+                    to_usize(latest.index_offset)?,
+                    to_usize(latest.index_len)?,
+                    expected_end,
+                );
+                generation_chain = Some(chain);
+                extents
+            } else {
+                if latest_footer_offset != 0 {
+                    return Err(Bcs2Error::NonCanonicalLayout);
+                }
+                (
+                    to_usize(envelope_catalog_offset)?,
+                    to_usize(envelope_catalog_len)?,
+                    to_usize(envelope_index_offset)?,
+                    to_usize(envelope_index_len)?,
+                    bytes.len(),
+                )
+            };
         if catalog_len > bounds.max_catalog_bytes as usize {
             return Err(Bcs2Error::BoundsExceeded);
         }
@@ -358,10 +515,19 @@ impl<'a> Bcs2View<'a> {
         let index_end = index_offset
             .checked_add(index_len)
             .ok_or(Bcs2Error::InvalidExtent)?;
-        if catalog_offset != BCS2_HEADER_LEN
+        if (storage_contract == StorageContract::SealedImmutable
+            && catalog_offset != BCS2_HEADER_LEN)
             || catalog_end != index_offset
             || index_len != INDEX_LEN
-            || index_end != bytes.len()
+            || index_end
+                .checked_add(if storage_contract == StorageContract::SealedGenerational {
+                    GENERATION_FOOTER_LEN
+                } else {
+                    0
+                })
+                .ok_or(Bcs2Error::InvalidExtent)?
+                != expected_end
+            || expected_end != bytes.len()
         {
             return Err(Bcs2Error::NonCanonicalLayout);
         }
@@ -427,6 +593,7 @@ impl<'a> Bcs2View<'a> {
             root_content_id,
             semantic_json,
             references,
+            generation_chain,
         })
     }
 
@@ -454,12 +621,21 @@ impl<'a> Bcs2View<'a> {
     pub fn references(&self) -> &[ContentId] {
         &self.references
     }
+    pub fn generation_chain(&self) -> Option<&GenerationChain> {
+        self.generation_chain.as_ref()
+    }
     pub fn storage_id(&self) -> StorageId {
         let mut hasher = blake3::Hasher::new();
         hasher.update(STORAGE_HASH_DOMAIN);
         hasher.update(self.bytes);
         StorageId::from_bytes(*hasher.finalize().as_bytes())
     }
+}
+
+fn content_id_at(bytes: &[u8], offset: usize) -> Result<ContentId, Bcs2Error> {
+    let encoded = bytes.get(offset..offset + 32).ok_or(Bcs2Error::TooShort)?;
+    let value: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::TooShort)?;
+    Ok(ContentId::from_bytes(value))
 }
 
 fn get_u16(bytes: &[u8], offset: usize) -> Result<u16, Bcs2Error> {
