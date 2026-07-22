@@ -84,6 +84,24 @@ fn packs_reject_duplicates_nonportable_profiles_and_nested_packs() {
         Err(Bcs2Error::DuplicateFrame)
     );
 
+    assert_eq!(
+        repack_with_frames(&root, &[], 0, ResourceBounds::default()),
+        Err(Bcs2Error::IncompletePortableClosure(child_id))
+    );
+    let unrelated = artifact(7, []);
+    let unrelated_id = Bcs2View::parse(&unrelated, 0, ResourceBounds::default())
+        .unwrap()
+        .root_content_id();
+    assert_eq!(
+        repack_with_frames(
+            &root,
+            &[child.as_slice(), unrelated.as_slice()],
+            0,
+            ResourceBounds::default()
+        ),
+        Err(Bcs2Error::ExtraPortableFrame(unrelated_id))
+    );
+
     let dataset = DatasetDraft::new(ObjectId::<DatasetTag>::from_bytes([6; 16]))
         .validate(ValidationLimits::default())
         .unwrap();

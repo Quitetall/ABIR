@@ -7,6 +7,7 @@ use alloc::{vec, vec::Vec};
 struct Embedded<'a> {
     storage_id: StorageId,
     bytes: &'a [u8],
+    references: Vec<ContentId>,
 }
 
 /// Rewrites an immutable plaintext artifact as a deterministic, self-contained
@@ -48,10 +49,32 @@ pub fn repack_with_frames(
         let item = Embedded {
             storage_id: view.storage_id(),
             bytes,
+            references: view.references().to_vec(),
         };
         if embedded.insert(view.root_content_id(), item).is_some() {
             return Err(Bcs2Error::DuplicateFrame);
         }
+    }
+
+    let mut reached = alloc::collections::BTreeSet::new();
+    let mut pending = root.references().to_vec();
+    while let Some(content_id) = pending.pop() {
+        if content_id == root.root_content_id() {
+            return Err(Bcs2Error::IncompletePortableClosure(content_id));
+        }
+        if !reached.insert(content_id) {
+            continue;
+        }
+        let item = embedded
+            .get(&content_id)
+            .ok_or(Bcs2Error::IncompletePortableClosure(content_id))?;
+        pending.extend(item.references.iter().copied());
+    }
+    if let Some(extra) = embedded
+        .keys()
+        .find(|content_id| !reached.contains(content_id))
+    {
+        return Err(Bcs2Error::ExtraPortableFrame(*extra));
     }
 
     let catalog_offset =
@@ -94,7 +117,8 @@ pub fn repack_with_frames(
     packed[BCS2_HEADER_LEN..BCS2_HEADER_LEN + catalog.len()].copy_from_slice(catalog);
 
     packed[index_offset..index_offset + 8].copy_from_slice(&INDEX_MAGIC);
-    put_u32(&mut packed, index_offset + 8, embedded.len() as u32);
+    let frame_count = u32::try_from(embedded.len()).map_err(|_| Bcs2Error::BoundsExceeded)?;
+    put_u32(&mut packed, index_offset + 8, frame_count);
     packed[index_offset + 16..index_offset + 48].copy_from_slice(blake3::hash(catalog).as_bytes());
     let mut frame_offset = BCS2_HEADER_LEN + catalog.len();
     for (entry_number, (content_id, item)) in embedded.iter().enumerate() {

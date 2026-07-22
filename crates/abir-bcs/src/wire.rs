@@ -188,6 +188,8 @@ pub enum Bcs2Error {
     ProfileRootMismatch,
     ProfileNotPortable,
     DuplicateFrame,
+    IncompletePortableClosure(ContentId),
+    ExtraPortableFrame(ContentId),
     BoundsExceeded,
     InvalidExtent,
     NonCanonicalLayout,
