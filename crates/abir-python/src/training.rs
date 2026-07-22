@@ -2,9 +2,10 @@ use abir_bcs::{ResourceBounds, SemanticPayloadFrame};
 use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType, Presence};
 use abir_training::{
     compile_execution_plan, encode_snapshot, ContentKey, ContinualPromotion, DatasetSubscription,
-    DecisionLog, DecisionRecord, DecisionReplayReceipt, MicroSnapshot, PlanOverrides,
-    SourceEquivalenceReceipt, SubscriptionCorrection, TrainingAssociatedPayload,
-    TrainingLabelPayloadAssociation, TrainingRow, TrainingSnapshot, TrainingSpec,
+    DecisionLog, DecisionRecord, DecisionReplayReceipt, MicroSnapshot, PayloadAccessPolicy,
+    PlanOverrides, PrefetchPolicy, RowGrouping, SourceEquivalenceReceipt, SubscriptionCorrection,
+    TrainingAssociatedPayload, TrainingLabelPayloadAssociation, TrainingRow, TrainingSnapshot,
+    TrainingSpec,
 };
 use abir_training::{DecisionLogReplayState, TrainingProfile, TrainingWindowStore};
 use memmap2::MmapOptions;
@@ -12,7 +13,7 @@ use pyo3::exceptions::{PyKeyError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString, PyTuple};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -20,7 +21,10 @@ use std::sync::Mutex;
 
 enum ArtifactOwner {
     Bytes(Py<PyBytes>),
-    PathFile { file: Mutex<File> },
+    PathFile {
+        file: Mutex<File>,
+        mmap: memmap2::Mmap,
+    },
 }
 
 impl ArtifactOwner {
@@ -166,11 +170,11 @@ impl PyTrainingWindowStore {
             PyOSError::new_err(format!("map training artifact {}: {error}", path.display()))
         })?;
         let metadata = inspect_artifact(&mmap)?;
-        drop(mmap);
 
         Ok(Self {
             artifact: ArtifactOwner::PathFile {
                 file: Mutex::new(private),
+                mmap,
             },
             dataset_roots: metadata.dataset_roots,
             decision_log_id: metadata.decision_log_id,
@@ -238,6 +242,132 @@ impl PyTrainingWindowStore {
     #[getter]
     fn materializes_rows(&self) -> bool {
         self.artifact.materializes_rows()
+    }
+
+    /// Execute the snapshot's canonical physical plan and return an observed receipt.
+    ///
+    /// This method measures CPU-side payload access only. It never claims OS
+    /// readahead, GPU transfer, or device-cache behavior. A backing that cannot
+    /// honor the compiled access policy is rejected rather than substituted.
+    fn execute_training_plan<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let profile = parse_profile(self.profile)?;
+        let plan = compile_execution_plan(profile, PlanOverrides::default())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let plan_id = plan
+            .content_id()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+            .to_string();
+        let cache_budget = usize::try_from(plan.cache_budget().bytes())
+            .map_err(|_| PyValueError::new_err("training cache budget exceeds this host"))?;
+
+        let (payload_access, implementation, metrics) =
+            match (plan.payload_access(), &self.artifact) {
+                (
+                    PayloadAccessPolicy::RequireMmap | PayloadAccessPolicy::PreferMmap,
+                    ArtifactOwner::PathFile { mmap, .. },
+                ) => (
+                    "mmap-direct",
+                    "bounded-mmap-lookahead-v1",
+                    execute_borrowed_rows(
+                        &self.rows,
+                        mmap,
+                        plan.row_grouping(),
+                        plan.prefetch(),
+                        0,
+                    )?,
+                ),
+                (PayloadAccessPolicy::RequireMmap, ArtifactOwner::Bytes(_)) => {
+                    return Err(PyValueError::new_err(
+                        "canonical training plan requires mmap backing",
+                    ));
+                }
+                (PayloadAccessPolicy::PreferMmap, ArtifactOwner::Bytes(_)) => {
+                    return Err(PyValueError::new_err(
+                        "canonical acceptance execution requires preferred mmap backing",
+                    ));
+                }
+                (PayloadAccessPolicy::Materialize, ArtifactOwner::Bytes(artifact)) => {
+                    let bytes = artifact.bind(py).as_bytes();
+                    if bytes.len() > cache_budget {
+                        return Err(PyValueError::new_err(
+                            "materialized training artifact exceeds canonical cache budget",
+                        ));
+                    }
+                    (
+                        "materialized-bytes",
+                        "bounded-materialized-groups-v1",
+                        execute_borrowed_rows(
+                            &self.rows,
+                            bytes,
+                            plan.row_grouping(),
+                            plan.prefetch(),
+                            bytes.len(),
+                        )?,
+                    )
+                }
+                (PayloadAccessPolicy::Materialize, ArtifactOwner::PathFile { .. }) => {
+                    return Err(PyValueError::new_err(
+                        "canonical training plan requires materialized bytes backing",
+                    ));
+                }
+                (PayloadAccessPolicy::Stream, ArtifactOwner::PathFile { file, .. }) => (
+                    "file-stream",
+                    "bounded-file-stream-lookahead-v1",
+                    execute_streamed_rows(
+                        &self.rows,
+                        file,
+                        plan.row_grouping(),
+                        plan.prefetch(),
+                        cache_budget,
+                    )?,
+                ),
+                (PayloadAccessPolicy::Stream, ArtifactOwner::Bytes(_)) => {
+                    return Err(PyValueError::new_err(
+                        "canonical training plan requires file-stream backing",
+                    ));
+                }
+            };
+
+        let implementation_descriptor = serde_json::json!({
+            "executor": implementation,
+            "payload_access": payload_access,
+            "plan_id": plan_id,
+            "profile": self.profile,
+            "schema": "org.quitetall.abir.training.execution-implementation-v1",
+        });
+        let implementation_bytes = serde_json::to_vec(&implementation_descriptor)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let implementation_id = format!("{:x}", Sha256::digest(&implementation_bytes));
+        let observed_trace = serde_json::json!({
+            "backing": self.artifact.backing(),
+            "cache_budget_bytes": cache_budget,
+            "cache_peak_bytes": metrics.cache_peak_bytes,
+            "group_count": metrics.group_count,
+            "logical_bytes": metrics.logical_bytes,
+            "payload_access": payload_access,
+            "plan_id": plan_id,
+            "prefetch_rows_observed": metrics.prefetch_rows_observed,
+            "profile": self.profile,
+            "row_count": metrics.row_count,
+            "schema": "org.quitetall.abir.training.observed-execution-v1",
+        });
+        let observed_trace_json = serde_json::to_string(&observed_trace)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let observed_trace_id = format!("{:x}", Sha256::digest(observed_trace_json.as_bytes()));
+
+        let result = PyDict::new_bound(py);
+        result.set_item("implementation_id", implementation_id)?;
+        result.set_item("logical_bytes", metrics.logical_bytes)?;
+        result.set_item("logical_payload_sha256", metrics.logical_payload_sha256)?;
+        result.set_item("observed_trace_id", observed_trace_id)?;
+        result.set_item("observed_trace_json", observed_trace_json)?;
+        result.set_item("physical_artifact_sha256", &self.physical_artifact_sha256)?;
+        result.set_item("plan_id", plan_id)?;
+        result.set_item("profile", self.profile)?;
+        result.set_item("row_count", metrics.row_count)?;
+        result.set_item("row_ids_sha256", metrics.row_ids_sha256)?;
+        result.set_item("snapshot_id", &self.snapshot_id)?;
+        Ok(result)
     }
 
     #[getter]
@@ -347,6 +477,252 @@ impl PyTrainingWindowStore {
     }
 }
 
+struct ExecutionMetrics {
+    cache_peak_bytes: usize,
+    group_count: usize,
+    logical_bytes: usize,
+    logical_payload_sha256: String,
+    prefetch_rows_observed: usize,
+    row_count: usize,
+    row_ids_sha256: String,
+}
+
+fn row_groups(rows: &[RowLocation], grouping: RowGrouping) -> PyResult<Vec<(usize, usize)>> {
+    if rows.is_empty() {
+        return Err(PyValueError::new_err(
+            "canonical execution requires at least one training row",
+        ));
+    }
+    let mut groups = Vec::new();
+    match grouping {
+        RowGrouping::FixedRows { rows: per_group } => {
+            let per_group = usize::try_from(per_group)
+                .map_err(|_| PyValueError::new_err("row group exceeds this host"))?;
+            for start in (0..rows.len()).step_by(per_group) {
+                groups.push((start, (start + per_group).min(rows.len())));
+            }
+        }
+        RowGrouping::TargetBytes { bytes: target } => {
+            let target = usize::try_from(target)
+                .map_err(|_| PyValueError::new_err("row group target exceeds this host"))?;
+            let mut start = 0;
+            while start < rows.len() {
+                let mut end = start;
+                let mut group_bytes = 0_usize;
+                while end < rows.len() {
+                    let next = group_bytes
+                        .checked_add(rows[end].logical_bytes)
+                        .ok_or_else(|| {
+                            PyValueError::new_err("training row group byte count overflow")
+                        })?;
+                    if end > start && next > target {
+                        break;
+                    }
+                    group_bytes = next;
+                    end += 1;
+                }
+                groups.push((start, end));
+                start = end;
+            }
+        }
+    }
+    Ok(groups)
+}
+
+fn prefetch_rows(prefetch: PrefetchPolicy) -> usize {
+    match prefetch {
+        PrefetchPolicy::Disabled => 0,
+        PrefetchPolicy::Rows { rows } => usize::try_from(rows).unwrap_or(usize::MAX),
+    }
+}
+
+fn checked_row_slice<'a>(artifact: &'a [u8], row: &RowLocation) -> PyResult<&'a [u8]> {
+    let end = row
+        .offset
+        .checked_add(row.logical_bytes)
+        .ok_or_else(|| PyValueError::new_err("training row extent overflow"))?;
+    let bytes = artifact
+        .get(row.offset..end)
+        .ok_or_else(|| PyValueError::new_err("training row is outside held artifact"))?;
+    let actual = payload_content_id(row.element, bytes);
+    if actual != row.payload_id {
+        return Err(PyValueError::new_err(format!(
+            "held training payload mismatch: expected {}, got {actual}",
+            row.payload_id
+        )));
+    }
+    Ok(bytes)
+}
+
+fn update_execution_hashes(
+    row: &RowLocation,
+    bytes: &[u8],
+    payload_digest: &mut Sha256,
+    row_id_digest: &mut Sha256,
+    logical_bytes: &mut usize,
+) -> PyResult<()> {
+    payload_digest.update(bytes);
+    row_id_digest.update(row.logical_id.as_bytes());
+    row_id_digest.update([0]);
+    *logical_bytes = logical_bytes
+        .checked_add(bytes.len())
+        .ok_or_else(|| PyValueError::new_err("logical training byte count overflow"))?;
+    Ok(())
+}
+
+fn execute_borrowed_rows(
+    rows: &[RowLocation],
+    artifact: &[u8],
+    grouping: RowGrouping,
+    prefetch: PrefetchPolicy,
+    cache_peak_bytes: usize,
+) -> PyResult<ExecutionMetrics> {
+    let groups = row_groups(rows, grouping)?;
+    let requested_lookahead = prefetch_rows(prefetch);
+    let mut observed_lookahead = 0_usize;
+    let mut logical_bytes = 0_usize;
+    let mut payload_digest = Sha256::new();
+    let mut row_id_digest = Sha256::new();
+    let mut prefetch_probe = 0_u8;
+    for &(start, end) in &groups {
+        for index in start..end {
+            let lookahead = requested_lookahead.min(rows.len().saturating_sub(index + 1));
+            observed_lookahead = observed_lookahead.max(lookahead);
+            for future in &rows[index + 1..index + 1 + lookahead] {
+                let bytes = checked_row_slice(artifact, future)?;
+                if let Some(first) = bytes.first() {
+                    prefetch_probe ^= *first;
+                }
+            }
+            let bytes = checked_row_slice(artifact, &rows[index])?;
+            update_execution_hashes(
+                &rows[index],
+                bytes,
+                &mut payload_digest,
+                &mut row_id_digest,
+                &mut logical_bytes,
+            )?;
+        }
+    }
+    std::hint::black_box(prefetch_probe);
+    Ok(ExecutionMetrics {
+        cache_peak_bytes,
+        group_count: groups.len(),
+        logical_bytes,
+        logical_payload_sha256: format!("{:x}", payload_digest.finalize()),
+        prefetch_rows_observed: observed_lookahead,
+        row_count: rows.len(),
+        row_ids_sha256: format!("{:x}", row_id_digest.finalize()),
+    })
+}
+
+fn read_stream_row(
+    file: &mut File,
+    row: &RowLocation,
+    remaining_cache_bytes: usize,
+) -> PyResult<Vec<u8>> {
+    if row.logical_bytes > remaining_cache_bytes {
+        return Err(PyValueError::new_err(
+            "streaming training lookahead exceeds canonical cache budget",
+        ));
+    }
+    let offset = u64::try_from(row.offset)
+        .map_err(|_| PyValueError::new_err("training row offset exceeds u64"))?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|error| PyOSError::new_err(format!("seek training row: {error}")))?;
+    let mut bytes = vec![0_u8; row.logical_bytes];
+    file.read_exact(&mut bytes)
+        .map_err(|error| PyOSError::new_err(format!("read training row: {error}")))?;
+    let actual = payload_content_id(row.element, &bytes);
+    if actual != row.payload_id {
+        return Err(PyValueError::new_err(format!(
+            "held training payload mismatch: expected {}, got {actual}",
+            row.payload_id
+        )));
+    }
+    Ok(bytes)
+}
+
+fn execute_streamed_rows(
+    rows: &[RowLocation],
+    file: &Mutex<File>,
+    grouping: RowGrouping,
+    prefetch: PrefetchPolicy,
+    cache_budget: usize,
+) -> PyResult<ExecutionMetrics> {
+    let groups = row_groups(rows, grouping)?;
+    let requested_lookahead = prefetch_rows(prefetch);
+    let mut observed_lookahead = 0_usize;
+    let mut peak_cache = 0_usize;
+    let mut logical_bytes = 0_usize;
+    let mut payload_digest = Sha256::new();
+    let mut row_id_digest = Sha256::new();
+    let mut file = file
+        .lock()
+        .map_err(|_| PyOSError::new_err("training artifact file lock is poisoned"))?;
+
+    let mut queue: VecDeque<(usize, Vec<u8>)> = VecDeque::new();
+    let mut next = 0_usize;
+    let mut queued_bytes = 0_usize;
+    let queue_rows = requested_lookahead.saturating_add(1);
+    while next < rows.len() || !queue.is_empty() {
+        while next < rows.len() && queue.len() < queue_rows {
+            let prospective =
+                bounded_stream_cache_bytes(queued_bytes, rows[next].logical_bytes, cache_budget)
+                    .ok_or_else(|| {
+                        PyValueError::new_err(
+                            "streaming training lookahead exceeds canonical cache budget",
+                        )
+                    })?;
+            let remaining = cache_budget - queued_bytes;
+            let bytes = read_stream_row(&mut file, &rows[next], remaining)?;
+            queued_bytes = prospective;
+            peak_cache = peak_cache.max(queued_bytes);
+            queue.push_back((next, bytes));
+            next += 1;
+        }
+        observed_lookahead = observed_lookahead.max(queue.len().saturating_sub(1));
+        let (index, bytes) = queue
+            .pop_front()
+            .ok_or_else(|| PyValueError::new_err("streaming execution queue underflow"))?;
+        queued_bytes = queued_bytes
+            .checked_sub(bytes.len())
+            .ok_or_else(|| PyValueError::new_err("streaming cache accounting underflow"))?;
+        update_execution_hashes(
+            &rows[index],
+            &bytes,
+            &mut payload_digest,
+            &mut row_id_digest,
+            &mut logical_bytes,
+        )?;
+    }
+    Ok(ExecutionMetrics {
+        cache_peak_bytes: peak_cache,
+        group_count: groups.len(),
+        logical_bytes,
+        logical_payload_sha256: format!("{:x}", payload_digest.finalize()),
+        prefetch_rows_observed: observed_lookahead,
+        row_count: rows.len(),
+        row_ids_sha256: format!("{:x}", row_id_digest.finalize()),
+    })
+}
+
+fn bounded_stream_cache_bytes(queued: usize, row: usize, budget: usize) -> Option<usize> {
+    queued.checked_add(row).filter(|total| *total <= budget)
+}
+
+#[cfg(test)]
+mod execution_tests {
+    use super::bounded_stream_cache_bytes;
+
+    #[test]
+    fn stream_cache_bound_rejects_a_row_before_allocation() {
+        assert_eq!(bounded_stream_cache_bytes(0, 9, 8), None);
+        assert_eq!(bounded_stream_cache_bytes(usize::MAX, 1, usize::MAX), None);
+        assert_eq!(bounded_stream_cache_bytes(3, 5, 8), Some(8));
+    }
+}
+
 fn copy_and_hash_artifact(
     source: &File,
     destination: &mut File,
@@ -423,7 +799,7 @@ fn numpy_from_location(
     let numpy = PyModule::import_bound(py, "numpy")?;
     let (buffer, offset) = match artifact {
         ArtifactOwner::Bytes(artifact) => (artifact.clone_ref(py).into_any(), row_offset),
-        ArtifactOwner::PathFile { file } => {
+        ArtifactOwner::PathFile { file, .. } => {
             let offset = u64::try_from(row_offset).map_err(|_| {
                 PyValueError::new_err(format!("training {kind} offset exceeds u64"))
             })?;

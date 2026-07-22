@@ -605,6 +605,141 @@ def test_training_execution_plan_binding_rejects_unknown_profile():
         abir.compile_training_execution_plan("turbo")
 
 
+def _execution_snapshot(profile):
+    rows = []
+    for index in range(3):
+        rows.append(
+            {
+                "logical_id": f"{0x43 + index:02x}" * 32,
+                "group": "44" * 32,
+                "label": "45" * 32,
+                "split": "46" * 32,
+                "element": "i16",
+                "byte_order": "little",
+                "shape": [4],
+                "payload": bytes([index + 1, 0, 2, 0, 3, 0, 4, 0]),
+            }
+        )
+    return abir.seal_training_snapshot(
+        dataset_roots=["41" * 32],
+        spec_id="42" * 32,
+        profile=profile,
+        rows=rows,
+        label_payloads=[],
+        decision_log_id="47" * 32,
+    )
+
+
+def test_native_execution_receipts_exercise_all_six_canonical_plans(tmp_path):
+    receipts = []
+    for profile in (
+        "speed",
+        "balanced",
+        "memory",
+        "compact",
+        "ultra-compact",
+        "stream",
+    ):
+        sealed = _execution_snapshot(profile)
+        if profile == "compact":
+            store = abir.TrainingWindowStore.open_bytes(sealed["artifact"])
+        else:
+            path = tmp_path / f"{profile}.bcs2"
+            path.write_bytes(sealed["artifact"])
+            store = abir.TrainingWindowStore.open_path(path)
+        receipt = dict(store.execute_training_plan())
+        trace = json.loads(receipt["observed_trace_json"])
+
+        assert receipt["profile"] == profile
+        assert receipt["plan_id"] == abir.compile_training_execution_plan(profile)[
+            "plan_id"
+        ]
+        assert receipt["physical_artifact_sha256"] == hashlib.sha256(
+            sealed["artifact"]
+        ).hexdigest()
+        assert receipt["row_count"] == 3
+        assert receipt["logical_bytes"] == 24
+        assert trace["plan_id"] == receipt["plan_id"]
+        assert trace["profile"] == profile
+        assert hashlib.sha256(
+            receipt["observed_trace_json"].encode()
+        ).hexdigest() == receipt["observed_trace_id"]
+        receipts.append(receipt)
+
+    assert len({receipt["plan_id"] for receipt in receipts}) == 6
+    assert len({receipt["implementation_id"] for receipt in receipts}) == 6
+    assert len({receipt["logical_payload_sha256"] for receipt in receipts}) == 1
+    assert [json.loads(receipt["observed_trace_json"])["payload_access"] for receipt in receipts] == [
+        "mmap-direct",
+        "mmap-direct",
+        "mmap-direct",
+        "materialized-bytes",
+        "file-stream",
+        "file-stream",
+    ]
+    assert [
+        json.loads(receipt["observed_trace_json"])["prefetch_rows_observed"]
+        for receipt in receipts
+    ] == [2, 2, 1, 2, 0, 2]
+
+
+def test_native_execution_receipt_rejects_backing_that_cannot_honor_plan(tmp_path):
+    speed = _execution_snapshot("speed")
+    bytes_store = abir.TrainingWindowStore.open_bytes(speed["artifact"])
+    with pytest.raises(ValueError, match="requires mmap"):
+        bytes_store.execute_training_plan()
+
+    compact = _execution_snapshot("compact")
+    compact_path = tmp_path / "compact.bcs2"
+    compact_path.write_bytes(compact["artifact"])
+    path_store = abir.TrainingWindowStore.open_path(compact_path)
+    with pytest.raises(ValueError, match="requires materialized bytes"):
+        path_store.execute_training_plan()
+
+
+def test_native_execution_receipt_is_deterministic_after_path_replacement(tmp_path):
+    sealed = _execution_snapshot("speed")
+    path = tmp_path / "speed.bcs2"
+    path.write_bytes(sealed["artifact"])
+    store = abir.TrainingWindowStore.open_path(path)
+    first = dict(store.execute_training_plan())
+
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(b"not the held artifact")
+    os.replace(replacement, path)
+
+    assert dict(store.execute_training_plan()) == first
+
+
+def test_stream_execution_fails_when_bounded_lookahead_exceeds_cache(tmp_path):
+    payload = bytes(9 * 1024 * 1024)
+    sealed = abir.seal_training_snapshot(
+        dataset_roots=["51" * 32],
+        spec_id="52" * 32,
+        profile="stream",
+        rows=[
+            {
+                "logical_id": "53" * 32,
+                "group": "54" * 32,
+                "label": "55" * 32,
+                "split": "56" * 32,
+                "element": "i16",
+                "byte_order": "little",
+                "shape": [len(payload) // 2],
+                "payload": payload,
+            }
+        ],
+        label_payloads=[],
+        decision_log_id="57" * 32,
+    )
+    path = tmp_path / "oversized-stream-row.bcs2"
+    path.write_bytes(sealed["artifact"])
+    store = abir.TrainingWindowStore.open_path(path)
+
+    with pytest.raises(ValueError, match="exceeds canonical cache budget"):
+        store.execute_training_plan()
+
+
 def test_public_decision_replay_reopens_durable_log_and_fails_closed():
     spec = _acceptance_spec()
     records = [{

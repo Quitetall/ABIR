@@ -55,6 +55,7 @@ dependencies = [
  "fs2",
  "memmap2",
  "pyo3",
+ "serde_json",
  "sha2",
  "tempfile",
 ]
