@@ -41,6 +41,7 @@ pub fn repack_with_frames(
     }
     if !root.frames().is_empty() {
         if embedded_objects.is_empty() && root.references().is_empty() {
+            // A raw-framed Blob is already a complete portable artifact.
             return Ok(root_bytes.to_vec());
         }
         return Err(Bcs2Error::DuplicateFrame);

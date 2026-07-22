@@ -159,19 +159,29 @@ fn blob_root_content_id(media_type: &str, payload: ContentId, len: usize) -> Con
 }
 
 fn validate_media_type(value: &str) -> Result<(), Bcs2Error> {
-    if value.is_empty()
-        || value.len() > 255
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-' | b'/'
-                )
-        })
+    let Some((type_name, subtype)) = value.split_once('/') else {
+        return Err(Bcs2Error::SemanticEncoding);
+    };
+    if subtype.contains('/') || !valid_restricted_name(type_name) || !valid_restricted_name(subtype)
     {
         return Err(Bcs2Error::SemanticEncoding);
     }
     Ok(())
+}
+
+fn valid_restricted_name(value: &str) -> bool {
+    value.len() <= 127
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-'
+                )
+        })
 }
 
 fn parse_semantic_json(bytes: &[u8]) -> Result<(&str, ContentId, usize), Bcs2Error> {

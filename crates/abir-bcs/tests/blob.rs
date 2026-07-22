@@ -36,6 +36,13 @@ fn forensic_blob_is_deterministic_zero_copy_and_supports_empty_files() {
         encode_blob(payload, "bad media type", ResourceBounds::default()),
         Err(Bcs2Error::SemanticEncoding)
     );
+    for invalid in ["image", "/png", "image/", "image//png", "!image/png"] {
+        assert_eq!(
+            encode_blob(payload, invalid, ResourceBounds::default()),
+            Err(Bcs2Error::SemanticEncoding)
+        );
+    }
+    assert!(encode_blob(payload, "image/png#x", ResourceBounds::default()).is_ok());
 }
 
 #[test]
