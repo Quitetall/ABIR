@@ -5,12 +5,17 @@
 //! catalog/frame closure and then lends the original frame bytes without a
 //! copy.
 
+mod compiler;
 mod continual;
 mod decision;
 mod error;
 mod model;
 mod store;
 
+pub use compiler::{
+    compile_execution_plan, CacheBudget, ClosurePolicy, CompiledExecutionPlan, PayloadAccessPolicy,
+    PlanCompileError, PlanOverrides, PrefetchPolicy, RowGrouping,
+};
 pub use continual::{
     ClosedSubscription, DatasetSubscription, MicroSnapshot, SubscriptionCorrection,
 };
