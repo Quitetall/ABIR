@@ -495,6 +495,100 @@ def _validate_acceptance_artifact(artifact):
     jsonschema.validate(json.loads(artifact), schema)
 
 
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [
+        (
+            "speed",
+            {
+                "cache_budget": {"bytes": 1_073_741_824},
+                "closure": "allow-verified-external-references",
+                "payload_access": "require-mmap",
+                "prefetch": {"kind": "rows", "rows": 64},
+                "profile": "speed",
+                "row_grouping": {"bytes": 67_108_864, "kind": "target-bytes"},
+                "schema": "org.quitetall.abir.training.execution-plan-v1",
+            },
+        ),
+        (
+            "balanced",
+            {
+                "cache_budget": {"bytes": 268_435_456},
+                "closure": "allow-verified-external-references",
+                "payload_access": "prefer-mmap",
+                "prefetch": {"kind": "rows", "rows": 16},
+                "profile": "balanced",
+                "row_grouping": {"bytes": 16_777_216, "kind": "target-bytes"},
+                "schema": "org.quitetall.abir.training.execution-plan-v1",
+            },
+        ),
+        (
+            "memory",
+            {
+                "cache_budget": {"bytes": 33_554_432},
+                "closure": "allow-verified-external-references",
+                "payload_access": "prefer-mmap",
+                "prefetch": {"kind": "rows", "rows": 1},
+                "profile": "memory",
+                "row_grouping": {"kind": "fixed-rows", "rows": 1},
+                "schema": "org.quitetall.abir.training.execution-plan-v1",
+            },
+        ),
+        (
+            "compact",
+            {
+                "cache_budget": {"bytes": 134_217_728},
+                "closure": "portable",
+                "payload_access": "materialize",
+                "prefetch": {"kind": "rows", "rows": 4},
+                "profile": "compact",
+                "row_grouping": {"bytes": 8_388_608, "kind": "target-bytes"},
+                "schema": "org.quitetall.abir.training.execution-plan-v1",
+            },
+        ),
+        (
+            "ultra-compact",
+            {
+                "cache_budget": {"bytes": 16_777_216},
+                "closure": "portable",
+                "payload_access": "stream",
+                "prefetch": {"kind": "disabled"},
+                "profile": "ultra-compact",
+                "row_grouping": {"bytes": 67_108_864, "kind": "target-bytes"},
+                "schema": "org.quitetall.abir.training.execution-plan-v1",
+            },
+        ),
+        (
+            "stream",
+            {
+                "cache_budget": {"bytes": 8_388_608},
+                "closure": "allow-verified-external-references",
+                "payload_access": "stream",
+                "prefetch": {"kind": "rows", "rows": 2},
+                "profile": "stream",
+                "row_grouping": {"kind": "fixed-rows", "rows": 1},
+                "schema": "org.quitetall.abir.training.execution-plan-v1",
+            },
+        ),
+    ],
+)
+def test_training_execution_plan_binding_matches_canonical_rust_profiles(
+    profile, expected
+):
+    compiled = abir.compile_training_execution_plan(profile)
+
+    assert json.loads(compiled["canonical_json"]) == expected
+    assert compiled["canonical_json"] == json.dumps(
+        expected, separators=(",", ":"), sort_keys=True
+    )
+    assert len(compiled["plan_id"]) == 64
+
+
+def test_training_execution_plan_binding_rejects_unknown_profile():
+    with pytest.raises(ValueError, match="unknown training profile"):
+        abir.compile_training_execution_plan("turbo")
+
+
 def test_public_decision_replay_reopens_durable_log_and_fails_closed():
     spec = _acceptance_spec()
     records = [{

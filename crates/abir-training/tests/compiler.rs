@@ -16,6 +16,23 @@ fn all_registered_profiles_compile_to_distinct_plans() {
 }
 
 #[test]
+fn all_registered_profiles_have_canonical_json_matching_their_typed_plan() {
+    for profile in TrainingProfile::ALL {
+        let plan = compile_execution_plan(profile, PlanOverrides::default()).unwrap();
+        let canonical = plan.canonical_json().unwrap();
+        let reparsed: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
+
+        assert_eq!(reparsed["profile"], serde_json::to_value(profile).unwrap());
+        assert_eq!(
+            reparsed["schema"],
+            "org.quitetall.abir.training.execution-plan-v1"
+        );
+        assert_eq!(serde_json::to_vec(&reparsed).unwrap(), canonical);
+        assert_eq!(plan.content_id().unwrap().to_string().len(), 64);
+    }
+}
+
+#[test]
 fn portable_profiles_are_closed_and_forbid_external_references() {
     for profile in [TrainingProfile::Compact, TrainingProfile::UltraCompact] {
         let plan = compile_execution_plan(profile, PlanOverrides::default()).unwrap();

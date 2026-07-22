@@ -1,10 +1,10 @@
 use abir_bcs::{ResourceBounds, SemanticPayloadFrame};
 use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType, Presence};
 use abir_training::{
-    encode_snapshot, ContentKey, ContinualPromotion, DatasetSubscription, DecisionLog,
-    DecisionRecord, DecisionReplayReceipt, MicroSnapshot, SourceEquivalenceReceipt,
-    SubscriptionCorrection, TrainingAssociatedPayload, TrainingLabelPayloadAssociation,
-    TrainingRow, TrainingSnapshot, TrainingSpec,
+    compile_execution_plan, encode_snapshot, ContentKey, ContinualPromotion, DatasetSubscription,
+    DecisionLog, DecisionRecord, DecisionReplayReceipt, MicroSnapshot, PlanOverrides,
+    SourceEquivalenceReceipt, SubscriptionCorrection, TrainingAssociatedPayload,
+    TrainingLabelPayloadAssociation, TrainingRow, TrainingSnapshot, TrainingSpec,
 };
 use abir_training::{DecisionLogReplayState, TrainingProfile, TrainingWindowStore};
 use memmap2::MmapOptions;
@@ -672,6 +672,31 @@ fn parse_profile(value: &str) -> PyResult<TrainingProfile> {
         "stream" => Ok(TrainingProfile::Stream),
         _ => Err(PyValueError::new_err("unknown training profile")),
     }
+}
+
+/// Compile one registered training profile through the canonical Rust compiler.
+///
+/// The returned JSON is the exact canonical byte representation used to derive
+/// `plan_id`. Hardware observations are intentionally not compiler inputs.
+#[pyfunction]
+pub(crate) fn compile_training_execution_plan<'py>(
+    py: Python<'py>,
+    profile: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let plan = compile_execution_plan(parse_profile(profile)?, PlanOverrides::default())
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let canonical_json = String::from_utf8(
+        plan.canonical_json()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    )
+    .map_err(|_| PyValueError::new_err("canonical training plan is not UTF-8"))?;
+    let plan_id = plan
+        .content_id()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let result = PyDict::new_bound(py);
+    result.set_item("canonical_json", canonical_json)?;
+    result.set_item("plan_id", plan_id.to_string())?;
+    Ok(result)
 }
 
 fn parse_presence(value: &str) -> PyResult<Presence> {

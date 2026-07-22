@@ -389,6 +389,10 @@ fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDataset>()?;
     module.add_class::<training::PyTrainingWindowStore>()?;
     module.add_function(wrap_pyfunction!(
+        training::compile_training_execution_plan,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         training::seal_training_continual_promotion,
         module
     )?)?;
