@@ -77,12 +77,22 @@ the little-endian frame count, bytes 12–15 are zero, and bytes 16–47 are the
 BLAKE3-256 catalog digest. Non-empty indexes append 128-byte entries sorted
 strictly by logical object `ContentId`. Entry bytes 0–31 contain `ContentId`,
 32–63 contain `StorageId`, 64–71 contain the frame offset, 72–79 contain frame
-length, byte 80 is frame kind (1 is embedded BCS2; 2 is a raw blob), byte 81 is flags, bytes
-82–95 are zero, and bytes 96–127 contain the raw BLAKE3-256 frame digest. Frame
+length, and byte 80 is frame kind: 1 is embedded BCS2, 2 is a raw blob, and 3
+is a semantic payload. Byte 81 is zero for kinds 1 and 2; for kind 3 it is the
+registered element-type code (`i8` through `bytes`, codes 1 through 15 in
+`ElementType` declaration order). Bytes 82–95 are zero, and bytes 96–127
+contain the raw BLAKE3-256 frame digest. Frame
 payloads occur contiguously between catalog and index in entry order. Readers
 verify both digests and recompute kind-specific identities. Embedded BCS2 frames
 are parsed and their root `ContentId` must equal the entry. Raw frames use
 domain-separated BLAKE3-256 logical and physical identities and may be empty.
+Semantic payload frames recompute the ABIR semantic-v1 payload `ContentId` from
+the declared element type and logical bytes; their physical identity uses the
+raw-frame storage identity. A dataset-with-payloads encoding contains exactly
+one typed frame for every sorted unique `AbirDataset::payload_content_ids()`
+entry. Missing, extra, relabelled, truncated, or digest-mismatched payloads fail
+closed. Stores index these frames by descriptor identity and lend their byte
+extent directly through `PayloadAccess` without copying.
 An embedded BCS2 artifact may contain raw frames but cannot contain another
 embedded BCS2 frame; thus generation-2 verification depth remains bounded.
 

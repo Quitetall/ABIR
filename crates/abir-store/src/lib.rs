@@ -1,10 +1,14 @@
-use abir::{ContentId, StorageId};
+use abir::{
+    verify_payload_content, ContentId, PayloadAccess, PayloadAccessError, PayloadDescriptor,
+    PayloadLease, StorageId,
+};
 use abir_bcs::{repack_with_frames, Bcs2Error, Bcs2View, FrameKind, ResourceBounds};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 use std::sync::Arc;
 
 mod fs;
-pub use fs::{FsAbirStore, MmapLease};
+pub use fs::{FsAbirStore, MmapLease, MmapPayloadLease};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum StoreError {
@@ -44,6 +48,7 @@ struct StoredObject {
     content_id: ContentId,
     storage_id: StorageId,
     references: BTreeSet<ContentId>,
+    payloads: BTreeMap<ContentId, Range<usize>>,
     bytes: Arc<[u8]>,
 }
 
@@ -52,6 +57,18 @@ pub struct StoreLease {
     content_id: ContentId,
     storage_id: StorageId,
     bytes: Arc<[u8]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StorePayloadLease {
+    bytes: Arc<[u8]>,
+    range: Range<usize>,
+}
+
+impl PayloadLease for StorePayloadLease {
+    fn bytes(&self) -> &[u8] {
+        &self.bytes[self.range.clone()]
+    }
 }
 
 impl StoreLease {
@@ -72,6 +89,7 @@ impl StoreLease {
 pub struct AbirStore {
     by_storage: BTreeMap<StorageId, StoredObject>,
     by_content: BTreeMap<ContentId, BTreeSet<StorageId>>,
+    payloads: BTreeMap<ContentId, BTreeSet<StorageId>>,
     pinned_roots: BTreeSet<ContentId>,
 }
 
@@ -86,6 +104,16 @@ impl AbirStore {
         let content_id = view.root_content_id();
         let storage_id = view.storage_id();
         let references: BTreeSet<_> = view.references().iter().copied().collect();
+        let base = bytes.as_ptr() as usize;
+        let payloads: BTreeMap<_, _> = view
+            .frames()
+            .iter()
+            .filter(|frame| frame.kind() == FrameKind::SemanticPayload)
+            .map(|frame| {
+                let start = frame.bytes().as_ptr() as usize - base;
+                (frame.content_id(), start..start + frame.bytes().len())
+            })
+            .collect();
         if let Some(existing) = self.by_storage.get(&storage_id) {
             if existing.bytes.as_ref() != bytes.as_ref() || existing.content_id != content_id {
                 return Err(StoreError::ConflictingStorageIdentity(storage_id));
@@ -106,6 +134,7 @@ impl AbirStore {
             content_id,
             storage_id,
             references,
+            payloads: payloads.clone(),
             bytes,
         };
         self.by_storage.insert(storage_id, object);
@@ -113,6 +142,12 @@ impl AbirStore {
             .entry(content_id)
             .or_default()
             .insert(storage_id);
+        for payload_id in payloads.keys() {
+            self.payloads
+                .entry(*payload_id)
+                .or_default()
+                .insert(storage_id);
+        }
         Ok((content_id, storage_id))
     }
 
@@ -227,11 +262,18 @@ impl AbirStore {
             reachable.contains(&object.content_id) || Arc::strong_count(&object.bytes) > 1
         });
         self.by_content.clear();
+        self.payloads.clear();
         for object in self.by_storage.values() {
             self.by_content
                 .entry(object.content_id)
                 .or_default()
                 .insert(object.storage_id);
+            for payload_id in object.payloads.keys() {
+                self.payloads
+                    .entry(*payload_id)
+                    .or_default()
+                    .insert(object.storage_id);
+            }
         }
         before - self.by_storage.len()
     }
@@ -242,6 +284,51 @@ impl AbirStore {
 
     pub fn physical_variants(&self, content_id: ContentId) -> usize {
         self.by_content.get(&content_id).map_or(0, BTreeSet::len)
+    }
+}
+
+impl PayloadAccess for AbirStore {
+    type Lease<'a>
+        = StorePayloadLease
+    where
+        Self: 'a;
+
+    fn lease<'a>(
+        &'a self,
+        descriptor: &PayloadDescriptor,
+    ) -> Result<Self::Lease<'a>, PayloadAccessError> {
+        let storage_id = self
+            .payloads
+            .get(&descriptor.content_id())
+            .and_then(|ids| ids.first().copied())
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let object = self
+            .by_storage
+            .get(&storage_id)
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let range = object
+            .payloads
+            .get(&descriptor.content_id())
+            .cloned()
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let bytes = object
+            .bytes
+            .get(range.clone())
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        if let Err(error) = verify_payload_content(descriptor, bytes) {
+            return match error {
+                abir::PayloadVerificationError::LengthMismatch { expected, actual } => {
+                    Err(PayloadAccessError::LengthMismatch { expected, actual })
+                }
+                abir::PayloadVerificationError::ContentIdMismatch { .. } => {
+                    Err(PayloadAccessError::NotFound(descriptor.content_id()))
+                }
+            };
+        }
+        Ok(StorePayloadLease {
+            bytes: Arc::clone(&object.bytes),
+            range,
+        })
     }
 }
 

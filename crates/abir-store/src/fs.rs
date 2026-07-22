@@ -1,10 +1,14 @@
 use crate::{validate_portable_bundle, StoreError};
-use abir::{ContentId, StorageId};
-use abir_bcs::{repack_with_frames, Bcs2View, ResourceBounds};
+use abir::{
+    verify_payload_content, ContentId, PayloadAccess, PayloadAccessError, PayloadDescriptor,
+    PayloadLease, StorageId,
+};
+use abir_bcs::{repack_with_frames, Bcs2View, FrameKind, ResourceBounds};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct FileMeta {
     content_id: ContentId,
     references: BTreeSet<ContentId>,
+    payloads: BTreeMap<ContentId, Range<usize>>,
     path: PathBuf,
 }
 
@@ -22,6 +27,36 @@ pub struct MmapLease {
     mmap: Mmap,
     active: Arc<Mutex<BTreeMap<StorageId, usize>>>,
     lock: File,
+}
+
+pub struct MmapPayloadLease {
+    mmap: Mmap,
+    range: Range<usize>,
+    storage_id: StorageId,
+    active: Arc<Mutex<BTreeMap<StorageId, usize>>>,
+    lock: File,
+}
+
+impl PayloadLease for MmapPayloadLease {
+    fn bytes(&self) -> &[u8] {
+        &self.mmap[self.range.clone()]
+    }
+}
+
+impl Drop for MmapPayloadLease {
+    fn drop(&mut self) {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(count) = active.get_mut(&self.storage_id) {
+            *count -= 1;
+            if *count == 0 {
+                active.remove(&self.storage_id);
+            }
+        }
+        let _ = fs2::FileExt::unlock(&self.lock);
+    }
 }
 
 impl MmapLease {
@@ -60,6 +95,7 @@ pub struct FsAbirStore {
     limits: ResourceBounds,
     by_storage: BTreeMap<StorageId, FileMeta>,
     by_content: BTreeMap<ContentId, BTreeSet<StorageId>>,
+    payloads: BTreeMap<ContentId, BTreeSet<StorageId>>,
     pinned_roots: BTreeSet<ContentId>,
     active: Arc<Mutex<BTreeMap<StorageId, usize>>>,
 }
@@ -84,6 +120,7 @@ impl FsAbirStore {
             limits,
             by_storage: BTreeMap::new(),
             by_content: BTreeMap::new(),
+            payloads: BTreeMap::new(),
             pinned_roots: BTreeSet::new(),
             active: Arc::new(Mutex::new(BTreeMap::new())),
         };
@@ -355,6 +392,7 @@ impl FsAbirStore {
     fn rebuild_index(&mut self) -> Result<(), StoreError> {
         self.by_storage.clear();
         self.by_content.clear();
+        self.payloads.clear();
         for entry in
             fs::read_dir(&self.objects).map_err(|error| StoreError::io("read objects", error))?
         {
@@ -390,9 +428,20 @@ impl FsAbirStore {
         if expected.is_some_and(|value| value != storage_id) {
             return Err(StoreError::ConflictingStorageIdentity(storage_id));
         }
+        let base = bytes.as_ptr() as usize;
+        let payloads: BTreeMap<_, _> = view
+            .frames()
+            .iter()
+            .filter(|frame| frame.kind() == FrameKind::SemanticPayload)
+            .map(|frame| {
+                let start = frame.bytes().as_ptr() as usize - base;
+                (frame.content_id(), start..start + frame.bytes().len())
+            })
+            .collect();
         let meta = FileMeta {
             content_id: view.root_content_id(),
             references: view.references().iter().copied().collect(),
+            payloads: payloads.clone(),
             path,
         };
         if let Some(existing_storage) = self
@@ -416,16 +465,29 @@ impl FsAbirStore {
             .entry(content_id)
             .or_default()
             .insert(storage_id);
+        for payload_id in payloads.keys() {
+            self.payloads
+                .entry(*payload_id)
+                .or_default()
+                .insert(storage_id);
+        }
         Ok(())
     }
 
     fn rebuild_content_index(&mut self) {
         self.by_content.clear();
+        self.payloads.clear();
         for (storage_id, meta) in &self.by_storage {
             self.by_content
                 .entry(meta.content_id)
                 .or_default()
                 .insert(*storage_id);
+            for payload_id in meta.payloads.keys() {
+                self.payloads
+                    .entry(*payload_id)
+                    .or_default()
+                    .insert(*storage_id);
+            }
         }
     }
 
@@ -482,6 +544,70 @@ impl FsAbirStore {
             .write(true)
             .open(&self.lock_path)
             .map_err(|error| StoreError::io("open store lock", error))
+    }
+}
+
+impl PayloadAccess for FsAbirStore {
+    type Lease<'a>
+        = MmapPayloadLease
+    where
+        Self: 'a;
+
+    fn lease<'a>(
+        &'a self,
+        descriptor: &PayloadDescriptor,
+    ) -> Result<Self::Lease<'a>, PayloadAccessError> {
+        let storage_id = self
+            .payloads
+            .get(&descriptor.content_id())
+            .and_then(|ids| ids.first().copied())
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let meta = self
+            .by_storage
+            .get(&storage_id)
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let lock = self
+            .shared_lock()
+            .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let file = File::open(&meta.path)
+            .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let mmap = unsafe { MmapOptions::new().map(&file) }
+            .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let view = Bcs2View::parse(&mmap, self.supported_capabilities, self.limits)
+            .map_err(|_| PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let frame = view
+            .frames()
+            .iter()
+            .find(|frame| {
+                frame.kind() == FrameKind::SemanticPayload
+                    && frame.content_id() == descriptor.content_id()
+            })
+            .ok_or(PayloadAccessError::NotFound(descriptor.content_id()))?;
+        let start = frame.bytes().as_ptr() as usize - mmap.as_ptr() as usize;
+        let range = start..start + frame.bytes().len();
+        if let Err(error) = verify_payload_content(descriptor, &mmap[range.clone()]) {
+            return match error {
+                abir::PayloadVerificationError::LengthMismatch { expected, actual } => {
+                    Err(PayloadAccessError::LengthMismatch { expected, actual })
+                }
+                abir::PayloadVerificationError::ContentIdMismatch { .. } => {
+                    Err(PayloadAccessError::NotFound(descriptor.content_id()))
+                }
+            };
+        }
+        *self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entry(storage_id)
+            .or_default() += 1;
+        Ok(MmapPayloadLease {
+            mmap,
+            range,
+            storage_id,
+            active: Arc::clone(&self.active),
+            lock,
+        })
     }
 }
 

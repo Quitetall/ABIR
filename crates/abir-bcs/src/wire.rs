@@ -1,4 +1,7 @@
-use abir::{canonical_debug_json, logical_content_id, AbirDataset, ContentId, StorageId};
+use abir::{
+    canonical_debug_json, logical_content_id, payload_content_id, AbirDataset, ContentId,
+    ElementType, StorageId,
+};
 use alloc::collections::BTreeMap;
 use alloc::{vec, vec::Vec};
 use core::fmt;
@@ -205,6 +208,8 @@ pub enum Bcs2Error {
     RootIdentityMismatch,
     GenerationRootMismatch,
     SemanticEncoding,
+    MissingPayload(ContentId),
+    PayloadDescriptorMismatch(ContentId),
 }
 
 impl fmt::Display for Bcs2Error {
@@ -422,6 +427,7 @@ pub struct Bcs2View<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct FrameView<'a> {
     kind: FrameKind,
+    element: Option<ElementType>,
     content_id: ContentId,
     storage_id: StorageId,
     bytes: &'a [u8],
@@ -432,11 +438,15 @@ pub struct FrameView<'a> {
 pub enum FrameKind {
     EmbeddedBcs2 = 1,
     RawBlob = 2,
+    SemanticPayload = 3,
 }
 
 impl<'a> FrameView<'a> {
     pub const fn kind(&self) -> FrameKind {
         self.kind
+    }
+    pub const fn element(&self) -> Option<ElementType> {
+        self.element
     }
     pub const fn content_id(&self) -> ContentId {
         self.content_id
@@ -640,9 +650,18 @@ impl<'a> Bcs2View<'a> {
             let frame_kind = match entry[80] {
                 1 => FrameKind::EmbeddedBcs2,
                 2 => FrameKind::RawBlob,
+                3 => FrameKind::SemanticPayload,
                 _ => return Err(Bcs2Error::CatalogCorrupt),
             };
-            if entry[81] != 0 || entry[82..96].iter().any(|byte| *byte != 0) {
+            let element = if frame_kind == FrameKind::SemanticPayload {
+                Some(element_from_wire_code(entry[81])?)
+            } else {
+                if entry[81] != 0 {
+                    return Err(Bcs2Error::CatalogCorrupt);
+                }
+                None
+            };
+            if entry[82..96].iter().any(|byte| *byte != 0) {
                 return Err(Bcs2Error::CatalogCorrupt);
             }
             if frame_kind == FrameKind::EmbeddedBcs2 && !allow_embedded_frames {
@@ -690,9 +709,18 @@ impl<'a> Bcs2View<'a> {
                         return Err(Bcs2Error::FrameIdentityMismatch);
                     }
                 }
+                FrameKind::SemanticPayload => {
+                    let element = element.ok_or(Bcs2Error::CatalogCorrupt)?;
+                    if payload_content_id(element, frame) != content_id
+                        || raw_storage_id(frame) != storage_id
+                    {
+                        return Err(Bcs2Error::FrameIdentityMismatch);
+                    }
+                }
             }
             frames.push(FrameView {
                 kind: frame_kind,
+                element,
                 content_id,
                 storage_id,
                 bytes: frame,
@@ -792,6 +820,47 @@ impl<'a> Bcs2View<'a> {
     }
     pub fn storage_id(&self) -> StorageId {
         storage_id_for(self.bytes)
+    }
+}
+
+pub(crate) const fn element_wire_code(element: ElementType) -> u8 {
+    match element {
+        ElementType::I8 => 1,
+        ElementType::I16 => 2,
+        ElementType::I24 => 3,
+        ElementType::I32 => 4,
+        ElementType::I64 => 5,
+        ElementType::U8 => 6,
+        ElementType::U16 => 7,
+        ElementType::U32 => 8,
+        ElementType::U64 => 9,
+        ElementType::F16 => 10,
+        ElementType::F32 => 11,
+        ElementType::F64 => 12,
+        ElementType::Bool => 13,
+        ElementType::Utf8 => 14,
+        ElementType::Bytes => 15,
+    }
+}
+
+fn element_from_wire_code(value: u8) -> Result<ElementType, Bcs2Error> {
+    match value {
+        1 => Ok(ElementType::I8),
+        2 => Ok(ElementType::I16),
+        3 => Ok(ElementType::I24),
+        4 => Ok(ElementType::I32),
+        5 => Ok(ElementType::I64),
+        6 => Ok(ElementType::U8),
+        7 => Ok(ElementType::U16),
+        8 => Ok(ElementType::U32),
+        9 => Ok(ElementType::U64),
+        10 => Ok(ElementType::F16),
+        11 => Ok(ElementType::F32),
+        12 => Ok(ElementType::F64),
+        13 => Ok(ElementType::Bool),
+        14 => Ok(ElementType::Utf8),
+        15 => Ok(ElementType::Bytes),
+        _ => Err(Bcs2Error::CatalogCorrupt),
     }
 }
 
