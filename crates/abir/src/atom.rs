@@ -34,6 +34,27 @@ pub enum ElementType {
 }
 
 impl ElementType {
+    /// Stable semantic-v1 tag used when deriving payload content identity.
+    pub const fn semantic_tag(self) -> &'static [u8] {
+        match self {
+            Self::I8 => b"i8",
+            Self::I16 => b"i16",
+            Self::I24 => b"i24",
+            Self::I32 => b"i32",
+            Self::I64 => b"i64",
+            Self::U8 => b"u8",
+            Self::U16 => b"u16",
+            Self::U32 => b"u32",
+            Self::U64 => b"u64",
+            Self::F16 => b"f16",
+            Self::F32 => b"f32",
+            Self::F64 => b"f64",
+            Self::Bool => b"bool",
+            Self::Utf8 => b"utf8",
+            Self::Bytes => b"bytes",
+        }
+    }
+
     pub const fn byte_width(self) -> Option<u64> {
         match self {
             Self::I8 | Self::U8 | Self::Bool | Self::Bytes => Some(1),
@@ -44,6 +65,54 @@ impl ElementType {
             Self::Utf8 => None,
         }
     }
+}
+
+/// Derives the semantic-v1 identity of a logical payload byte sequence.
+///
+/// The bytes are hashed exactly as described by the payload descriptor; the
+/// descriptor's byte order and encoding therefore remain part of the dataset
+/// semantics rather than being normalized by this function.
+pub fn payload_content_id(element: ElementType, logical_bytes: &[u8]) -> ContentId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"abir.semantic-v1.payload\0");
+    hasher.update(element.semantic_tag());
+    hasher.update(&[0]);
+    hasher.update(logical_bytes);
+    ContentId::from_bytes(*hasher.finalize().as_bytes())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadVerificationError {
+    LengthMismatch {
+        expected: u64,
+        actual: usize,
+    },
+    ContentIdMismatch {
+        expected: ContentId,
+        actual: ContentId,
+    },
+}
+
+/// Verifies that bytes satisfy a payload descriptor's length and identity.
+pub fn verify_payload_content(
+    descriptor: &PayloadDescriptor,
+    logical_bytes: &[u8],
+) -> Result<(), PayloadVerificationError> {
+    if u64::try_from(logical_bytes.len()).ok() != Some(descriptor.logical_bytes()) {
+        return Err(PayloadVerificationError::LengthMismatch {
+            expected: descriptor.logical_bytes(),
+            actual: logical_bytes.len(),
+        });
+    }
+
+    let actual = payload_content_id(descriptor.element(), logical_bytes);
+    if actual != descriptor.content_id() {
+        return Err(PayloadVerificationError::ContentIdMismatch {
+            expected: descriptor.content_id(),
+            actual,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

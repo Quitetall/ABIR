@@ -27,9 +27,10 @@ mod view;
 
 #[cfg(feature = "alloc")]
 pub use atom::{
-    Atom, BlobIntegrity, BlobRef, ByteOrder, DecodedSemantics, ElementType, EncodedBlock, Layout,
-    PayloadDescriptor, Presence, SemanticAxis, SignalBlock, Table, TableColumn, TemporalTable,
-    Tensor,
+    payload_content_id, verify_payload_content, Atom, BlobIntegrity, BlobRef, ByteOrder,
+    DecodedSemantics, ElementType, EncodedBlock, Layout, PayloadDescriptor,
+    PayloadVerificationError, Presence, SemanticAxis, SignalBlock, Table, TableColumn,
+    TemporalTable, Tensor,
 };
 #[cfg(feature = "alloc")]
 pub use canonical::{canonical_debug_json, interchange_content_id, logical_content_id};

@@ -30,6 +30,15 @@ metadata, excessive nesting, and payload descriptor mismatches.
   hashed.
 - `SourceKey` preserves a foreign identifier without granting it ABIR identity.
 
+Payload identity is BLAKE3-256 over the byte concatenation
+`"abir.semantic-v1.payload\0" || element-tag || 0x00 || logical-bytes`.
+The frozen element tags are `i8`, `i16`, `i24`, `i32`, `i64`, `u8`, `u16`,
+`u32`, `u64`, `f16`, `f32`, `f64`, `bool`, `utf8`, and `bytes`. Logical bytes
+are hashed exactly in the byte order and encoding declared by the payload
+descriptor. Physical chunking, storage framing, and storage location do not
+affect this identity. A payload resolves only when both its exact logical byte
+length and this `ContentId` match its descriptor.
+
 ## 3. Dataset root and catalog
 
 `AbirDataset` is the first-class root. It owns immutable semantic catalogs and
@@ -86,6 +95,9 @@ ragged offsets are dense integer `[rows + 1]`; COO indices are dense integer
 `[nonzero]`; and block-floating-point scales are dense floating-point
 `[ceil(element_count / block_len)]`. Every descriptor carrying the same
 companion `ContentId` must agree with that contract.
+The dataset payload closure is the sorted, duplicate-free union of every
+primary payload descriptor identity and every layout or explicit-timestamp
+companion identity.
 
 ## 5. Time and presence
 

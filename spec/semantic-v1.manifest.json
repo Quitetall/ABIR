@@ -4,7 +4,7 @@
   "hash_algorithm": "sha256",
   "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
   "artifacts": [
-    { "path": "spec/ABIR_SEMANTIC_V1.md", "sha256": "2cdda48483f271d96f75d38054c6ebbabc6dd6a7cf8fbf78d8546785d368afb5" },
+    { "path": "spec/ABIR_SEMANTIC_V1.md", "sha256": "b6dce82d249f915f69d4b9f4883db8733ebf68b6e52123d12629da0fe6351247" },
     { "path": "spec/COMPATIBILITY.md", "sha256": "aed3f48acde2e7f24db9a3a0614a73de450c4cd9dc85d1d1910b1312503cd01c" },
     { "path": "schema/abir-semantic-v1.schema.json", "sha256": "ff8a1941697a7b241d7d75ba70b450c7ba5a65211d36bd1611136ebdea49e7b0" },
     { "path": "registries/concepts-v1.json", "sha256": "31a936a3c6947e42e6430ca7a3531fbd6cb62e13c1e3e5bf31f7d2db00011423" },

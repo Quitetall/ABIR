@@ -1138,11 +1138,14 @@ impl AbirDataset {
         validated_dataset_metadata_bytes(self).unwrap_or(usize::MAX)
     }
     pub fn payload_content_ids(&self) -> Vec<ContentId> {
-        self.atoms
-            .iter()
-            .filter_map(Atom::payload)
-            .map(|payload| payload.content_id())
-            .collect()
+        let mut content_ids = BTreeSet::new();
+        for atom in &self.atoms {
+            if let Some(payload) = atom.payload() {
+                content_ids.insert(payload.content_id());
+            }
+            content_ids.extend(atom_companion_content_ids(atom));
+        }
+        content_ids.into_iter().collect()
     }
 }
 
