@@ -50,7 +50,10 @@ dependencies = [
  "abir-bcs",
  "abir-conformance",
  "abir-training",
+ "fs2",
+ "memmap2",
  "pyo3",
+ "tempfile",
 ]
 
 [[package]]

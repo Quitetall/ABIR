@@ -1,15 +1,36 @@
 use abir_bcs::ResourceBounds;
 #[cfg(feature = "test-fixtures")]
 use abir_bcs::SemanticPayloadFrame;
-#[cfg(feature = "test-fixtures")]
-use abir_core::{payload_content_id, ContentId};
-use abir_core::{ByteOrder, ElementType};
+use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType};
 #[cfg(feature = "test-fixtures")]
 use abir_training::{encode_snapshot, ContentKey, TrainingRow, TrainingSnapshot};
 use abir_training::{TrainingProfile, TrainingWindowStore};
-use pyo3::exceptions::{PyKeyError, PyValueError};
+use memmap2::MmapOptions;
+use pyo3::exceptions::{PyKeyError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyModule, PyTuple};
+use std::fs::File;
+use std::io::{copy, Read, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+enum ArtifactOwner {
+    Bytes(Py<PyBytes>),
+    PathFile { file: Mutex<File> },
+}
+
+impl ArtifactOwner {
+    const fn backing(&self) -> &'static str {
+        match self {
+            Self::Bytes(_) => "bytes-zero-copy",
+            Self::PathFile { .. } => "path-private-validation",
+        }
+    }
+
+    const fn materializes_rows(&self) -> bool {
+        matches!(self, Self::PathFile { .. })
+    }
+}
 
 #[derive(Debug)]
 struct RowLocation {
@@ -18,6 +39,7 @@ struct RowLocation {
     logical_id: String,
     logical_bytes: usize,
     offset: usize,
+    payload_id: ContentId,
     shape: Vec<u64>,
 }
 
@@ -28,7 +50,7 @@ struct RowLocation {
 /// released without copying the frame payload.
 #[pyclass(name = "TrainingWindowStore", frozen)]
 pub(crate) struct PyTrainingWindowStore {
-    artifact: Py<PyBytes>,
+    artifact: ArtifactOwner,
     profile: &'static str,
     rows: Vec<RowLocation>,
     snapshot_id: String,
@@ -39,44 +61,78 @@ impl PyTrainingWindowStore {
     #[staticmethod]
     fn open_bytes(py: Python<'_>, artifact: Py<PyBytes>) -> PyResult<Self> {
         let artifact_bytes = artifact.bind(py).as_bytes();
-        let store = TrainingWindowStore::open(artifact_bytes, ResourceBounds::default())
-            .map_err(training_error)?;
-        let base = artifact_bytes.as_ptr() as usize;
-        let artifact_len = artifact_bytes.len();
-        let rows = store
-            .rows()
-            .map(|lease| {
-                let bytes = lease.bytes();
-                let offset = (bytes.as_ptr() as usize)
-                    .checked_sub(base)
-                    .filter(|offset| {
-                        offset
-                            .checked_add(bytes.len())
-                            .is_some_and(|end| end <= artifact_len)
-                    })
-                    .ok_or_else(|| {
-                        PyValueError::new_err("validated training row is outside its artifact")
-                    })?;
-                Ok(RowLocation {
-                    byte_order: lease.byte_order(),
-                    element: lease.element(),
-                    logical_id: lease.metadata().logical_id.to_string(),
-                    logical_bytes: bytes.len(),
-                    offset,
-                    shape: lease.shape().to_vec(),
-                })
-            })
-            .collect::<PyResult<Vec<_>>>()?;
-        let snapshot_id = store
-            .snapshot()
-            .content_id()
-            .map_err(training_error)?
-            .to_string();
-        let profile = profile_name(store.snapshot().profile());
-        drop(store);
+        let (profile, rows, snapshot_id) = inspect_artifact(artifact_bytes)?;
 
         Ok(Self {
-            artifact,
+            artifact: ArtifactOwner::Bytes(artifact),
+            profile,
+            rows,
+            snapshot_id,
+        })
+    }
+
+    /// Open and validate a BCS2 training artifact through a read-only mmap.
+    ///
+    /// The artifact itself is never copied into the Python heap. Because the
+    /// abi3-py310 buffer ABI cannot safely make the Rust mmap a NumPy owner,
+    /// `row_numpy` materializes only the selected row and reports that policy
+    /// through `materializes_rows` and `row_info`.
+    #[staticmethod]
+    fn open_path(path: PathBuf) -> PyResult<Self> {
+        let file = File::open(&path)
+            .map_err(|error| PyOSError::new_err(format!("open {}: {error}", path.display())))?;
+        fs2::FileExt::lock_shared(&file).map_err(|error| {
+            PyOSError::new_err(format!(
+                "lock training artifact {} for shared reading: {error}",
+                path.display()
+            ))
+        })?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| PyOSError::new_err(format!("inspect {}: {error}", path.display())))?;
+        if !metadata.is_file() {
+            return Err(PyValueError::new_err(
+                "training artifact must be a regular file",
+            ));
+        }
+        if metadata.len() == 0 {
+            return Err(PyValueError::new_err("training artifact is empty"));
+        }
+        // A typed file-backed mmap is only sound when its inode cannot change.
+        // Unix locks are advisory, so first stream the artifact through a
+        // bounded I/O buffer into an anonymous private file. This does not
+        // materialize the artifact in the Python or Rust heap, and no other
+        // process can name or mutate the private validation inode.
+        let mut private = tempfile::tempfile().map_err(|error| {
+            PyOSError::new_err(format!("create private validation file: {error}"))
+        })?;
+        let copy_limit = metadata
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| PyValueError::new_err("training artifact size exceeds u64"))?;
+        let mut source = (&file).take(copy_limit);
+        let copied = copy(&mut source, &mut private)
+            .map_err(|error| PyOSError::new_err(format!("copy training artifact: {error}")))?;
+        if copied != metadata.len() {
+            return Err(PyValueError::new_err(
+                "training artifact changed size during validation",
+            ));
+        }
+        private
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| PyOSError::new_err(format!("rewind validation file: {error}")))?;
+        // SAFETY: `private` is an anonymous process-private file and remains
+        // alive, unchanged, until this temporary map is dropped below.
+        let mmap = unsafe { MmapOptions::new().map(&private) }.map_err(|error| {
+            PyOSError::new_err(format!("map training artifact {}: {error}", path.display()))
+        })?;
+        let (profile, rows, snapshot_id) = inspect_artifact(&mmap)?;
+        drop(mmap);
+
+        Ok(Self {
+            artifact: ArtifactOwner::PathFile {
+                file: Mutex::new(file),
+            },
             profile,
             rows,
             snapshot_id,
@@ -99,11 +155,32 @@ impl PyTrainingWindowStore {
     }
 
     #[getter]
+    fn backing(&self) -> &'static str {
+        self.artifact.backing()
+    }
+
+    #[getter]
+    fn materializes_rows(&self) -> bool {
+        self.artifact.materializes_rows()
+    }
+
+    #[getter]
     fn row_ids(&self) -> Vec<&str> {
         self.rows
             .iter()
             .map(|row| row.logical_id.as_str())
             .collect()
+    }
+
+    fn row_info<'py>(&self, py: Python<'py>, logical_id: &str) -> PyResult<Bound<'py, PyDict>> {
+        let row = self.row(logical_id)?;
+        let info = PyDict::new_bound(py);
+        info.set_item("logical_id", &row.logical_id)?;
+        info.set_item("logical_bytes", row.logical_bytes)?;
+        info.set_item("shape", &row.shape)?;
+        info.set_item("materialized", self.artifact.materializes_rows())?;
+        info.set_item("backing", self.artifact.backing())?;
+        Ok(info)
     }
 
     fn row_numpy(&self, py: Python<'_>, logical_id: &str) -> PyResult<Py<PyAny>> {
@@ -120,16 +197,81 @@ impl PyTrainingWindowStore {
             .ok_or_else(|| PyValueError::new_err("training row has an invalid element width"))?;
 
         let numpy = PyModule::import_bound(py, "numpy")?;
+        let (buffer, offset) = match &self.artifact {
+            ArtifactOwner::Bytes(artifact) => (artifact.clone_ref(py).into_any(), row.offset),
+            ArtifactOwner::PathFile { file } => {
+                let offset = u64::try_from(row.offset)
+                    .map_err(|_| PyValueError::new_err("training row offset exceeds u64"))?;
+                let bytes = PyBytes::new_bound_with(py, row.logical_bytes, |destination| {
+                    let mut file = file.lock().map_err(|_| {
+                        PyOSError::new_err("training artifact file lock is poisoned")
+                    })?;
+                    file.seek(SeekFrom::Start(offset)).map_err(|error| {
+                        PyOSError::new_err(format!("seek training row: {error}"))
+                    })?;
+                    file.read_exact(destination).map_err(|error| {
+                        PyOSError::new_err(format!("read training row: {error}"))
+                    })?;
+                    let actual = payload_content_id(row.element, destination);
+                    if actual != row.payload_id {
+                        return Err(PyValueError::new_err(format!(
+                            "training row payload changed after validation: expected {}, got {}",
+                            row.payload_id, actual
+                        )));
+                    }
+                    Ok(())
+                })?;
+                (bytes.unbind().into_any(), 0)
+            }
+        };
         let kwargs = PyDict::new_bound(py);
         kwargs.set_item("dtype", dtype)?;
         kwargs.set_item("count", count)?;
-        kwargs.set_item("offset", row.offset)?;
-        let array = numpy.call_method("frombuffer", (self.artifact.bind(py),), Some(&kwargs))?;
+        kwargs.set_item("offset", offset)?;
+        let array = numpy.call_method("frombuffer", (buffer.bind(py),), Some(&kwargs))?;
         let shape = PyTuple::new_bound(py, row.shape.iter().copied());
         let reshaped = array.call_method("reshape", shape, None)?;
         reshaped.getattr("flags")?.setattr("writeable", false)?;
         Ok(reshaped.unbind())
     }
+}
+
+fn inspect_artifact(artifact: &[u8]) -> PyResult<(&'static str, Vec<RowLocation>, String)> {
+    let store =
+        TrainingWindowStore::open(artifact, ResourceBounds::default()).map_err(training_error)?;
+    let base = artifact.as_ptr() as usize;
+    let artifact_len = artifact.len();
+    let rows = store
+        .rows()
+        .map(|lease| {
+            let bytes = lease.bytes();
+            let offset = (bytes.as_ptr() as usize)
+                .checked_sub(base)
+                .filter(|offset| {
+                    offset
+                        .checked_add(bytes.len())
+                        .is_some_and(|end| end <= artifact_len)
+                })
+                .ok_or_else(|| {
+                    PyValueError::new_err("validated training row is outside its artifact")
+                })?;
+            Ok(RowLocation {
+                byte_order: lease.byte_order(),
+                element: lease.element(),
+                logical_id: lease.metadata().logical_id.to_string(),
+                logical_bytes: bytes.len(),
+                offset,
+                payload_id: lease.metadata().payload.content_id(),
+                shape: lease.shape().to_vec(),
+            })
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let snapshot_id = store
+        .snapshot()
+        .content_id()
+        .map_err(training_error)?
+        .to_string();
+    Ok((profile_name(store.snapshot().profile()), rows, snapshot_id))
 }
 
 impl PyTrainingWindowStore {
@@ -163,19 +305,38 @@ fn key(seed: u8) -> ContentKey {
 }
 
 /// Deterministic private fixture for cross-language ownership and corruption tests.
-#[pyfunction(name = "_training_fixture_bytes")]
+#[pyfunction(name = "_training_fixture_bytes", signature = (payload_bytes=8))]
 #[cfg(feature = "test-fixtures")]
-pub(crate) fn training_fixture_bytes(py: Python<'_>) -> PyResult<Bound<'_, PyBytes>> {
-    let payload = [1_u8, 0, 2, 0, 3, 0, 4, 0];
+pub(crate) fn training_fixture_bytes(
+    py: Python<'_>,
+    payload_bytes: usize,
+) -> PyResult<Bound<'_, PyBytes>> {
+    if payload_bytes == 0 || payload_bytes % 2 != 0 {
+        return Err(PyValueError::new_err(
+            "training fixture payload size must be a positive multiple of two",
+        ));
+    }
+    let pattern = [1_u8, 0, 2, 0, 3, 0, 4, 0];
+    let payload: Vec<u8> = pattern
+        .iter()
+        .copied()
+        .cycle()
+        .take(payload_bytes)
+        .collect();
+    let shape = if payload_bytes == pattern.len() {
+        vec![2, 2]
+    } else {
+        vec![(payload_bytes / 2) as u64]
+    };
     let row = TrainingRow {
         byte_order: ByteOrder::Little,
         group: key(5),
         label: key(6),
-        logical_bytes: payload.len() as u64,
+        logical_bytes: payload_bytes as u64,
         logical_id: key(7),
         payload: ContentKey::new(payload_content_id(ElementType::I16, &payload)),
         element: ElementType::I16,
-        shape: vec![2, 2],
+        shape,
         split: key(8),
     };
     let snapshot = TrainingSnapshot::seal(

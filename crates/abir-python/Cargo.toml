@@ -19,4 +19,7 @@ abir-core = { package = "abir", path = "../abir", version = "0.1.0" }
 abir-bcs = { path = "../abir-bcs", version = "0.1.0" }
 abir-conformance = { path = "../abir-conformance", version = "0.1.0" }
 abir-training = { path = "../abir-training", version = "0.1.0" }
+fs2 = "0.4"
+memmap2 = "0.9"
 pyo3 = { version = "0.22", features = ["macros", "extension-module", "abi3-py310"] }
+tempfile = "=3.15.0"
