@@ -250,18 +250,21 @@ impl CodecBundleCatalog {
         if self.semantics_frame.logical_bytes == 0 {
             return Err(CodecBundleError::InvalidFrameExtent);
         }
-        let mut frame_ids = BTreeSet::new();
-        frame_ids.insert(self.semantics_frame.content_id);
+        let mut packet_extents = BTreeMap::new();
         for (ordinal, packet) in self.packets.iter().enumerate() {
             if packet.ordinal as usize != ordinal || packet.logical_bytes == 0 {
                 return Err(CodecBundleError::InvalidPacketOrder);
             }
-            if !frame_ids.insert(packet.content_id) {
+            if packet.content_id == self.semantics_frame.content_id {
                 return Err(CodecBundleError::DuplicateFrame(packet.content_id));
             }
-        }
-        if frame_ids.len() != self.packets.len() + 1 {
-            return Err(CodecBundleError::InvalidCatalog);
+            if let Some(logical_bytes) = packet_extents.get(&packet.content_id) {
+                if *logical_bytes != packet.logical_bytes {
+                    return Err(CodecBundleError::InvalidFrameExtent);
+                }
+            } else {
+                packet_extents.insert(packet.content_id, packet.logical_bytes);
+            }
         }
 
         let mut previous = None;
@@ -865,6 +868,136 @@ mod tests {
         assert_eq!(forward.packet(1), Some(second));
         assert_eq!(reverse.packet(0), Some(second));
         assert_eq!(reverse.packet(1), Some(first));
+    }
+
+    #[test]
+    fn repeated_packet_bindings_share_a_frame_and_preserve_every_ordinal() {
+        let semantics = semantics();
+        let repeated = b"packet-repeat".as_slice();
+        let other = b"packet-other".as_slice();
+        let compact = encode_lml(&semantics, &[repeated, other]);
+        let expanded = encode_lml(&semantics, &[repeated, repeated, other, repeated]);
+        let reordered = encode_lml(&semantics, &[other, repeated, repeated, repeated]);
+
+        let compact_wire =
+            Bcs2View::parse(&compact, 0, ResourceBounds::default()).expect("compact BCS2");
+        let expanded_wire =
+            Bcs2View::parse(&expanded, 0, ResourceBounds::default()).expect("expanded BCS2");
+        let reordered_wire =
+            Bcs2View::parse(&reordered, 0, ResourceBounds::default()).expect("reordered BCS2");
+        assert_eq!(compact_wire.frames().len(), 3);
+        assert_eq!(expanded_wire.frames().len(), 3);
+        assert_eq!(reordered_wire.frames().len(), 3);
+        assert_eq!(
+            compact_wire
+                .frames()
+                .iter()
+                .map(|frame| frame.content_id())
+                .collect::<Vec<_>>(),
+            expanded_wire
+                .frames()
+                .iter()
+                .map(|frame| frame.content_id())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            expanded_wire
+                .frames()
+                .iter()
+                .map(|frame| frame.content_id())
+                .collect::<Vec<_>>(),
+            reordered_wire
+                .frames()
+                .iter()
+                .map(|frame| frame.content_id())
+                .collect::<Vec<_>>()
+        );
+
+        let compact = CodecBundleView::open(&compact, ResourceBounds::default()).unwrap();
+        let expanded = CodecBundleView::open(&expanded, ResourceBounds::default()).unwrap();
+        let reordered = CodecBundleView::open(&reordered, ResourceBounds::default()).unwrap();
+        assert_ne!(compact.root_content_id(), expanded.root_content_id());
+        assert_ne!(expanded.root_content_id(), reordered.root_content_id());
+        assert_eq!(expanded.catalog().packet_count(), 4);
+        assert_eq!(expanded.packet(0), Some(repeated));
+        assert_eq!(expanded.packet(1), Some(repeated));
+        assert_eq!(expanded.packet(2), Some(other));
+        assert_eq!(expanded.packet(3), Some(repeated));
+        assert_eq!(
+            expanded.packets().collect::<Vec<_>>(),
+            [repeated, repeated, other, repeated]
+        );
+        assert_eq!(
+            expanded.packet(0).unwrap().as_ptr(),
+            expanded.packet(1).unwrap().as_ptr()
+        );
+        assert_eq!(
+            expanded.packet(0).unwrap().as_ptr(),
+            expanded.packet(3).unwrap().as_ptr()
+        );
+        assert_eq!(
+            reordered.packets().collect::<Vec<_>>(),
+            [other, repeated, repeated, repeated]
+        );
+    }
+
+    #[test]
+    fn repeated_content_id_with_conflicting_extent_fails_closed() {
+        let semantics = semantics();
+        let repeated = b"packet-repeat".as_slice();
+        let mut catalog = lml_catalog(&semantics, &[repeated, repeated]);
+        catalog.packets[1].logical_bytes += 1;
+
+        assert_eq!(
+            catalog.canonical_json(),
+            Err(CodecBundleError::InvalidFrameExtent)
+        );
+    }
+
+    #[test]
+    fn shared_packet_frame_with_forged_bytes_fails_content_identity_check() {
+        let semantics = semantics();
+        let repeated = b"packet-repeat".as_slice();
+        let mut bytes = encode_lml(&semantics, &[repeated, repeated]);
+        let packet_id = raw_content_id(repeated);
+        let (frame_offset, frame_len) = {
+            let wire = Bcs2View::parse(&bytes, 0, ResourceBounds::default()).unwrap();
+            let packet_frame = wire
+                .frames()
+                .iter()
+                .find(|frame| frame.content_id() == packet_id)
+                .expect("shared packet frame");
+            (
+                packet_frame.bytes().as_ptr() as usize - bytes.as_ptr() as usize,
+                packet_frame.bytes().len(),
+            )
+        };
+
+        bytes[frame_offset] ^= 0x80;
+        let forged = &bytes[frame_offset..frame_offset + frame_len];
+        let index_offset = u64::from_le_bytes(bytes[72..80].try_into().unwrap()) as usize;
+        let frame_count = u32::from_le_bytes(
+            bytes[index_offset + 8..index_offset + 12]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let entry = (0..frame_count)
+            .map(|index| {
+                index_offset
+                    + super::super::wire::INDEX_LEN
+                    + index * super::super::wire::INDEX_ENTRY_LEN
+            })
+            .find(|entry| bytes[*entry..*entry + 32] == *packet_id.as_bytes())
+            .expect("packet index entry");
+        let forged_storage_id = crate::raw_storage_id(forged);
+        let forged_digest = blake3::hash(forged);
+        bytes[entry + 32..entry + 64].copy_from_slice(forged_storage_id.as_bytes());
+        bytes[entry + 96..entry + 128].copy_from_slice(forged_digest.as_bytes());
+
+        assert!(matches!(
+            Bcs2View::parse(&bytes, 0, ResourceBounds::default()),
+            Err(Bcs2Error::FrameIdentityMismatch)
+        ));
     }
 
     #[test]
