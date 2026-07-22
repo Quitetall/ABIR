@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {"id": "edfplus.1", "standard": "EDF/EDF+/BDF", "edition": "EDF+ 1", "status": "forensic", "validator": "EDFbrowser"},
+    {"id": "bids.1.11.1", "standard": "BIDS", "edition": "1.11.1", "status": "forensic", "validator": "bids-validator"},
+    {"id": "nwb.2.10.0", "standard": "NWB", "edition": "2.10.0", "status": "forensic", "validator": "nwbinspector"},
+    {"id": "dicom.ps3.2026c", "standard": "DICOM", "edition": "PS3 2026c", "status": "forensic", "validator": "dciodvfy"},
+    {"id": "xdf.1.0", "standard": "XDF", "edition": "1.0", "status": "forensic", "validator": "pyxdf"},
+    {"id": "lsl.1.16", "standard": "LSL", "edition": "1.16", "status": "stream", "validator": "liblsl"},
+    {"id": "abir.hardware.1", "standard": "ABIR acquisition topology", "edition": "1", "status": "hardware", "validator": "abir-conformance"}
+  ]
+}
