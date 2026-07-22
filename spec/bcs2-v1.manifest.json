@@ -3,9 +3,9 @@
   "artifacts": [
     {"path": "fixtures/bcs2/v1/manifest.json", "sha256": "9caba34e3020513e31b85de128f28dca67198453d7645bd1010d8992b25229df"},
     {"path": "registries/bcs2-crypto-v1.json", "sha256": "806567026f80e7243f1a3688e9eb333a973e16b02c785bcc86df48f1a83caea1"},
-    {"path": "registries/bcs2-profiles-v1.json", "sha256": "11ebc062fa1e0ad81a52ff771d9f71359ac33ec542d684a6105e519f9cecaafe"},
+    {"path": "registries/bcs2-profiles-v1.json", "sha256": "b8cef1965fdee72efc661f62087e0b207ab256c1814edd21dbccc7b2226bfb78"},
     {"path": "schema/bcs2-crypto-v1.schema.json", "sha256": "9ee9aedf2f94f5c99e94e33db91eaf8384668c65bd51482c9111a8a5679b6e38"},
     {"path": "schema/bcs2-profile-v1.schema.json", "sha256": "0a436d158956be62ed04b016a1dfc25e4a19c368b2be97316f46503369020dee"},
-    {"path": "spec/BCS2_V1.md", "sha256": "830f02b721e6d1dc2951aeae53f50665e6e45d12144cf03d82b69e0228356f64"}
+    {"path": "spec/BCS2_V1.md", "sha256": "3a913d23851a88d32ce76e7f9d1862035a37078a6cc891c16e770cf088c77b2b"}
   ]
 }

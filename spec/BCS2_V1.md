@@ -72,6 +72,10 @@ registered keys may add native catalog tables. Closure references are catalog
 bytes and therefore contribute to `StorageId`; stores never accept out-of-band
 reachability claims.
 
+Bundle roots may instead carry a profile-owned canonical catalog. The profile
+verifier must recompute the Bundle root `ContentId` from that catalog, while the
+BCS2 reader continues to verify every typed frame and its declared identity.
+
 The empty frame index is 48 bytes: bytes 0–7 are `BCS2IDX\0`, bytes 8–11 are
 the little-endian frame count, bytes 12–15 are zero, and bytes 16–47 are the
 BLAKE3-256 catalog digest. Non-empty indexes append 128-byte entries sorted
@@ -100,6 +104,20 @@ Profile identifiers reserve their high 16 bits for the family: 1 is LML, 2 is
 LMQ, 3 is training, 4 is stream, and 5 is forensic. The low 16 bits identify a
 profile within that family. Registry generation 1 is the first registry for BCS
 wire major 2; these generation numbers are independent.
+
+The training family defines six policy-selected physical profiles. Every
+training profile accepts Dataset and Bundle roots and no other root kind.
+Compact profiles are portable and therefore forbid unresolved external
+references; the other profiles may retain externally resolved objects.
+
+| Stable ID | Profile | Portable | External references |
+|---:|---|:---:|:---:|
+| `0x0003_0001` | `bcs.training.balanced.v1` | no | yes |
+| `0x0003_0002` | `bcs.training.compact.v1` | yes | no |
+| `0x0003_0003` | `bcs.training.speed.v1` | no | yes |
+| `0x0003_0004` | `bcs.training.memory.v1` | no | yes |
+| `0x0003_0005` | `bcs.training.ultra-compact.v1` | yes | no |
+| `0x0003_0006` | `bcs.training.stream.v1` | no | yes |
 
 The catalog contains the canonical ABIR semantic projection and payload
 descriptors. Physical handles, `StorageId`, observed execution, authorization

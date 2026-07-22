@@ -7,6 +7,10 @@
     {"id": 131073, "name": "bcs.lmq.progressive.v1", "root_kinds": ["dataset", "recording", "stream"], "portable": true, "external_references": false},
     {"id": 196609, "name": "bcs.training.balanced.v1", "root_kinds": ["dataset", "bundle"], "portable": false, "external_references": true},
     {"id": 196610, "name": "bcs.training.compact.v1", "root_kinds": ["dataset", "bundle"], "portable": true, "external_references": false},
+    {"id": 196611, "name": "bcs.training.speed.v1", "root_kinds": ["dataset", "bundle"], "portable": false, "external_references": true},
+    {"id": 196612, "name": "bcs.training.memory.v1", "root_kinds": ["dataset", "bundle"], "portable": false, "external_references": true},
+    {"id": 196613, "name": "bcs.training.ultra-compact.v1", "root_kinds": ["dataset", "bundle"], "portable": true, "external_references": false},
+    {"id": 196614, "name": "bcs.training.stream.v1", "root_kinds": ["dataset", "bundle"], "portable": false, "external_references": true},
     {"id": 262145, "name": "bcs.stream.bounded.v1", "root_kinds": ["stream", "bundle"], "portable": false, "external_references": true},
     {"id": 327681, "name": "bcs.forensic.tree.v1", "root_kinds": ["dataset", "bundle"], "portable": true, "external_references": false},
     {"id": 327682, "name": "bcs.forensic.image.v1", "root_kinds": ["blob", "bundle"], "portable": true, "external_references": false}

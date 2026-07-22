@@ -100,6 +100,10 @@ impl ProfileId {
     pub const LMQ_PROGRESSIVE_V1: Self = Self(0x0002_0001);
     pub const TRAINING_BALANCED_V1: Self = Self(0x0003_0001);
     pub const TRAINING_COMPACT_V1: Self = Self(0x0003_0002);
+    pub const TRAINING_SPEED_V1: Self = Self(0x0003_0003);
+    pub const TRAINING_MEMORY_V1: Self = Self(0x0003_0004);
+    pub const TRAINING_ULTRA_COMPACT_V1: Self = Self(0x0003_0005);
+    pub const TRAINING_STREAM_V1: Self = Self(0x0003_0006);
     pub const STREAM_BOUNDED_V1: Self = Self(0x0004_0001);
     pub const FORENSIC_TREE_V1: Self = Self(0x0005_0001);
     pub const FORENSIC_IMAGE_V1: Self = Self(0x0005_0002);
@@ -115,6 +119,10 @@ impl ProfileId {
             | Self::LMQ_PROGRESSIVE_V1
             | Self::TRAINING_BALANCED_V1
             | Self::TRAINING_COMPACT_V1
+            | Self::TRAINING_SPEED_V1
+            | Self::TRAINING_MEMORY_V1
+            | Self::TRAINING_ULTRA_COMPACT_V1
+            | Self::TRAINING_STREAM_V1
             | Self::STREAM_BOUNDED_V1
             | Self::FORENSIC_TREE_V1
             | Self::FORENSIC_IMAGE_V1 => Ok(profile),
@@ -131,7 +139,12 @@ impl ProfileId {
                     RootKind::Dataset | RootKind::Recording | RootKind::Stream
                 )
             }
-            Self::TRAINING_BALANCED_V1 | Self::TRAINING_COMPACT_V1 => {
+            Self::TRAINING_BALANCED_V1
+            | Self::TRAINING_COMPACT_V1
+            | Self::TRAINING_SPEED_V1
+            | Self::TRAINING_MEMORY_V1
+            | Self::TRAINING_ULTRA_COMPACT_V1
+            | Self::TRAINING_STREAM_V1 => {
                 matches!(root, RootKind::Dataset | RootKind::Bundle)
             }
             Self::STREAM_BOUNDED_V1 => matches!(root, RootKind::Stream | RootKind::Bundle),
@@ -147,13 +160,21 @@ impl ProfileId {
             Self::LML_LOSSLESS_V1
                 | Self::LMQ_PROGRESSIVE_V1
                 | Self::TRAINING_COMPACT_V1
+                | Self::TRAINING_ULTRA_COMPACT_V1
                 | Self::FORENSIC_TREE_V1
                 | Self::FORENSIC_IMAGE_V1
         )
     }
 
     pub const fn allows_external_references(self) -> bool {
-        matches!(self, Self::TRAINING_BALANCED_V1 | Self::STREAM_BOUNDED_V1)
+        matches!(
+            self,
+            Self::TRAINING_SPEED_V1
+                | Self::TRAINING_BALANCED_V1
+                | Self::TRAINING_MEMORY_V1
+                | Self::TRAINING_STREAM_V1
+                | Self::STREAM_BOUNDED_V1
+        )
     }
 }
 

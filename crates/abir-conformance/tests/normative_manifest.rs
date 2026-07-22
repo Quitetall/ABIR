@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use abir_bcs::{ProfileId, RootKind};
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -89,6 +91,90 @@ fn bcs2_profile_registry_is_stable_and_unambiguous() {
             !ids.contains(&retired.as_u64().expect("retired profile id")),
             "active BCS2 profile id is retired"
         );
+    }
+}
+
+#[test]
+fn bcs2_training_registry_matches_rust_contract() {
+    let root = root();
+    let registry: Value = serde_json::from_slice(
+        &fs::read(root.join("registries/bcs2-profiles-v1.json")).expect("read registry"),
+    )
+    .expect("parse registry");
+    let profiles = registry["profiles"].as_array().expect("profiles array");
+    let expected = [
+        (
+            ProfileId::TRAINING_SPEED_V1,
+            0x0003_0003,
+            "bcs.training.speed.v1",
+            false,
+            true,
+        ),
+        (
+            ProfileId::TRAINING_BALANCED_V1,
+            0x0003_0001,
+            "bcs.training.balanced.v1",
+            false,
+            true,
+        ),
+        (
+            ProfileId::TRAINING_MEMORY_V1,
+            0x0003_0004,
+            "bcs.training.memory.v1",
+            false,
+            true,
+        ),
+        (
+            ProfileId::TRAINING_COMPACT_V1,
+            0x0003_0002,
+            "bcs.training.compact.v1",
+            true,
+            false,
+        ),
+        (
+            ProfileId::TRAINING_ULTRA_COMPACT_V1,
+            0x0003_0005,
+            "bcs.training.ultra-compact.v1",
+            true,
+            false,
+        ),
+        (
+            ProfileId::TRAINING_STREAM_V1,
+            0x0003_0006,
+            "bcs.training.stream.v1",
+            false,
+            true,
+        ),
+    ];
+    assert_eq!(
+        profiles
+            .iter()
+            .filter(|entry| {
+                entry["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("bcs.training."))
+            })
+            .count(),
+        expected.len()
+    );
+
+    for (profile, id, name, portable, external_references) in expected {
+        assert_eq!(profile.get(), id);
+        let registered = profiles
+            .iter()
+            .find(|entry| entry["id"].as_u64() == Some(u64::from(profile.get())))
+            .unwrap_or_else(|| panic!("missing registered training profile {name}"));
+        assert_eq!(registered["name"], name);
+        assert_eq!(
+            registered["root_kinds"],
+            serde_json::json!(["dataset", "bundle"])
+        );
+        assert_eq!(registered["portable"], portable);
+        assert_eq!(registered["external_references"], external_references);
+        assert!(profile.accepts(RootKind::Dataset));
+        assert!(profile.accepts(RootKind::Bundle));
+        assert_eq!(profile.is_portable(), portable);
+        assert_eq!(profile.allows_external_references(), external_references);
     }
 }
 
