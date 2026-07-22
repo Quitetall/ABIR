@@ -11,9 +11,10 @@ use memmap2::MmapOptions;
 use pyo3::exceptions::{PyKeyError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString, PyTuple};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{copy, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -94,6 +95,7 @@ pub(crate) struct PyTrainingWindowStore {
     profile: &'static str,
     rows: Vec<RowLocation>,
     label_payloads: Vec<Vec<LabelPayloadLocation>>,
+    physical_artifact_sha256: String,
     snapshot_id: String,
     spec_id: String,
 }
@@ -104,6 +106,7 @@ impl PyTrainingWindowStore {
     fn open_bytes(py: Python<'_>, artifact: Py<PyBytes>) -> PyResult<Self> {
         let artifact_bytes = artifact.bind(py).as_bytes();
         let metadata = inspect_artifact(artifact_bytes)?;
+        let physical_artifact_sha256 = format!("{:x}", Sha256::digest(artifact_bytes));
 
         Ok(Self {
             artifact: ArtifactOwner::Bytes(artifact),
@@ -112,6 +115,7 @@ impl PyTrainingWindowStore {
             profile: metadata.profile,
             rows: metadata.rows,
             label_payloads: metadata.label_payloads,
+            physical_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
         })
@@ -152,18 +156,7 @@ impl PyTrainingWindowStore {
         let mut private = tempfile::tempfile().map_err(|error| {
             PyOSError::new_err(format!("create private validation file: {error}"))
         })?;
-        let copy_limit = metadata
-            .len()
-            .checked_add(1)
-            .ok_or_else(|| PyValueError::new_err("training artifact size exceeds u64"))?;
-        let mut source = (&file).take(copy_limit);
-        let copied = copy(&mut source, &mut private)
-            .map_err(|error| PyOSError::new_err(format!("copy training artifact: {error}")))?;
-        if copied != metadata.len() {
-            return Err(PyValueError::new_err(
-                "training artifact changed size during validation",
-            ));
-        }
+        let physical_artifact_sha256 = copy_and_hash_artifact(&file, &mut private, metadata.len())?;
         private
             .seek(SeekFrom::Start(0))
             .map_err(|error| PyOSError::new_err(format!("rewind validation file: {error}")))?;
@@ -177,13 +170,14 @@ impl PyTrainingWindowStore {
 
         Ok(Self {
             artifact: ArtifactOwner::PathFile {
-                file: Mutex::new(file),
+                file: Mutex::new(private),
             },
             dataset_roots: metadata.dataset_roots,
             decision_log_id: metadata.decision_log_id,
             profile: metadata.profile,
             rows: metadata.rows,
             label_payloads: metadata.label_payloads,
+            physical_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
         })
@@ -207,6 +201,16 @@ impl PyTrainingWindowStore {
     #[getter]
     fn decision_log_id(&self) -> &str {
         &self.decision_log_id
+    }
+
+    /// SHA-256 of the exact immutable bytes retained by this native store.
+    ///
+    /// This is physical evidence only and never participates in ABIR semantic
+    /// identity. Path-backed stores hash and retain their anonymous validation
+    /// file, so replacing or unlinking the source pathname cannot change it.
+    #[getter]
+    fn physical_artifact_sha256(&self) -> &str {
+        &self.physical_artifact_sha256
     }
 
     /// The snapshot binds the decision-log identity, but carries no records
@@ -341,6 +345,44 @@ impl PyTrainingWindowStore {
             }
         }
     }
+}
+
+fn copy_and_hash_artifact(
+    source: &File,
+    destination: &mut File,
+    expected_bytes: u64,
+) -> PyResult<String> {
+    let limit = expected_bytes
+        .checked_add(1)
+        .ok_or_else(|| PyValueError::new_err("training artifact size exceeds u64"))?;
+    let mut source = source.take(limit);
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut copied = 0_u64;
+    let mut digest = Sha256::new();
+    loop {
+        let count = source
+            .read(&mut buffer)
+            .map_err(|error| PyOSError::new_err(format!("read training artifact: {error}")))?;
+        if count == 0 {
+            break;
+        }
+        destination.write_all(&buffer[..count]).map_err(|error| {
+            PyOSError::new_err(format!("copy training artifact into private file: {error}"))
+        })?;
+        digest.update(&buffer[..count]);
+        copied = copied
+            .checked_add(u64::try_from(count).expect("buffer length fits in u64"))
+            .ok_or_else(|| PyValueError::new_err("training artifact size exceeds u64"))?;
+    }
+    if copied != expected_bytes {
+        return Err(PyValueError::new_err(
+            "training artifact changed size during validation",
+        ));
+    }
+    destination
+        .flush()
+        .map_err(|error| PyOSError::new_err(format!("flush private validation file: {error}")))?;
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 struct SnapshotMetadata {

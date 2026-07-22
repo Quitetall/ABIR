@@ -55,6 +55,7 @@ dependencies = [
  "fs2",
  "memmap2",
  "pyo3",
+ "sha2",
  "tempfile",
 ]
 

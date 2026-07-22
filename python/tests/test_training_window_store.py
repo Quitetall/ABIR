@@ -1,4 +1,5 @@
 import gc
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ def test_training_window_store_opens_validated_bundle_and_lends_rows():
     store = abir.TrainingWindowStore.open_bytes(artifact)
 
     assert store.profile == "balanced"
+    assert store.physical_artifact_sha256 == hashlib.sha256(artifact).hexdigest()
     assert len(store.snapshot_id) == 64
     assert store.row_count == 1
     assert len(store.row_ids) == 1
@@ -35,6 +37,7 @@ def test_training_window_store_opens_validated_bundle_and_lends_rows():
     gc.collect()
 
     assert row.tolist() == [[1, 2], [3, 4]]
+    assert not row.flags.writeable
 
 
 def test_training_window_store_exposes_snapshot_bound_semantics_without_source_format():
@@ -126,7 +129,22 @@ def test_path_row_outlives_store_and_unlinked_artifact(tmp_path):
     gc.collect()
 
     assert row.tolist() == [[1, 2], [3, 4]]
-    assert not row.flags.writeable
+
+
+def test_path_replacement_cannot_change_held_artifact_attestation(tmp_path):
+    original = abir._training_fixture_bytes()
+    path = tmp_path / "snapshot.bcs2"
+    path.write_bytes(original)
+    store = abir.TrainingWindowStore.open_path(path)
+    original_row_id = store.row_ids[0]
+
+    replacement = tmp_path / "replacement.bcs2"
+    replacement.write_bytes(b"replacement-path-content")
+    os.replace(replacement, path)
+
+    assert store.physical_artifact_sha256 == hashlib.sha256(original).hexdigest()
+    assert hashlib.sha256(path.read_bytes()).hexdigest() != store.physical_artifact_sha256
+    assert store.row_numpy(original_row_id).tolist() == [[1, 2], [3, 4]]
 
 
 def test_training_window_store_rejects_corrupt_path(tmp_path):
@@ -139,7 +157,7 @@ def test_training_window_store_rejects_corrupt_path(tmp_path):
         abir.TrainingWindowStore.open_path(path)
 
 
-def test_path_row_fails_closed_if_artifact_changes_after_validation(tmp_path):
+def test_path_row_uses_private_validated_backing_after_source_inode_changes(tmp_path):
     artifact = bytearray(abir._training_fixture_bytes())
     path = tmp_path / "changed.bcs2"
     path.write_bytes(artifact)
@@ -151,13 +169,11 @@ def test_path_row_fails_closed_if_artifact_changes_after_validation(tmp_path):
         changed.seek(payload_offset)
         changed.write(bytes([9, 0, 2, 0, 3, 0, 4, 0]))
 
-    with pytest.raises(ValueError, match="changed after validation"):
-        store.row_numpy(store.row_ids[0])
+    assert store.row_numpy(store.row_ids[0]).tolist() == [[1, 2], [3, 4]]
 
     with path.open("r+b") as truncated:
         truncated.truncate(payload_offset + 2)
-    with pytest.raises(OSError, match="read training row"):
-        store.row_numpy(store.row_ids[0])
+    assert store.row_numpy(store.row_ids[0]).tolist() == [[1, 2], [3, 4]]
 
 
 @pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="Linux RSS evidence")
