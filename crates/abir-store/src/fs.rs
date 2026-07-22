@@ -1,6 +1,6 @@
-use crate::StoreError;
+use crate::{validate_portable_bundle, StoreError};
 use abir::{ContentId, StorageId};
-use abir_bcs::{Bcs2View, ResourceBounds};
+use abir_bcs::{repack_with_frames, Bcs2View, ResourceBounds};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -224,6 +224,53 @@ impl FsAbirStore {
         self.pinned_roots.insert(root);
         fs2::FileExt::unlock(&lock).map_err(|error| StoreError::io("unlock store", error))?;
         Ok(())
+    }
+
+    pub fn export_portable(&self, root: ContentId) -> Result<Vec<u8>, StoreError> {
+        let closure = self.reachable_closure(root)?;
+        let root_storage = self
+            .by_content
+            .get(&root)
+            .and_then(|variants| variants.first())
+            .ok_or(StoreError::MissingObject(root))?;
+        let root_meta = self
+            .by_storage
+            .get(root_storage)
+            .ok_or(StoreError::MissingStorage(*root_storage))?;
+        let root_bytes = fs::read(&root_meta.path)
+            .map_err(|error| StoreError::io("read portable root", error))?;
+        let mut embedded_bytes = Vec::with_capacity(closure.len().saturating_sub(1));
+        for content_id in closure.into_iter().filter(|content_id| *content_id != root) {
+            let storage_id = self
+                .by_content
+                .get(&content_id)
+                .and_then(|variants| variants.first())
+                .ok_or(StoreError::IncompleteClosure(content_id))?;
+            let meta = self
+                .by_storage
+                .get(storage_id)
+                .ok_or(StoreError::MissingStorage(*storage_id))?;
+            embedded_bytes.push(
+                fs::read(&meta.path)
+                    .map_err(|error| StoreError::io("read portable frame", error))?,
+            );
+        }
+        let embedded: Vec<&[u8]> = embedded_bytes.iter().map(Vec::as_slice).collect();
+        Ok(repack_with_frames(
+            &root_bytes,
+            &embedded,
+            self.supported_capabilities,
+            self.limits,
+        )?)
+    }
+
+    pub fn import_portable(&mut self, bytes: &[u8]) -> Result<(ContentId, StorageId), StoreError> {
+        let validation = validate_portable_bundle(bytes, self.supported_capabilities, self.limits)?;
+        for frame in validation.frames {
+            self.insert(&frame)?;
+        }
+        self.insert(bytes)?;
+        Ok(validation.root_ids)
     }
 
     pub fn reachable_closure(&self, root: ContentId) -> Result<BTreeSet<ContentId>, StoreError> {

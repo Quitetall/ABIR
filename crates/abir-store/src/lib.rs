@@ -1,5 +1,5 @@
 use abir::{ContentId, StorageId};
-use abir_bcs::{Bcs2Error, Bcs2View, ResourceBounds};
+use abir_bcs::{repack_with_frames, Bcs2Error, Bcs2View, ResourceBounds};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -13,6 +13,8 @@ pub enum StoreError {
     MissingStorage(StorageId),
     ConflictingStorageIdentity(StorageId),
     IncompleteClosure(ContentId),
+    IncompletePortableBundle(ContentId),
+    ExtraPortableFrame(ContentId),
     ConflictingClosure(ContentId),
     Io {
         operation: &'static str,
@@ -141,6 +143,57 @@ impl AbirStore {
         Ok(())
     }
 
+    pub fn export_portable(
+        &self,
+        root: ContentId,
+        supported_capabilities: u64,
+        limits: ResourceBounds,
+    ) -> Result<Vec<u8>, StoreError> {
+        let closure = self.reachable_closure(root)?;
+        let root_storage = self
+            .by_content
+            .get(&root)
+            .and_then(|variants| variants.first())
+            .ok_or(StoreError::MissingObject(root))?;
+        let root_object = self
+            .by_storage
+            .get(root_storage)
+            .ok_or(StoreError::MissingStorage(*root_storage))?;
+        let mut embedded = Vec::with_capacity(closure.len().saturating_sub(1));
+        for content_id in closure.into_iter().filter(|content_id| *content_id != root) {
+            let storage_id = self
+                .by_content
+                .get(&content_id)
+                .and_then(|variants| variants.first())
+                .ok_or(StoreError::IncompleteClosure(content_id))?;
+            let object = self
+                .by_storage
+                .get(storage_id)
+                .ok_or(StoreError::MissingStorage(*storage_id))?;
+            embedded.push(object.bytes.as_ref());
+        }
+        Ok(repack_with_frames(
+            root_object.bytes.as_ref(),
+            &embedded,
+            supported_capabilities,
+            limits,
+        )?)
+    }
+
+    pub fn import_portable(
+        &mut self,
+        bytes: Arc<[u8]>,
+        supported_capabilities: u64,
+        limits: ResourceBounds,
+    ) -> Result<(ContentId, StorageId), StoreError> {
+        let validation = validate_portable_bundle(&bytes, supported_capabilities, limits)?;
+        for frame in validation.frames {
+            self.insert_bcs2(frame, supported_capabilities, limits)?;
+        }
+        self.insert_bcs2(bytes, supported_capabilities, limits)?;
+        Ok(validation.root_ids)
+    }
+
     pub fn reachable_closure(&self, root: ContentId) -> Result<BTreeSet<ContentId>, StoreError> {
         let mut reached = BTreeSet::new();
         let mut pending = vec![root];
@@ -190,4 +243,51 @@ impl AbirStore {
     pub fn physical_variants(&self, content_id: ContentId) -> usize {
         self.by_content.get(&content_id).map_or(0, BTreeSet::len)
     }
+}
+
+pub(crate) struct PortableBundleValidation {
+    pub root_ids: (ContentId, StorageId),
+    pub frames: Vec<Arc<[u8]>>,
+}
+
+pub(crate) fn validate_portable_bundle(
+    bytes: &[u8],
+    supported_capabilities: u64,
+    limits: ResourceBounds,
+) -> Result<PortableBundleValidation, StoreError> {
+    let view = Bcs2View::parse(bytes, supported_capabilities, limits)?;
+    if !view.profile().is_portable() {
+        return Err(StoreError::Wire(Bcs2Error::ProfileNotPortable));
+    }
+    let frame_ids: BTreeSet<_> = view
+        .frames()
+        .iter()
+        .map(|frame| frame.content_id())
+        .collect();
+    let mut reached = BTreeSet::new();
+    let mut pending: Vec<_> = view.references().to_vec();
+    while let Some(content_id) = pending.pop() {
+        if !reached.insert(content_id) {
+            continue;
+        }
+        let frame = view
+            .frames()
+            .iter()
+            .find(|frame| frame.content_id() == content_id)
+            .ok_or(StoreError::IncompletePortableBundle(content_id))?;
+        let nested = Bcs2View::parse(frame.bytes(), supported_capabilities, limits)?;
+        pending.extend(nested.references().iter().copied());
+    }
+    if let Some(extra) = frame_ids.difference(&reached).next() {
+        return Err(StoreError::ExtraPortableFrame(*extra));
+    }
+    let frame_bytes = view
+        .frames()
+        .iter()
+        .map(|frame| Arc::<[u8]>::from(frame.bytes()))
+        .collect();
+    Ok(PortableBundleValidation {
+        root_ids: (view.root_content_id(), view.storage_id()),
+        frames: frame_bytes,
+    })
 }

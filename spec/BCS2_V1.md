@@ -71,8 +71,15 @@ reachability claims.
 
 The empty frame index is 48 bytes: bytes 0–7 are `BCS2IDX\0`, bytes 8–11 are
 the little-endian frame count, bytes 12–15 are zero, and bytes 16–47 are the
-BLAKE3-256 catalog digest. Non-empty indexes append registered fixed-width frame
-entries and set the frame count accordingly.
+BLAKE3-256 catalog digest. Non-empty indexes append 128-byte entries sorted
+strictly by logical object `ContentId`. Entry bytes 0–31 contain `ContentId`,
+32–63 contain `StorageId`, 64–71 contain the frame offset, 72–79 contain frame
+length, byte 80 is frame kind (1 is embedded BCS2), byte 81 is flags, bytes
+82–95 are zero, and bytes 96–127 contain the raw BLAKE3-256 frame digest. Frame
+payloads occur contiguously between catalog and index in entry order. Readers
+verify both digests, recompute `StorageId`, parse each embedded BCS2 artifact,
+and require its root `ContentId` to equal the entry. Nested packs are forbidden
+in generation 2 so verification depth remains bounded.
 
 Profile identifiers reserve their high 16 bits for the family: 1 is LML, 2 is
 LMQ, 3 is training, 4 is stream, and 5 is forensic. The low 16 bits identify a
@@ -121,6 +128,13 @@ computes reachability from immutable roots. Garbage collection may delete only
 unleased objects unreachable from every pinned root or generation. Portable
 profiles include the full reachable closure unless their registry entry
 explicitly permits external references.
+
+A portable physical variant retains the semantic root kind, profile, catalog,
+root `ContentId`, and direct reference set of its unpacked root. Every other
+object in its transitive closure occurs exactly once as an embedded BCS2 frame;
+missing and unreachable extra frames are both invalid. Frame order is canonical,
+so input enumeration order cannot affect bytes. Import validates the entire
+closure before publishing any logical root.
 
 ## Privacy and forensic profiles
 

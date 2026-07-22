@@ -1,5 +1,8 @@
 use abir::{DatasetDraft, DatasetTag, ObjectId, ValidationLimits};
-use abir_bcs::{encode_dataset, encode_dataset_with_references, ProfileId, ResourceBounds};
+use abir_bcs::{
+    encode_dataset, encode_dataset_with_references, repack_with_frames, Bcs2View, ProfileId,
+    ResourceBounds,
+};
 use abir_store::{AbirStore, StoreError};
 use std::sync::Arc;
 
@@ -112,4 +115,69 @@ fn physical_variants_cannot_redefine_logical_closure() {
         Err(StoreError::ConflictingClosure(content))
     );
     assert_eq!(store.physical_variants(content), 1);
+}
+
+#[test]
+fn portable_export_import_carries_exact_reachable_closure() {
+    let mut source = AbirStore::default();
+    let grandchild_bytes = artifact(20, ProfileId::LML_LOSSLESS_V1);
+    let (grandchild, _) = source
+        .insert_bcs2(grandchild_bytes, 0, ResourceBounds::default())
+        .unwrap();
+    let child_bytes = artifact_with_references(21, ProfileId::LML_LOSSLESS_V1, [grandchild]);
+    let (child, _) = source
+        .insert_bcs2(child_bytes, 0, ResourceBounds::default())
+        .unwrap();
+    let root_bytes = artifact_with_references(22, ProfileId::LML_LOSSLESS_V1, [child]);
+    let (root, root_storage) = source
+        .insert_bcs2(root_bytes, 0, ResourceBounds::default())
+        .unwrap();
+
+    let portable = source
+        .export_portable(root, 0, ResourceBounds::default())
+        .unwrap();
+    let packed = Bcs2View::parse(&portable, 0, ResourceBounds::default()).unwrap();
+    assert_eq!(packed.root_content_id(), root);
+    assert_ne!(packed.storage_id(), root_storage);
+    assert_eq!(packed.frames().len(), 2);
+
+    let mut destination = AbirStore::default();
+    let imported = destination
+        .import_portable(Arc::from(portable), 0, ResourceBounds::default())
+        .unwrap();
+    assert_eq!(imported.0, root);
+    assert_eq!(destination.reachable_closure(root).unwrap().len(), 3);
+    assert_eq!(destination.physical_variants(root), 1);
+}
+
+#[test]
+fn portable_import_rejects_missing_and_unreachable_frames() {
+    let child = artifact(23, ProfileId::LML_LOSSLESS_V1);
+    let child_id = Bcs2View::parse(&child, 0, ResourceBounds::default())
+        .unwrap()
+        .root_content_id();
+    let root = artifact_with_references(24, ProfileId::LML_LOSSLESS_V1, [child_id]);
+    let incomplete = repack_with_frames(&root, &[], 0, ResourceBounds::default()).unwrap();
+    let mut store = AbirStore::default();
+    assert_eq!(
+        store.import_portable(Arc::from(incomplete), 0, ResourceBounds::default()),
+        Err(StoreError::IncompletePortableBundle(child_id))
+    );
+
+    let unrelated = artifact(25, ProfileId::LML_LOSSLESS_V1);
+    let unrelated_id = Bcs2View::parse(&unrelated, 0, ResourceBounds::default())
+        .unwrap()
+        .root_content_id();
+    let extra = repack_with_frames(
+        &root,
+        &[child.as_ref(), unrelated.as_ref()],
+        0,
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        store.import_portable(Arc::from(extra), 0, ResourceBounds::default()),
+        Err(StoreError::ExtraPortableFrame(unrelated_id))
+    );
+    assert_eq!(store.object_count(), 0);
 }

@@ -149,3 +149,25 @@ fn refresh_observes_objects_published_by_another_handle() {
     observer.refresh().unwrap();
     assert_eq!(observer.lease(content).unwrap().content_id(), content);
 }
+
+#[test]
+fn filesystem_store_exports_and_imports_portable_closure() {
+    let source_directory = tempfile::tempdir().unwrap();
+    let mut source =
+        FsAbirStore::open(source_directory.path(), 0, ResourceBounds::default()).unwrap();
+    let (child, _) = source.insert(&artifact(12, [])).unwrap();
+    let (root, _) = source.insert(&artifact(13, [child])).unwrap();
+    let portable = source.export_portable(root).unwrap();
+
+    let destination_directory = tempfile::tempdir().unwrap();
+    let mut destination =
+        FsAbirStore::open(destination_directory.path(), 0, ResourceBounds::default()).unwrap();
+    assert_eq!(destination.import_portable(&portable).unwrap().0, root);
+    assert_eq!(destination.object_count(), 2);
+    assert_eq!(destination.reachable_closure(root).unwrap().len(), 2);
+    drop(destination);
+
+    let reopened =
+        FsAbirStore::open(destination_directory.path(), 0, ResourceBounds::default()).unwrap();
+    assert_eq!(reopened.object_count(), 2);
+}

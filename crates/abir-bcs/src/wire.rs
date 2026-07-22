@@ -7,8 +7,9 @@ use crate::{encode_generation_footer, GenerationChain, GenerationFooter, GENERAT
 
 pub const BCS2_MAGIC: [u8; 8] = *b"ABIRBCS2";
 pub const BCS2_HEADER_LEN: usize = 128;
-const INDEX_MAGIC: [u8; 8] = *b"BCS2IDX\0";
-const INDEX_LEN: usize = 48;
+pub(crate) const INDEX_MAGIC: [u8; 8] = *b"BCS2IDX\0";
+pub(crate) const INDEX_LEN: usize = 48;
+pub(crate) const INDEX_ENTRY_LEN: usize = 128;
 const WIRE_MAJOR: u16 = 2;
 const WIRE_MINOR: u16 = 0;
 const SEMANTIC_GENERATION: u32 = 1;
@@ -115,7 +116,7 @@ impl ProfileId {
         }
     }
 
-    fn accepts(self, root: RootKind) -> bool {
+    pub const fn accepts(self, root: RootKind) -> bool {
         match self {
             Self::LML_LOSSLESS_V1 => matches!(root, RootKind::Dataset | RootKind::Recording),
             Self::LMQ_PROGRESSIVE_V1 => {
@@ -132,6 +133,21 @@ impl ProfileId {
             Self::FORENSIC_IMAGE_V1 => matches!(root, RootKind::Blob | RootKind::Bundle),
             _ => false,
         }
+    }
+
+    pub const fn is_portable(self) -> bool {
+        matches!(
+            self,
+            Self::LML_LOSSLESS_V1
+                | Self::LMQ_PROGRESSIVE_V1
+                | Self::TRAINING_COMPACT_V1
+                | Self::FORENSIC_TREE_V1
+                | Self::FORENSIC_IMAGE_V1
+        )
+    }
+
+    pub const fn allows_external_references(self) -> bool {
+        matches!(self, Self::TRAINING_BALANCED_V1 | Self::STREAM_BOUNDED_V1)
     }
 }
 
@@ -170,11 +186,15 @@ pub enum Bcs2Error {
     PrivacyModeNotImplemented(PrivacyMode),
     UnsupportedIntegrity(u8),
     ProfileRootMismatch,
+    ProfileNotPortable,
+    DuplicateFrame,
     BoundsExceeded,
     InvalidExtent,
     NonCanonicalLayout,
     CatalogCorrupt,
     CatalogDigestMismatch,
+    FrameDigestMismatch,
+    FrameIdentityMismatch,
     RootIdentityMismatch,
     GenerationRootMismatch,
     SemanticEncoding,
@@ -388,7 +408,27 @@ pub struct Bcs2View<'a> {
     root_content_id: ContentId,
     semantic_json: &'a [u8],
     references: Vec<ContentId>,
+    frames: Vec<FrameView<'a>>,
     generation_chain: Option<GenerationChain>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FrameView<'a> {
+    content_id: ContentId,
+    storage_id: StorageId,
+    bytes: &'a [u8],
+}
+
+impl<'a> FrameView<'a> {
+    pub const fn content_id(&self) -> ContentId {
+        self.content_id
+    }
+    pub const fn storage_id(&self) -> StorageId {
+        self.storage_id
+    }
+    pub const fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
 }
 
 impl<'a> Bcs2View<'a> {
@@ -396,6 +436,15 @@ impl<'a> Bcs2View<'a> {
         bytes: &'a [u8],
         supported_capabilities: u64,
         accepted_bounds: ResourceBounds,
+    ) -> Result<Self, Bcs2Error> {
+        Self::parse_inner(bytes, supported_capabilities, accepted_bounds, true)
+    }
+
+    fn parse_inner(
+        bytes: &'a [u8],
+        supported_capabilities: u64,
+        accepted_bounds: ResourceBounds,
+        allow_frames: bool,
     ) -> Result<Self, Bcs2Error> {
         if bytes.len() < BCS2_HEADER_LEN + INDEX_LEN {
             return Err(Bcs2Error::TooShort);
@@ -525,8 +574,8 @@ impl<'a> Bcs2View<'a> {
             .ok_or(Bcs2Error::InvalidExtent)?;
         if (storage_contract == StorageContract::SealedImmutable
             && catalog_offset != BCS2_HEADER_LEN)
-            || catalog_end != index_offset
-            || index_len != INDEX_LEN
+            || catalog_end > index_offset
+            || index_len < INDEX_LEN
             || index_end
                 .checked_add(if storage_contract == StorageContract::SealedGenerational {
                     GENERATION_FOOTER_LEN
@@ -545,11 +594,79 @@ impl<'a> Bcs2View<'a> {
         let index = bytes
             .get(index_offset..index_end)
             .ok_or(Bcs2Error::InvalidExtent)?;
-        if index[..8] != INDEX_MAGIC || index[8..16].iter().any(|byte| *byte != 0) {
+        if index[..8] != INDEX_MAGIC || index[12..16].iter().any(|byte| *byte != 0) {
             return Err(Bcs2Error::CatalogCorrupt);
         }
         if blake3::hash(catalog).as_bytes() != &index[16..48] {
             return Err(Bcs2Error::CatalogDigestMismatch);
+        }
+        let frame_count = get_u32(index, 8)? as usize;
+        if frame_count > bounds.max_index_entries as usize {
+            return Err(Bcs2Error::BoundsExceeded);
+        }
+        if frame_count != 0 && !allow_frames {
+            return Err(Bcs2Error::DuplicateFrame);
+        }
+        let expected_index_len = INDEX_LEN
+            .checked_add(
+                frame_count
+                    .checked_mul(INDEX_ENTRY_LEN)
+                    .ok_or(Bcs2Error::InvalidExtent)?,
+            )
+            .ok_or(Bcs2Error::InvalidExtent)?;
+        if index_len != expected_index_len {
+            return Err(Bcs2Error::NonCanonicalLayout);
+        }
+        let mut frames = Vec::with_capacity(frame_count);
+        let mut expected_frame_offset = catalog_end;
+        for entry_number in 0..frame_count {
+            let entry_offset = INDEX_LEN + entry_number * INDEX_ENTRY_LEN;
+            let entry = &index[entry_offset..entry_offset + INDEX_ENTRY_LEN];
+            if entry[80] != 1 || entry[81] != 0 || entry[82..96].iter().any(|byte| *byte != 0) {
+                return Err(Bcs2Error::CatalogCorrupt);
+            }
+            let content_id = content_id_at(entry, 0)?;
+            if frames
+                .last()
+                .is_some_and(|prior: &FrameView<'_>| prior.content_id >= content_id)
+            {
+                return Err(Bcs2Error::CatalogCorrupt);
+            }
+            let storage_id = storage_id_at(entry, 32)?;
+            let frame_offset = to_usize(get_u64(entry, 64)?)?;
+            let frame_len = to_usize(get_u64(entry, 72)?)?;
+            if frame_offset != expected_frame_offset
+                || frame_len == 0
+                || frame_len > bounds.max_frame_bytes as usize
+            {
+                return Err(Bcs2Error::NonCanonicalLayout);
+            }
+            let frame_end = frame_offset
+                .checked_add(frame_len)
+                .ok_or(Bcs2Error::InvalidExtent)?;
+            let frame = bytes
+                .get(frame_offset..frame_end)
+                .ok_or(Bcs2Error::InvalidExtent)?;
+            if blake3::hash(frame).as_bytes() != &entry[96..128] {
+                return Err(Bcs2Error::FrameDigestMismatch);
+            }
+            if storage_id_for(frame) != storage_id {
+                return Err(Bcs2Error::FrameIdentityMismatch);
+            }
+            let embedded =
+                Self::parse_inner(frame, supported_capabilities, accepted_bounds, false)?;
+            if embedded.root_content_id != content_id || embedded.storage_id() != storage_id {
+                return Err(Bcs2Error::FrameIdentityMismatch);
+            }
+            frames.push(FrameView {
+                content_id,
+                storage_id,
+                bytes: frame,
+            });
+            expected_frame_offset = frame_end;
+        }
+        if expected_frame_offset != index_offset {
+            return Err(Bcs2Error::NonCanonicalLayout);
         }
         let mut root_bytes = [0_u8; 32];
         root_bytes.copy_from_slice(&bytes[96..128]);
@@ -601,6 +718,7 @@ impl<'a> Bcs2View<'a> {
             root_content_id,
             semantic_json,
             references,
+            frames,
             generation_chain,
         })
     }
@@ -629,14 +747,17 @@ impl<'a> Bcs2View<'a> {
     pub fn references(&self) -> &[ContentId] {
         &self.references
     }
+    pub fn frames(&self) -> &[FrameView<'a>] {
+        &self.frames
+    }
+    pub const fn artifact_bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
     pub fn generation_chain(&self) -> Option<&GenerationChain> {
         self.generation_chain.as_ref()
     }
     pub fn storage_id(&self) -> StorageId {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(STORAGE_HASH_DOMAIN);
-        hasher.update(self.bytes);
-        StorageId::from_bytes(*hasher.finalize().as_bytes())
+        storage_id_for(self.bytes)
     }
 }
 
@@ -644,6 +765,19 @@ fn content_id_at(bytes: &[u8], offset: usize) -> Result<ContentId, Bcs2Error> {
     let encoded = bytes.get(offset..offset + 32).ok_or(Bcs2Error::TooShort)?;
     let value: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::TooShort)?;
     Ok(ContentId::from_bytes(value))
+}
+
+fn storage_id_at(bytes: &[u8], offset: usize) -> Result<StorageId, Bcs2Error> {
+    let encoded = bytes.get(offset..offset + 32).ok_or(Bcs2Error::TooShort)?;
+    let value: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::TooShort)?;
+    Ok(StorageId::from_bytes(value))
+}
+
+pub(crate) fn storage_id_for(bytes: &[u8]) -> StorageId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(STORAGE_HASH_DOMAIN);
+    hasher.update(bytes);
+    StorageId::from_bytes(*hasher.finalize().as_bytes())
 }
 
 fn get_u16(bytes: &[u8], offset: usize) -> Result<u16, Bcs2Error> {
@@ -656,7 +790,7 @@ fn get_u32(bytes: &[u8], offset: usize) -> Result<u32, Bcs2Error> {
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }
 
-fn get_u64(bytes: &[u8], offset: usize) -> Result<u64, Bcs2Error> {
+pub(crate) fn get_u64(bytes: &[u8], offset: usize) -> Result<u64, Bcs2Error> {
     let value = bytes.get(offset..offset + 8).ok_or(Bcs2Error::TooShort)?;
     Ok(u64::from_le_bytes([
         value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7],
@@ -667,11 +801,11 @@ fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+pub(crate) fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+pub(crate) fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
