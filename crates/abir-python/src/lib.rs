@@ -1407,6 +1407,7 @@ fn version() -> &'static str {
 fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDataset>()?;
     module.add_class::<training::PyTrainingWindowStore>()?;
+    #[cfg(feature = "test-fixtures")]
     module.add_function(wrap_pyfunction!(training::training_fixture_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(version, module)?)?;
     Ok(())

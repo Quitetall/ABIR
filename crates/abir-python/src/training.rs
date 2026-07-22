@@ -1,9 +1,12 @@
-use abir_bcs::{ResourceBounds, SemanticPayloadFrame};
-use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType};
-use abir_training::{
-    encode_snapshot, ContentKey, TrainingProfile, TrainingRow, TrainingSnapshot,
-    TrainingWindowStore,
-};
+use abir_bcs::ResourceBounds;
+#[cfg(feature = "test-fixtures")]
+use abir_bcs::SemanticPayloadFrame;
+#[cfg(feature = "test-fixtures")]
+use abir_core::{payload_content_id, ContentId};
+use abir_core::{ByteOrder, ElementType};
+#[cfg(feature = "test-fixtures")]
+use abir_training::{encode_snapshot, ContentKey, TrainingRow, TrainingSnapshot};
+use abir_training::{TrainingProfile, TrainingWindowStore};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyModule, PyTuple};
@@ -127,12 +130,6 @@ impl PyTrainingWindowStore {
         reshaped.getattr("flags")?.setattr("writeable", false)?;
         Ok(reshaped.unbind())
     }
-
-    /// Diagnostic pointer used by parity tests and zero-copy evidence.
-    fn row_pointer(&self, py: Python<'_>, logical_id: &str) -> PyResult<usize> {
-        let row = self.row(logical_id)?;
-        Ok(self.artifact.bind(py).as_bytes().as_ptr() as usize + row.offset)
-    }
 }
 
 impl PyTrainingWindowStore {
@@ -160,12 +157,14 @@ fn training_error(error: impl core::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
 
+#[cfg(feature = "test-fixtures")]
 fn key(seed: u8) -> ContentKey {
     ContentKey::new(ContentId::from_bytes([seed; 32]))
 }
 
 /// Deterministic private fixture for cross-language ownership and corruption tests.
 #[pyfunction(name = "_training_fixture_bytes")]
+#[cfg(feature = "test-fixtures")]
 pub(crate) fn training_fixture_bytes(py: Python<'_>) -> PyResult<Bound<'_, PyBytes>> {
     let payload = [1_u8, 0, 2, 0, 3, 0, 4, 0];
     let row = TrainingRow {

@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [features]
 default = ["abi3-py310"]
 abi3-py310 = ["pyo3/abi3-py310"]
+test-fixtures = []
 
 [dependencies]
 abir-core = { package = "abir", path = "../abir", version = "0.1.0" }
