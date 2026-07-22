@@ -15,6 +15,8 @@ abi3-py310 = ["pyo3/abi3-py310"]
 
 [dependencies]
 abir-core = { package = "abir", path = "../abir", version = "0.1.0" }
+abir-bcs = { path = "../abir-bcs", version = "0.1.0" }
 abir-conformance = { path = "../abir-conformance", version = "0.1.0" }
+abir-training = { path = "../abir-training", version = "0.1.0" }
 pyo3 = { version = "0.22", features = ["macros", "extension-module", "abi3-py310"] }
 serde_json = "1"

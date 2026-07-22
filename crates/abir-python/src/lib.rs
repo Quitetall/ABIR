@@ -16,6 +16,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyModule, PyTuple};
 use serde_json::{Map, Value};
 
+mod training;
+
 #[pyclass(name = "Dataset", frozen)]
 struct PyDataset {
     inner: abir_core::AbirDataset,
@@ -1404,6 +1406,8 @@ fn version() -> &'static str {
 #[pymodule]
 fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDataset>()?;
+    module.add_class::<training::PyTrainingWindowStore>()?;
+    module.add_function(wrap_pyfunction!(training::training_fixture_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(version, module)?)?;
     Ok(())
 }

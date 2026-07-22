@@ -47,7 +47,9 @@ name = "abir-python"
 version = "0.1.0"
 dependencies = [
  "abir",
+ "abir-bcs",
  "abir-conformance",
+ "abir-training",
  "pyo3",
  "serde_json",
 ]
