@@ -1,8 +1,5 @@
-use abir_bcs::ResourceBounds;
-#[cfg(feature = "test-fixtures")]
-use abir_bcs::SemanticPayloadFrame;
+use abir_bcs::{ResourceBounds, SemanticPayloadFrame};
 use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType, Presence};
-#[cfg(feature = "test-fixtures")]
 use abir_training::{
     encode_snapshot, ContentKey, TrainingAssociatedPayload, TrainingLabelPayloadAssociation,
     TrainingRow, TrainingSnapshot,
@@ -11,7 +8,8 @@ use abir_training::{DecisionLogReplayState, TrainingProfile, TrainingWindowStore
 use memmap2::MmapOptions;
 use pyo3::exceptions::{PyKeyError, PyOSError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyModule, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString, PyTuple};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{copy, Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -598,6 +596,362 @@ fn presence_name(presence: Presence) -> &'static str {
 
 fn training_error(error: impl core::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())
+}
+
+struct BoundTrainingRow<'py> {
+    metadata: TrainingRow,
+    payload: Bound<'py, PyBytes>,
+}
+
+struct BoundLabelAssociation<'py> {
+    metadata: TrainingLabelPayloadAssociation,
+    payload: Option<Bound<'py, PyBytes>>,
+}
+
+fn required_item<'py>(dictionary: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
+    dictionary
+        .get_item(key)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing required field {key:?}")))
+}
+
+fn required_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
+    required_item(dictionary, key)?.extract()
+}
+
+fn required_shape(dictionary: &Bound<'_, PyDict>) -> PyResult<Vec<u64>> {
+    required_item(dictionary, "shape")?
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("shape must be a list"))?
+        .extract()
+}
+
+fn required_payload<'py>(dictionary: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyBytes>> {
+    let value = required_item(dictionary, "payload")?;
+    let bytes = value
+        .downcast::<PyBytes>()
+        .map_err(|_| PyValueError::new_err("payload must be immutable bytes"))?;
+    let bounds = ResourceBounds::default();
+    if bytes.as_bytes().len() > bounds.max_frame_bytes as usize {
+        return Err(PyValueError::new_err(
+            "payload exceeds the ABIR BCS2 frame resource bound",
+        ));
+    }
+    Ok(bytes.clone())
+}
+
+fn parse_profile(value: &str) -> PyResult<TrainingProfile> {
+    match value {
+        "speed" => Ok(TrainingProfile::Speed),
+        "balanced" => Ok(TrainingProfile::Balanced),
+        "memory" => Ok(TrainingProfile::Memory),
+        "compact" => Ok(TrainingProfile::Compact),
+        "ultra-compact" => Ok(TrainingProfile::UltraCompact),
+        "stream" => Ok(TrainingProfile::Stream),
+        _ => Err(PyValueError::new_err("unknown training profile")),
+    }
+}
+
+fn parse_presence(value: &str) -> PyResult<Presence> {
+    match value {
+        "present" => Ok(Presence::Present),
+        "absent-at-source" => Ok(Presence::AbsentAtSource),
+        "unknown-at-source" => Ok(Presence::UnknownAtSource),
+        "withheld" => Ok(Presence::Withheld),
+        "redacted" => Ok(Presence::Redacted),
+        "not-applicable" => Ok(Presence::NotApplicable),
+        _ => Err(PyValueError::new_err("unknown label presence")),
+    }
+}
+
+fn preflight_metadata(
+    dataset_root_count: usize,
+    rows: &Bound<'_, PyList>,
+    label_payloads: &Bound<'_, PyList>,
+    bounds: ResourceBounds,
+) -> PyResult<()> {
+    if rows.len() > bounds.max_index_entries as usize
+        || label_payloads.len() > bounds.max_index_entries as usize
+    {
+        return Err(PyValueError::new_err(
+            "training snapshot metadata exceeds the ABIR BCS2 index resource bound",
+        ));
+    }
+    // These are strict lower bounds on canonical JSON bytes: every dataset
+    // root contributes a 64-digit ID, every row carries five such IDs, and
+    // every label association carries one ID plus required field names. Reject
+    // counts whose catalog cannot possibly fit before constructing Rust
+    // metadata or serializing canonical JSON.
+    let minimum_catalog_bytes = dataset_root_count
+        .checked_mul(64)
+        .and_then(|total| {
+            rows.len()
+                .checked_mul(256)
+                .and_then(|rows| total.checked_add(rows))
+        })
+        .and_then(|total| {
+            label_payloads
+                .len()
+                .checked_mul(96)
+                .and_then(|labels| total.checked_add(labels))
+        })
+        .ok_or_else(|| PyValueError::new_err("training catalog size estimate overflow"))?;
+    if minimum_catalog_bytes > bounds.max_catalog_bytes as usize {
+        return Err(PyValueError::new_err(
+            "training snapshot metadata exceeds the ABIR BCS2 catalog resource bound",
+        ));
+    }
+    let mut shape_entries = 0_usize;
+    let mut metadata_string_bytes = 0_usize;
+    for value in rows.iter() {
+        let dictionary = value
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("each training row must be a dictionary"))?;
+        for key in [
+            "logical_id",
+            "group",
+            "label",
+            "split",
+            "element",
+            "byte_order",
+        ] {
+            metadata_string_bytes = metadata_string_bytes
+                .checked_add(required_string_length(dictionary, key)?)
+                .ok_or_else(|| PyValueError::new_err("training metadata size overflow"))?;
+        }
+        let shape_value = required_item(dictionary, "shape")?;
+        let shape = shape_value
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("shape must be a list"))?;
+        shape_entries = shape_entries
+            .checked_add(shape.len())
+            .ok_or_else(|| PyValueError::new_err("training shape metadata count overflow"))?;
+    }
+    for value in label_payloads.iter() {
+        let dictionary = value.downcast::<PyDict>().map_err(|_| {
+            PyValueError::new_err("each training label association must be a dictionary")
+        })?;
+        for key in ["logical_id", "concept", "presence"] {
+            metadata_string_bytes = metadata_string_bytes
+                .checked_add(required_string_length(dictionary, key)?)
+                .ok_or_else(|| PyValueError::new_err("training metadata size overflow"))?;
+        }
+        if let Some(shape) = dictionary.get_item("shape")? {
+            let shape = shape
+                .downcast::<PyList>()
+                .map_err(|_| PyValueError::new_err("shape must be a list"))?;
+            shape_entries = shape_entries
+                .checked_add(shape.len())
+                .ok_or_else(|| PyValueError::new_err("training shape metadata count overflow"))?;
+        }
+        for key in ["element", "byte_order"] {
+            if dictionary.contains(key)? {
+                metadata_string_bytes = metadata_string_bytes
+                    .checked_add(required_string_length(dictionary, key)?)
+                    .ok_or_else(|| PyValueError::new_err("training metadata size overflow"))?;
+            }
+        }
+    }
+    let catalog_bound = bounds.max_catalog_bytes as usize;
+    if metadata_string_bytes > catalog_bound
+        || shape_entries > catalog_bound.saturating_div(core::mem::size_of::<u64>())
+    {
+        return Err(PyValueError::new_err(
+            "training snapshot metadata exceeds the ABIR BCS2 catalog resource bound",
+        ));
+    }
+    Ok(())
+}
+
+fn required_string_length(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<usize> {
+    let value = required_item(dictionary, key)?;
+    let value = value
+        .downcast::<PyString>()
+        .map_err(|_| PyValueError::new_err(format!("field {key:?} must be a string")))?;
+    Ok(value.to_str()?.len())
+}
+
+fn parse_bound_row<'py>(dictionary: &Bound<'py, PyDict>) -> PyResult<BoundTrainingRow<'py>> {
+    let payload = required_payload(dictionary)?;
+    let element = super::parse_element(&required_string(dictionary, "element")?)?;
+    let logical_bytes = u64::try_from(payload.as_bytes().len())
+        .map_err(|_| PyValueError::new_err("training row payload is too large"))?;
+    let metadata = TrainingRow {
+        byte_order: super::parse_byte_order(&required_string(dictionary, "byte_order")?)?,
+        group: ContentKey::new(super::parse_content_id(&required_string(
+            dictionary, "group",
+        )?)?),
+        label: ContentKey::new(super::parse_content_id(&required_string(
+            dictionary, "label",
+        )?)?),
+        logical_bytes,
+        logical_id: ContentKey::new(super::parse_content_id(&required_string(
+            dictionary,
+            "logical_id",
+        )?)?),
+        payload: ContentKey::new(payload_content_id(element, payload.as_bytes())),
+        element,
+        shape: required_shape(dictionary)?,
+        split: ContentKey::new(super::parse_content_id(&required_string(
+            dictionary, "split",
+        )?)?),
+    };
+    Ok(BoundTrainingRow { metadata, payload })
+}
+
+fn parse_bound_label<'py>(dictionary: &Bound<'py, PyDict>) -> PyResult<BoundLabelAssociation<'py>> {
+    let presence = parse_presence(&required_string(dictionary, "presence")?)?;
+    let logical_id = ContentKey::new(super::parse_content_id(&required_string(
+        dictionary,
+        "logical_id",
+    )?)?);
+    let concept = required_string(dictionary, "concept")?;
+    if presence != Presence::Present {
+        for key in ["payload", "element", "byte_order", "shape"] {
+            if dictionary.contains(key)? {
+                return Err(PyValueError::new_err(format!(
+                    "label presence {} forbids a payload descriptor",
+                    presence_name(presence)
+                )));
+            }
+        }
+        return Ok(BoundLabelAssociation {
+            metadata: TrainingLabelPayloadAssociation {
+                concept,
+                logical_id,
+                payload: None,
+                presence,
+            },
+            payload: None,
+        });
+    }
+
+    let payload = required_payload(dictionary)?;
+    let element = super::parse_element(&required_string(dictionary, "element")?)?;
+    let logical_bytes = u64::try_from(payload.as_bytes().len())
+        .map_err(|_| PyValueError::new_err("training label payload is too large"))?;
+    Ok(BoundLabelAssociation {
+        metadata: TrainingLabelPayloadAssociation {
+            concept,
+            logical_id,
+            payload: Some(TrainingAssociatedPayload {
+                byte_order: super::parse_byte_order(&required_string(dictionary, "byte_order")?)?,
+                element,
+                logical_bytes,
+                payload: ContentKey::new(payload_content_id(element, payload.as_bytes())),
+                shape: required_shape(dictionary)?,
+            }),
+            presence,
+        },
+        payload: Some(payload),
+    })
+}
+
+/// Seal exact primary rows and typed label associations into a validated BCS2
+/// Training Window Store artifact. The caller supplies semantic identities;
+/// ABIR exclusively owns payload identities, canonical catalog identity, and
+/// physical frame closure.
+#[pyfunction]
+#[pyo3(signature = (*, dataset_roots, spec_id, profile, rows, label_payloads, decision_log_id))]
+pub(crate) fn seal_training_snapshot<'py>(
+    py: Python<'py>,
+    dataset_roots: &Bound<'py, PyList>,
+    spec_id: &str,
+    profile: &str,
+    rows: &Bound<'py, PyList>,
+    label_payloads: &Bound<'py, PyList>,
+    decision_log_id: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let bounds = ResourceBounds::default();
+    if dataset_roots.len() > bounds.max_index_entries as usize {
+        return Err(PyValueError::new_err(
+            "training dataset roots exceed the ABIR BCS2 index resource bound",
+        ));
+    }
+    preflight_metadata(dataset_roots.len(), rows, label_payloads, bounds)?;
+    let dataset_roots = dataset_roots
+        .iter()
+        .map(|value| {
+            let value = value
+                .downcast::<PyString>()
+                .map_err(|_| PyValueError::new_err("dataset roots must be strings"))?;
+            super::parse_content_id(value.to_str()?).map(ContentKey::new)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let bound_rows = rows
+        .iter()
+        .map(|value| {
+            let dictionary = value
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("each training row must be a dictionary"))?;
+            parse_bound_row(dictionary)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let bound_labels = label_payloads
+        .iter()
+        .map(|value| {
+            let dictionary = value.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("each training label association must be a dictionary")
+            })?;
+            parse_bound_label(dictionary)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let index_entries = bound_rows
+        .len()
+        .checked_add(
+            bound_labels
+                .iter()
+                .filter(|association| association.payload.is_some())
+                .count(),
+        )
+        .ok_or_else(|| PyValueError::new_err("training snapshot index count overflow"))?;
+    if index_entries > bounds.max_index_entries as usize {
+        return Err(PyValueError::new_err(
+            "training snapshot exceeds the ABIR BCS2 index resource bound",
+        ));
+    }
+
+    let snapshot = TrainingSnapshot::seal_with_label_payloads(
+        dataset_roots,
+        ContentKey::new(super::parse_content_id(spec_id)?),
+        parse_profile(profile)?,
+        bound_rows.iter().map(|row| row.metadata.clone()).collect(),
+        bound_labels
+            .iter()
+            .map(|association| association.metadata.clone())
+            .collect(),
+        ContentKey::new(super::parse_content_id(decision_log_id)?),
+    )
+    .map_err(training_error)?;
+
+    let mut payloads = BTreeMap::<ContentId, (ElementType, &[u8])>::new();
+    for row in &bound_rows {
+        payloads.insert(
+            row.metadata.payload.content_id(),
+            (row.metadata.element, row.payload.as_bytes()),
+        );
+    }
+    for association in &bound_labels {
+        if let (Some(descriptor), Some(payload)) =
+            (&association.metadata.payload, &association.payload)
+        {
+            payloads.insert(
+                descriptor.payload.content_id(),
+                (descriptor.element, payload.as_bytes()),
+            );
+        }
+    }
+    let frames = payloads
+        .values()
+        .map(|(element, payload)| SemanticPayloadFrame::new(*element, payload))
+        .collect::<Vec<_>>();
+    let artifact = encode_snapshot(&snapshot, &frames, bounds).map_err(training_error)?;
+    let result = PyDict::new_bound(py);
+    result.set_item(
+        "snapshot_id",
+        snapshot.content_id().map_err(training_error)?.to_string(),
+    )?;
+    result.set_item("artifact", PyBytes::new_bound(py, &artifact))?;
+    Ok(result)
 }
 
 #[cfg(feature = "test-fixtures")]

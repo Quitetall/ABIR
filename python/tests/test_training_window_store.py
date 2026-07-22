@@ -2,6 +2,7 @@ import gc
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 
@@ -224,6 +225,202 @@ def test_typed_label_payload_preserves_present_and_unknown_semantics():
     }
     with pytest.raises(ValueError, match="unknown-at-source"):
         unknown.row_label_payload_numpy(unknown_row_id, concept)
+
+
+def test_public_training_sealer_round_trips_typed_labels_deterministically():
+    concept = "org.quitetall.lamquant.label.seizure-mask-v1"
+    row_ids = ["7" * 64, "8" * 64]
+    rows = [
+        {
+            "logical_id": row_ids[1],
+            "group": "5" * 64,
+            "label": "6" * 64,
+            "split": "9" * 64,
+            "element": "f32",
+            "byte_order": "little",
+            "shape": [1, 2],
+            "payload": struct.pack("<2f", 3.0, 4.0),
+        },
+        {
+            "logical_id": row_ids[0],
+            "group": "5" * 64,
+            "label": "6" * 64,
+            "split": "9" * 64,
+            "element": "f32",
+            "byte_order": "little",
+            "shape": [1, 2],
+            "payload": struct.pack("<2f", 1.0, 2.0),
+        },
+    ]
+    labels = [
+        {
+            "logical_id": row_ids[1],
+            "concept": concept,
+            "presence": "unknown-at-source",
+        },
+        {
+            "logical_id": row_ids[0],
+            "concept": concept,
+            "presence": "present",
+            "element": "u8",
+            "byte_order": "not-applicable",
+            "shape": [2],
+            "payload": bytes([0, 1]),
+        },
+    ]
+
+    first = abir.seal_training_snapshot(
+        dataset_roots=["2" * 64, "1" * 64],
+        spec_id="3" * 64,
+        profile="balanced",
+        rows=rows,
+        label_payloads=labels,
+        decision_log_id="4" * 64,
+    )
+    second = abir.seal_training_snapshot(
+        dataset_roots=["1" * 64, "2" * 64],
+        spec_id="3" * 64,
+        profile="balanced",
+        rows=list(reversed(rows)),
+        label_payloads=list(reversed(labels)),
+        decision_log_id="4" * 64,
+    )
+
+    assert first["snapshot_id"] == second["snapshot_id"]
+    assert first["artifact"] == second["artifact"]
+    store = abir.TrainingWindowStore.open_bytes(first["artifact"])
+    assert store.row_ids == sorted(row_ids)
+    assert store.row_numpy(row_ids[0]).tolist() == [[1.0, 2.0]]
+    assert store.row_label_payload_numpy(row_ids[0], concept).tolist() == [0, 1]
+    assert store.row_label_payload_info(row_ids[1], concept) == {
+        "concept": concept,
+        "presence": "unknown-at-source",
+    }
+
+
+def test_public_training_sealer_rejects_payload_for_non_present_label():
+    with pytest.raises(ValueError, match="forbids a payload"):
+        abir.seal_training_snapshot(
+            dataset_roots=["1" * 64],
+            spec_id="2" * 64,
+            profile="balanced",
+            rows=[{
+                "logical_id": "3" * 64,
+                "group": "4" * 64,
+                "label": "5" * 64,
+                "split": "6" * 64,
+                "element": "f32",
+                "byte_order": "little",
+                "shape": [1],
+                "payload": struct.pack("<f", 1.0),
+            }],
+            label_payloads=[{
+                "logical_id": "3" * 64,
+                "concept": "org.quitetall.lamquant.label.seizure-mask-v1",
+                "presence": "redacted",
+                "element": "u8",
+                "byte_order": "not-applicable",
+                "shape": [1],
+                "payload": bytes([1]),
+            }],
+            decision_log_id="7" * 64,
+        )
+
+
+@pytest.mark.parametrize(
+    "presence",
+    [
+        "absent-at-source",
+        "unknown-at-source",
+        "withheld",
+        "redacted",
+        "not-applicable",
+    ],
+)
+def test_public_training_sealer_preserves_every_unavailable_label_state(presence):
+    logical_id = "3" * 64
+    concept = "org.quitetall.lamquant.label.seizure-mask-v1"
+    sealed = abir.seal_training_snapshot(
+        dataset_roots=["1" * 64],
+        spec_id="2" * 64,
+        profile="balanced",
+        rows=[{
+            "logical_id": logical_id,
+            "group": "4" * 64,
+            "label": "5" * 64,
+            "split": "6" * 64,
+            "element": "f32",
+            "byte_order": "little",
+            "shape": [1],
+            "payload": struct.pack("<f", 1.0),
+        }],
+        label_payloads=[{
+            "logical_id": logical_id,
+            "concept": concept,
+            "presence": presence,
+        }],
+        decision_log_id="7" * 64,
+    )
+    store = abir.TrainingWindowStore.open_bytes(sealed["artifact"])
+    assert store.row_label_payload_info(logical_id, concept) == {
+        "concept": concept,
+        "presence": presence,
+    }
+
+
+def test_public_training_sealer_fails_closed_on_extent_and_duplicate_translation():
+    logical_id = "3" * 64
+    row = {
+        "logical_id": logical_id,
+        "group": "4" * 64,
+        "label": "5" * 64,
+        "split": "6" * 64,
+        "element": "f32",
+        "byte_order": "little",
+        "shape": [1],
+        "payload": struct.pack("<f", 1.0),
+    }
+    common = {
+        "dataset_roots": ["1" * 64],
+        "spec_id": "2" * 64,
+        "profile": "balanced",
+        "decision_log_id": "7" * 64,
+    }
+
+    malformed = dict(row, shape=[2])
+    with pytest.raises(ValueError, match="invalid logical extent"):
+        abir.seal_training_snapshot(
+            **common,
+            rows=[malformed],
+            label_payloads=[],
+        )
+
+    association = {
+        "logical_id": logical_id,
+        "concept": "org.quitetall.lamquant.label.seizure-mask-v1",
+        "presence": "unknown-at-source",
+    }
+    with pytest.raises(ValueError, match="duplicate label association"):
+        abir.seal_training_snapshot(
+            **common,
+            rows=[row],
+            label_payloads=[association, dict(association)],
+        )
+
+    oversized_element = "x" * (16 * 1024 * 1024 + 1)
+    with pytest.raises(ValueError, match="catalog resource bound"):
+        abir.seal_training_snapshot(
+            **common,
+            rows=[row],
+            label_payloads=[{
+                "logical_id": logical_id,
+                "concept": "org.quitetall.lamquant.label.seizure-mask-v1",
+                "presence": "present",
+                "element": oversized_element,
+                "byte_order": "not-applicable",
+                "payload": bytes([1]),
+            }],
+        )
 
 
 def test_training_v2_schema_admits_typed_labels_and_v1_rejects_them():
