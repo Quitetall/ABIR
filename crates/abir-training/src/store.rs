@@ -3,6 +3,25 @@ use abir::{ByteOrder, ElementType};
 use abir_bcs::{Bcs2View, FrameKind, ResourceBounds, RootKind, StorageContract};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The replay assurance available from an opened training snapshot.
+///
+/// A snapshot binds the exact decision-log identity, but does not embed the
+/// decision records needed to replay and verify that log. Callers must not
+/// treat this state as replay verification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DecisionLogReplayState {
+    /// The snapshot binds a decision-log ContentId, but carries no replayable records.
+    IdentityBound,
+}
+
+impl DecisionLogReplayState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IdentityBound => "identity-bound",
+        }
+    }
+}
+
 /// A validated zero-copy lease into the original BCS2 artifact.
 #[derive(Clone, Copy, Debug)]
 pub struct TrainingRowLease<'a> {
@@ -29,6 +48,26 @@ impl<'a> TrainingRowLease<'a> {
 
     pub fn shape(self) -> &'a [u64] {
         &self.row.shape
+    }
+
+    pub const fn logical_id(self) -> ContentKey {
+        self.row.logical_id
+    }
+
+    pub const fn group(self) -> ContentKey {
+        self.row.group
+    }
+
+    pub const fn label(self) -> ContentKey {
+        self.row.label
+    }
+
+    pub const fn split(self) -> ContentKey {
+        self.row.split
+    }
+
+    pub const fn payload_id(self) -> ContentKey {
+        self.row.payload
     }
 }
 
@@ -96,6 +135,26 @@ impl<'a> TrainingWindowStore<'a> {
 
     pub fn snapshot(&self) -> &TrainingSnapshot {
         &self.snapshot
+    }
+
+    pub fn snapshot_id(&self) -> Result<abir::ContentId, TrainingError> {
+        self.snapshot.content_id()
+    }
+
+    pub const fn spec_id(&self) -> ContentKey {
+        self.snapshot.spec_id()
+    }
+
+    pub fn dataset_roots(&self) -> &[ContentKey] {
+        self.snapshot.dataset_roots()
+    }
+
+    pub const fn decision_log_id(&self) -> ContentKey {
+        self.snapshot.decision_log_id()
+    }
+
+    pub const fn decision_log_replay_state(&self) -> DecisionLogReplayState {
+        DecisionLogReplayState::IdentityBound
     }
 
     pub fn row(&self, logical_id: ContentKey) -> Option<TrainingRowLease<'_>> {

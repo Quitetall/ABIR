@@ -25,4 +25,4 @@ pub use model::{
     encode_snapshot, ContentKey, TrainingInput, TrainingProfile, TrainingRow, TrainingSnapshot,
     TrainingSpec,
 };
-pub use store::{TrainingRowLease, TrainingWindowStore};
+pub use store::{DecisionLogReplayState, TrainingRowLease, TrainingWindowStore};

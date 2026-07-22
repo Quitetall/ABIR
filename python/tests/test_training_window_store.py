@@ -35,6 +35,45 @@ def test_training_window_store_opens_validated_bundle_and_lends_rows():
     assert row.tolist() == [[1, 2], [3, 4]]
 
 
+def test_training_window_store_exposes_snapshot_bound_semantics_without_source_format():
+    artifact = abir._training_fixture_bytes()
+    store = abir.TrainingWindowStore.open_bytes(artifact)
+
+    assert store.dataset_roots == ("01" * 32,)
+    assert store.spec_id == "02" * 32
+    assert store.decision_log_id == "03" * 32
+    assert store.decision_log_replay_state == "identity-bound"
+
+    info = dict(store.row_info(store.row_ids[0]))
+    payload = info.pop("payload")
+    assert info == {
+        "backing": "bytes-zero-copy",
+        "byte_order": "little",
+        "element": "i16",
+        "group": "05" * 32,
+        "label": "06" * 32,
+        "logical_bytes": 8,
+        "logical_id": "07" * 32,
+        "materialized": False,
+        "shape": [2, 2],
+        "split": "08" * 32,
+    }
+    assert len(payload) == 64
+    assert "source_format" not in info
+
+
+def test_training_window_store_rejects_unbound_semantic_metadata():
+    artifact = abir._training_fixture_bytes()
+    malformed = bytearray(artifact)
+    bound_spec = b'"spec_id":"' + (b"02" * 32) + b'"'
+    offset = malformed.find(bound_spec)
+    assert offset >= 0
+    malformed[offset + len(b'"spec_id":"')] = ord("f")
+
+    with pytest.raises(ValueError, match="CatalogDigestMismatch"):
+        abir.TrainingWindowStore.open_bytes(bytes(malformed))
+
+
 def test_training_window_store_rejects_corruption_and_unknown_rows():
     artifact = abir._training_fixture_bytes()
     store = abir.TrainingWindowStore.open_bytes(artifact)
@@ -57,7 +96,14 @@ def test_training_window_store_opens_path_without_materializing_artifact(tmp_pat
 
     assert store.backing == "path-private-validation"
     assert store.materializes_rows is True
+    assert store.dataset_roots == ("01" * 32,)
+    assert store.spec_id == "02" * 32
+    assert store.decision_log_id == "03" * 32
+    assert store.decision_log_replay_state == "identity-bound"
     assert info["materialized"] is True
+    assert info["group"] == "05" * 32
+    assert info["label"] == "06" * 32
+    assert info["split"] == "08" * 32
     assert info["logical_bytes"] == 8
 
     first = store.row_numpy(row_id)

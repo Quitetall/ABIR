@@ -4,7 +4,7 @@ use abir_bcs::SemanticPayloadFrame;
 use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType};
 #[cfg(feature = "test-fixtures")]
 use abir_training::{encode_snapshot, ContentKey, TrainingRow, TrainingSnapshot};
-use abir_training::{TrainingProfile, TrainingWindowStore};
+use abir_training::{DecisionLogReplayState, TrainingProfile, TrainingWindowStore};
 use memmap2::MmapOptions;
 use pyo3::exceptions::{PyKeyError, PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -36,11 +36,14 @@ impl ArtifactOwner {
 struct RowLocation {
     byte_order: ByteOrder,
     element: ElementType,
+    group: String,
+    label: String,
     logical_id: String,
     logical_bytes: usize,
     offset: usize,
     payload_id: ContentId,
     shape: Vec<u64>,
+    split: String,
 }
 
 /// A validated, immutable view of a sealed ABIR BCS2 training bundle.
@@ -51,9 +54,12 @@ struct RowLocation {
 #[pyclass(name = "TrainingWindowStore", frozen)]
 pub(crate) struct PyTrainingWindowStore {
     artifact: ArtifactOwner,
+    dataset_roots: Vec<String>,
+    decision_log_id: String,
     profile: &'static str,
     rows: Vec<RowLocation>,
     snapshot_id: String,
+    spec_id: String,
 }
 
 #[pymethods]
@@ -61,13 +67,16 @@ impl PyTrainingWindowStore {
     #[staticmethod]
     fn open_bytes(py: Python<'_>, artifact: Py<PyBytes>) -> PyResult<Self> {
         let artifact_bytes = artifact.bind(py).as_bytes();
-        let (profile, rows, snapshot_id) = inspect_artifact(artifact_bytes)?;
+        let metadata = inspect_artifact(artifact_bytes)?;
 
         Ok(Self {
             artifact: ArtifactOwner::Bytes(artifact),
-            profile,
-            rows,
-            snapshot_id,
+            dataset_roots: metadata.dataset_roots,
+            decision_log_id: metadata.decision_log_id,
+            profile: metadata.profile,
+            rows: metadata.rows,
+            snapshot_id: metadata.snapshot_id,
+            spec_id: metadata.spec_id,
         })
     }
 
@@ -126,22 +135,47 @@ impl PyTrainingWindowStore {
         let mmap = unsafe { MmapOptions::new().map(&private) }.map_err(|error| {
             PyOSError::new_err(format!("map training artifact {}: {error}", path.display()))
         })?;
-        let (profile, rows, snapshot_id) = inspect_artifact(&mmap)?;
+        let metadata = inspect_artifact(&mmap)?;
         drop(mmap);
 
         Ok(Self {
             artifact: ArtifactOwner::PathFile {
                 file: Mutex::new(file),
             },
-            profile,
-            rows,
-            snapshot_id,
+            dataset_roots: metadata.dataset_roots,
+            decision_log_id: metadata.decision_log_id,
+            profile: metadata.profile,
+            rows: metadata.rows,
+            snapshot_id: metadata.snapshot_id,
+            spec_id: metadata.spec_id,
         })
     }
 
     #[getter]
     fn snapshot_id(&self) -> &str {
         &self.snapshot_id
+    }
+
+    #[getter]
+    fn spec_id(&self) -> &str {
+        &self.spec_id
+    }
+
+    #[getter]
+    fn dataset_roots<'py>(&self, py: Python<'py>) -> Bound<'py, PyTuple> {
+        PyTuple::new_bound(py, self.dataset_roots.iter())
+    }
+
+    #[getter]
+    fn decision_log_id(&self) -> &str {
+        &self.decision_log_id
+    }
+
+    /// The snapshot binds the decision-log identity, but carries no records
+    /// from which the decision log could be replayed.
+    #[getter]
+    fn decision_log_replay_state(&self) -> &'static str {
+        DecisionLogReplayState::IdentityBound.as_str()
     }
 
     #[getter]
@@ -176,6 +210,12 @@ impl PyTrainingWindowStore {
         let row = self.row(logical_id)?;
         let info = PyDict::new_bound(py);
         info.set_item("logical_id", &row.logical_id)?;
+        info.set_item("group", &row.group)?;
+        info.set_item("label", &row.label)?;
+        info.set_item("split", &row.split)?;
+        info.set_item("payload", row.payload_id.to_string())?;
+        info.set_item("element", element_name(row.element))?;
+        info.set_item("byte_order", byte_order_name(row.byte_order))?;
         info.set_item("logical_bytes", row.logical_bytes)?;
         info.set_item("shape", &row.shape)?;
         info.set_item("materialized", self.artifact.materializes_rows())?;
@@ -236,7 +276,16 @@ impl PyTrainingWindowStore {
     }
 }
 
-fn inspect_artifact(artifact: &[u8]) -> PyResult<(&'static str, Vec<RowLocation>, String)> {
+struct SnapshotMetadata {
+    dataset_roots: Vec<String>,
+    decision_log_id: String,
+    profile: &'static str,
+    rows: Vec<RowLocation>,
+    snapshot_id: String,
+    spec_id: String,
+}
+
+fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
     let store =
         TrainingWindowStore::open(artifact, ResourceBounds::default()).map_err(training_error)?;
     let base = artifact.as_ptr() as usize;
@@ -258,11 +307,14 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<(&'static str, Vec<RowLocation>
             Ok(RowLocation {
                 byte_order: lease.byte_order(),
                 element: lease.element(),
+                group: lease.group().to_string(),
+                label: lease.label().to_string(),
                 logical_id: lease.metadata().logical_id.to_string(),
                 logical_bytes: bytes.len(),
                 offset,
                 payload_id: lease.metadata().payload.content_id(),
                 shape: lease.shape().to_vec(),
+                split: lease.split().to_string(),
             })
         })
         .collect::<PyResult<Vec<_>>>()?;
@@ -271,7 +323,18 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<(&'static str, Vec<RowLocation>
         .content_id()
         .map_err(training_error)?
         .to_string();
-    Ok((profile_name(store.snapshot().profile()), rows, snapshot_id))
+    Ok(SnapshotMetadata {
+        dataset_roots: store
+            .dataset_roots()
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        decision_log_id: store.decision_log_id().to_string(),
+        profile: profile_name(store.snapshot().profile()),
+        rows,
+        snapshot_id,
+        spec_id: store.spec_id().to_string(),
+    })
 }
 
 impl PyTrainingWindowStore {
@@ -292,6 +355,34 @@ fn profile_name(profile: TrainingProfile) -> &'static str {
         TrainingProfile::Compact => "compact",
         TrainingProfile::UltraCompact => "ultra-compact",
         TrainingProfile::Stream => "stream",
+    }
+}
+
+fn element_name(element: ElementType) -> &'static str {
+    match element {
+        ElementType::I8 => "i8",
+        ElementType::I16 => "i16",
+        ElementType::I24 => "i24",
+        ElementType::I32 => "i32",
+        ElementType::I64 => "i64",
+        ElementType::U8 => "u8",
+        ElementType::U16 => "u16",
+        ElementType::U32 => "u32",
+        ElementType::U64 => "u64",
+        ElementType::F16 => "f16",
+        ElementType::F32 => "f32",
+        ElementType::F64 => "f64",
+        ElementType::Bool => "bool",
+        ElementType::Utf8 => "utf8",
+        ElementType::Bytes => "bytes",
+    }
+}
+
+fn byte_order_name(byte_order: ByteOrder) -> &'static str {
+    match byte_order {
+        ByteOrder::Little => "little",
+        ByteOrder::Big => "big",
+        ByteOrder::NotApplicable => "not-applicable",
     }
 }
 

@@ -1,9 +1,9 @@
 use abir::{payload_content_id, ByteOrder, ContentId, ElementType};
 use abir_bcs::{Bcs2View, ResourceBounds, SemanticPayloadFrame};
 use abir_training::{
-    encode_snapshot, ContentKey, DatasetSubscription, DecisionLog, DecisionRecord, MicroSnapshot,
-    SubscriptionCorrection, TrainingError, TrainingProfile, TrainingRow, TrainingSnapshot,
-    TrainingSpec, TrainingWindowStore,
+    encode_snapshot, ContentKey, DatasetSubscription, DecisionLog, DecisionLogReplayState,
+    DecisionRecord, MicroSnapshot, SubscriptionCorrection, TrainingError, TrainingProfile,
+    TrainingRow, TrainingSnapshot, TrainingSpec, TrainingWindowStore,
 };
 
 fn key(seed: u8) -> ContentKey {
@@ -113,6 +113,37 @@ fn encoded_snapshot_opens_and_rows_lease_original_frame_bytes() {
     assert_eq!(lease.shape(), &[2]);
     assert_eq!(lease.byte_order(), ByteOrder::Little);
     assert_eq!(store.rows().len(), 1);
+}
+
+#[test]
+fn opened_store_exposes_only_snapshot_bound_training_metadata() {
+    let row_bytes = [1_u8, 0, 2, 0];
+    let metadata = row(10, 20, &row_bytes);
+    let snapshot = snapshot(TrainingProfile::Balanced, vec![metadata.clone()]);
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &row_bytes)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+
+    let store = TrainingWindowStore::open(&encoded, ResourceBounds::default()).unwrap();
+    let lease = store.row(metadata.logical_id).unwrap();
+
+    assert_eq!(store.snapshot_id().unwrap(), snapshot.content_id().unwrap());
+    assert_eq!(store.spec_id(), key(3));
+    assert_eq!(store.dataset_roots(), &[key(1), key(2)]);
+    assert_eq!(store.decision_log_id(), key(4));
+    assert_eq!(
+        store.decision_log_replay_state(),
+        DecisionLogReplayState::IdentityBound
+    );
+    assert_eq!(store.decision_log_replay_state().as_str(), "identity-bound");
+    assert_eq!(lease.logical_id(), key(10));
+    assert_eq!(lease.group(), key(20));
+    assert_eq!(lease.label(), key(9));
+    assert_eq!(lease.split(), key(8));
+    assert_eq!(lease.payload_id(), metadata.payload);
 }
 
 #[test]
