@@ -1,0 +1,15 @@
+{
+  "generation": 1,
+  "wire_major": 2,
+  "algorithms": [
+    {
+      "id": 2,
+      "name": "xchacha20-poly1305-ietf",
+      "required_capability_bit": 0,
+      "nonce_bytes": 24,
+      "tag_bytes": 16,
+      "privacy_modes": ["encrypted_opaque", "encrypted_discoverable"]
+    }
+  ],
+  "retired_ids": []
+}

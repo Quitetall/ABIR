@@ -10,7 +10,8 @@ uses.
 ## Authority
 
 This prose, `registries/bcs2-profiles-v1.json`,
-`schema/bcs2-profile-v1.schema.json`, binary-layout fixtures, and
+`schema/bcs2-profile-v1.schema.json`, `registries/bcs2-crypto-v1.json`,
+`schema/bcs2-crypto-v1.schema.json`, binary-layout fixtures, and
 `spec/bcs2-v1.manifest.json` jointly define generation 2. Unknown required
 capabilities fail before allocation. Retired identifiers are never reused.
 
@@ -138,9 +139,22 @@ closure before publishing any logical root.
 
 ## Privacy and forensic profiles
 
-EncryptedOpaque reveals only magic, generation, algorithm identifiers, bounded
-ciphertext extents, and data required to reject unsupported input safely.
-EncryptedDiscoverable is explicit. Keys and grants are never ABIR payloads.
+EncryptedOpaque reveals only magic, wire generation, algorithm identifiers,
+bounded ciphertext extents, and data required to reject unsupported input
+safely. Profile, semantic generation, root kind, and root `ContentId` are zero.
+EncryptedDiscoverable additionally discloses and authenticates those four inner
+fields. Keys and grants are never ABIR payloads.
+
+Generation-2 encryption uses registry algorithm 2, XChaCha20-Poly1305-IETF, with
+a 24-byte nonce, 16-byte tag, and required capability bit zero. The outer
+artifact is `SealedImmutable`; byte 43 is 2. Envelope field 44 is the exact
+ciphertext-plus-tag length, fields 48 and 52 are nonce and tag lengths, fields
+56 and 64 locate ciphertext, and fields 72 and 80 locate the nonce. The nonce is
+bytes 128–151 and ciphertext begins at byte 152. The complete 128-byte envelope
+is AEAD associated data. The decrypted plaintext is itself a fully verified BCS2
+artifact; discoverable fields must equal its values. Callers must never reuse a
+nonce with the same key. Nonce variation changes `StorageId` but never inner
+`ContentId`.
 
 ForensicTree records observable path, type, mode, ownership, timestamps, ACLs,
 xattrs, links, sparse extents, flags, and special-node declarations.

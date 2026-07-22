@@ -102,7 +102,7 @@ impl ProfileId {
         self.0
     }
 
-    fn from_registered(value: u32) -> Result<Self, Bcs2Error> {
+    pub(crate) fn from_registered(value: u32) -> Result<Self, Bcs2Error> {
         let profile = Self(value);
         match profile {
             Self::LML_LOSSLESS_V1
@@ -190,6 +190,8 @@ pub enum Bcs2Error {
     DuplicateFrame,
     IncompletePortableClosure(ContentId),
     ExtraPortableFrame(ContentId),
+    InvalidEncryptedEnvelope,
+    AuthenticationFailed,
     BoundsExceeded,
     InvalidExtent,
     NonCanonicalLayout,
@@ -462,6 +464,10 @@ impl<'a> Bcs2View<'a> {
         if get_u32(bytes, 12)? != BCS2_HEADER_LEN as u32 {
             return Err(Bcs2Error::NonCanonicalLayout);
         }
+        let privacy_mode = PrivacyMode::try_from(bytes[42])?;
+        if privacy_mode != PrivacyMode::Plaintext {
+            return Err(Bcs2Error::PrivacyModeNotImplemented(privacy_mode));
+        }
         let profile = ProfileId::from_registered(get_u32(bytes, 16)?)?;
         let semantic_generation = get_u32(bytes, 20)?;
         if semantic_generation != SEMANTIC_GENERATION {
@@ -480,15 +486,11 @@ impl<'a> Bcs2View<'a> {
             return Err(Bcs2Error::ProfileRootMismatch);
         }
         let storage_contract = StorageContract::try_from(bytes[41])?;
-        let privacy_mode = PrivacyMode::try_from(bytes[42])?;
         if !matches!(
             storage_contract,
             StorageContract::SealedImmutable | StorageContract::SealedGenerational
         ) {
             return Err(Bcs2Error::StorageContractNotImplemented(storage_contract));
-        }
-        if privacy_mode != PrivacyMode::Plaintext {
-            return Err(Bcs2Error::PrivacyModeNotImplemented(privacy_mode));
         }
         if bytes[43] != 1 {
             return Err(Bcs2Error::UnsupportedIntegrity(bytes[43]));

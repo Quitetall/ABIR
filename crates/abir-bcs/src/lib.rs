@@ -8,6 +8,8 @@ mod generation;
 #[cfg(feature = "alloc")]
 mod pack;
 #[cfg(feature = "alloc")]
+mod privacy;
+#[cfg(feature = "alloc")]
 mod wire;
 
 #[cfg(feature = "alloc")]
@@ -17,6 +19,9 @@ pub use generation::{
 
 #[cfg(feature = "alloc")]
 pub use pack::repack_with_frames;
+
+#[cfg(feature = "alloc")]
+pub use privacy::{decrypt_bcs2, encrypt_bcs2, EncryptedEnvelopeView, CAP_XCHACHA20_POLY1305};
 
 #[cfg(feature = "alloc")]
 pub use wire::{
