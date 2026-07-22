@@ -27,6 +27,37 @@ def _profile_registry() -> dict[str, Any]:
     return _load_json(ROOT / "registries/adapter-profiles-v1.json")
 
 
+def fixture_sha256(path: Path, kind: str) -> str:
+    """Hash one file or a complete symlink-free fixture tree."""
+
+    if kind == "file":
+        if not path.is_file() or path.is_symlink():
+            raise OSError("file fixture is missing, non-regular, or a symlink")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    if kind != "tree" or not path.is_dir() or path.is_symlink():
+        raise OSError("tree fixture is missing, not a directory, or a symlink")
+    digest = hashlib.sha256(b"abir.adapter.fixture-tree.v1\0")
+    files: list[tuple[str, Path]] = []
+    for entry in path.rglob("*"):
+        if entry.is_symlink():
+            raise OSError(f"fixture tree contains a symlink: {entry}")
+        if entry.is_dir():
+            continue
+        if not entry.is_file():
+            raise OSError(f"fixture tree contains a non-regular entry: {entry}")
+        files.append((entry.relative_to(path).as_posix(), entry))
+    if not files:
+        raise OSError("fixture tree contains no regular files")
+    for relative, entry in sorted(files):
+        path_bytes = relative.encode("utf-8")
+        content = entry.read_bytes()
+        digest.update(len(path_bytes).to_bytes(8, "big"))
+        digest.update(path_bytes)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def receipt_errors(
     receipt: dict[str, Any],
     *,
@@ -61,7 +92,7 @@ def receipt_errors(
     if fixture_root is not None:
         fixture_path = fixture_root / fixture["path"]
         try:
-            actual = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+            actual = fixture_sha256(fixture_path, fixture["kind"])
         except OSError as error:
             errors.append(f"fixture cannot be read: {fixture_path}: {error}")
         else:

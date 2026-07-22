@@ -26,6 +26,7 @@ def positive_receipt(*, expected: str = "accept") -> dict[str, object]:
         "edition": "1.11.1",
         "adapter_revision": "1" * 40,
         "fixture": {
+            "kind": "tree",
             "path": "fixtures/adapter/bids-valid",
             "sha256": SHA_A,
             "expected_outcome": expected,
@@ -111,6 +112,7 @@ class AdapterValidationContractTests(unittest.TestCase):
             fixture_record = copy.deepcopy(receipt["fixture"])
             assert isinstance(fixture_record, dict)
             fixture_record["path"] = fixture.name
+            fixture_record["kind"] = "file"
             fixture_record["sha256"] = hashlib.sha256(fixture.read_bytes()).hexdigest()
             receipt["fixture"] = fixture_record
             self.assertEqual(receipt_errors(receipt, fixture_root=root), [])
@@ -118,6 +120,34 @@ class AdapterValidationContractTests(unittest.TestCase):
             fixture.write_bytes(b"mutated")
             errors = receipt_errors(receipt, fixture_root=root)
             self.assertTrue(any("fixture sha256 mismatch" in error for error in errors))
+
+    def test_complete_tree_digest_is_ordered_and_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = root / "dataset"
+            (fixture / "sub-01").mkdir(parents=True)
+            (fixture / "dataset_description.json").write_bytes(b"{}")
+            (fixture / "sub-01" / "signal.edf").write_bytes(b"EDF")
+            receipt = positive_receipt()
+            fixture_record = copy.deepcopy(receipt["fixture"])
+            assert isinstance(fixture_record, dict)
+            fixture_record["path"] = fixture.name
+            from verify_adapter_contract import fixture_sha256
+
+            fixture_record["sha256"] = fixture_sha256(fixture, "tree")
+            receipt["fixture"] = fixture_record
+            self.assertEqual(receipt_errors(receipt, fixture_root=root), [])
+
+            (fixture / "sub-01" / "signal.edf").write_bytes(b"changed")
+            errors = receipt_errors(receipt, fixture_root=root)
+            self.assertTrue(any("fixture sha256 mismatch" in error for error in errors))
+
+            (fixture / "sub-01" / "signal.edf").unlink()
+            (fixture / "sub-01" / "signal.edf").symlink_to(
+                fixture / "dataset_description.json"
+            )
+            errors = receipt_errors(receipt, fixture_root=root)
+            self.assertTrue(any("symlink" in error for error in errors))
 
     def test_manifest_tracks_this_test(self) -> None:
         manifest = json.loads((ROOT / "spec/adapter-v1.manifest.json").read_text())

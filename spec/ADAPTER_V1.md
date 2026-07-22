@@ -36,8 +36,8 @@ name or an unaudited Boolean:
 
 - the Adapter profile identifier and the standard edition registered for it;
 - the exact Adapter source revision (a 40- or 64-hex revision identifier);
-- the repository-relative fixture path, SHA-256 digest, and expected `accept`
-  or `reject` outcome;
+- the repository-relative fixture path, whether it is one `file` or a `tree`,
+  its SHA-256 digest, and expected `accept` or `reject` outcome;
 - the independent validator name and version, executable SHA-256 digest, and
   the SHA-256 digest of the schema, dictionary, namespace, or equivalent
   conformance authority used for that execution;
@@ -54,6 +54,14 @@ produce the expected outcome for the bound fixture. For an expected rejection,
 that receipt still passes because both validators correctly rejected the
 fixture. The contract verifier checks these cross-field rules in addition to
 JSON Schema validation.
+
+File fixtures use SHA-256 over their bytes. Dataset-tree fixtures use
+`abir.adapter.fixture-tree.v1`: visit regular files by sorted UTF-8 relative
+POSIX path and hash the domain tag followed by each path length (`u64` big
+endian), path bytes, content length (`u64` big endian), and content bytes.
+Directories containing symlinks or non-regular entries fail closed. This makes
+BIDS and other directory standards bind the complete dataset rather than only
+one sentinel file.
 
 Unavailable independent evidence is represented as
 `"independent_evidence": null`; its receipt must say `"pass": false` and

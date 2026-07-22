@@ -27,8 +27,9 @@
     "fixture": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "sha256", "expected_outcome"],
+      "required": ["kind", "path", "sha256", "expected_outcome"],
       "properties": {
+        "kind": {"enum": ["file", "tree"]},
         "path": {
           "type": "string",
           "minLength": 1,
