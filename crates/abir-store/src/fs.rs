@@ -130,19 +130,8 @@ impl FsAbirStore {
             }
         }
         let final_path = self.object_path(storage_id);
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| StoreError::InvalidObjectName)?
-            .as_nanos();
-        let temp_path = self
-            .objects
-            .join(format!(".tmp-{}-{nonce}", std::process::id()));
+        let (temp_path, mut file) = self.create_temporary_object()?;
         let write_result = (|| {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temp_path)
-                .map_err(|error| StoreError::io("create temporary object", error))?;
             file.write_all(bytes)
                 .map_err(|error| StoreError::io("write object", error))?;
             file.sync_all()
@@ -295,6 +284,27 @@ impl FsAbirStore {
         self.by_storage.len()
     }
 
+    fn create_temporary_object(&self) -> Result<(PathBuf, File), StoreError> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| StoreError::InvalidObjectName)?
+            .as_nanos();
+        for attempt in 0..32_u8 {
+            let path = self
+                .objects
+                .join(format!(".tmp-{}-{nonce}-{attempt}", std::process::id()));
+            match OpenOptions::new().create_new(true).write(true).open(&path) {
+                Ok(file) => return Ok((path, file)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(StoreError::io("create temporary object", error)),
+            }
+        }
+        Err(StoreError::Io {
+            operation: "create unique temporary object",
+            kind: std::io::ErrorKind::AlreadyExists,
+        })
+    }
+
     fn rebuild_index(&mut self) -> Result<(), StoreError> {
         self.by_storage.clear();
         self.by_content.clear();
@@ -318,7 +328,6 @@ impl FsAbirStore {
             let expected = parse_storage_name(name)?;
             self.index_file(entry.path(), Some(expected))?;
         }
-        self.rebuild_content_index();
         Ok(())
     }
 
@@ -352,10 +361,14 @@ impl FsAbirStore {
                 return Err(StoreError::ConflictingClosure(meta.content_id));
             }
         }
+        let content_id = meta.content_id;
         if self.by_storage.insert(storage_id, meta).is_some() {
             return Err(StoreError::ConflictingStorageIdentity(storage_id));
         }
-        self.rebuild_content_index();
+        self.by_content
+            .entry(content_id)
+            .or_default()
+            .insert(storage_id);
         Ok(())
     }
 
