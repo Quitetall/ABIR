@@ -1,0 +1,11 @@
+{
+  "manifest_version": 1,
+  "training_version": "1",
+  "hash_algorithm": "sha256",
+  "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
+  "artifacts": [
+    {"path": "spec/TRAINING_WINDOW_STORE_V1.md", "sha256": "d9671520e12c5e6b8a1fb1ad31450849ed717bb5f8e7276f40a712a4e240af4c"},
+    {"path": "schema/training-snapshot-v1.schema.json", "sha256": "3f5c82666a7ace99830d3628c5304980945cb0902664a0d6a72799de94892d7e"},
+    {"path": "registries/bcs2-profiles-v1.json", "sha256": "b8cef1965fdee72efc661f62087e0b207ab256c1814edd21dbccc7b2226bfb78"}
+  ]
+}

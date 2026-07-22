@@ -64,6 +64,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "abir-training"
+version = "0.1.0"
+dependencies = [
+ "abir",
+ "abir-bcs",
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,17 @@
+[package]
+name = "abir-training"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+abir = { path = "../abir", version = "0.1.0" }
+abir-bcs = { path = "../abir-bcs", version = "0.1.0" }
+blake3 = "=1.5.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "abir_training"
+path = "src/lib.rs"

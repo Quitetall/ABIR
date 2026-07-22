@@ -6,6 +6,7 @@ members = [
     "crates/abir-conformance",
     "crates/abir-store",
     "crates/abir-adapter",
+    "crates/abir-training",
     "crates/abir-python",
 ]
 
