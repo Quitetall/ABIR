@@ -51,7 +51,6 @@ dependencies = [
  "abir-conformance",
  "abir-training",
  "pyo3",
- "serde_json",
 ]
 
 [[package]]

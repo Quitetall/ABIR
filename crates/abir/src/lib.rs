@@ -8,6 +8,8 @@ mod atom;
 #[cfg(feature = "alloc")]
 mod canonical;
 #[cfg(feature = "alloc")]
+mod canonical_parse;
+#[cfg(feature = "alloc")]
 mod catalog;
 #[cfg(feature = "alloc")]
 mod concept;
@@ -34,6 +36,10 @@ pub use atom::{
 };
 #[cfg(feature = "alloc")]
 pub use canonical::{canonical_debug_json, interchange_content_id, logical_content_id};
+#[cfg(feature = "alloc")]
+pub use canonical_parse::{
+    parse_canonical_dataset, parse_canonical_dataset_with_limits, CanonicalParseError,
+};
 #[cfg(feature = "alloc")]
 pub use catalog::{
     Acquisition, Calibration, CalibrationError, CatalogRecord, Channel, ChannelBasis, ChannelSpec,
