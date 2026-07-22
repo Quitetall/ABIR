@@ -140,6 +140,8 @@ pub struct ResourceBounds {
     pub max_catalog_bytes: u32,
     pub max_index_entries: u32,
     pub max_frame_bytes: u32,
+    /// Reader-side chain traversal bound; it is not serialized in generation 2.
+    pub max_generations: u32,
 }
 
 impl Default for ResourceBounds {
@@ -148,6 +150,7 @@ impl Default for ResourceBounds {
             max_catalog_bytes: 16 * 1024 * 1024,
             max_index_entries: 1_000_000,
             max_frame_bytes: 64 * 1024 * 1024,
+            max_generations: 4_096,
         }
     }
 }
@@ -200,7 +203,10 @@ pub fn encode_dataset_with_references(
     bounds: ResourceBounds,
     references: impl IntoIterator<Item = ContentId>,
 ) -> Result<Vec<u8>, Bcs2Error> {
-    if bounds.max_catalog_bytes == 0 || bounds.max_index_entries == 0 || bounds.max_frame_bytes == 0
+    if bounds.max_catalog_bytes == 0
+        || bounds.max_index_entries == 0
+        || bounds.max_frame_bytes == 0
+        || bounds.max_generations == 0
     {
         return Err(Bcs2Error::BoundsExceeded);
     }
@@ -324,7 +330,7 @@ pub fn append_dataset_generation(
         .generation
         .checked_add(1)
         .ok_or(Bcs2Error::BoundsExceeded)?;
-    if next_generation >= accepted_bounds.max_index_entries as u64 {
+    if next_generation >= accepted_bounds.max_generations as u64 {
         return Err(Bcs2Error::BoundsExceeded);
     }
     let encoded =
@@ -440,10 +446,12 @@ impl<'a> Bcs2View<'a> {
             max_catalog_bytes: get_u32(bytes, 44)?,
             max_index_entries: get_u32(bytes, 48)?,
             max_frame_bytes: get_u32(bytes, 52)?,
+            max_generations: accepted_bounds.max_generations,
         };
         if bounds.max_catalog_bytes == 0
             || bounds.max_index_entries == 0
             || bounds.max_frame_bytes == 0
+            || bounds.max_generations == 0
             || bounds.max_catalog_bytes > accepted_bounds.max_catalog_bytes
             || bounds.max_index_entries > accepted_bounds.max_index_entries
             || bounds.max_frame_bytes > accepted_bounds.max_frame_bytes
@@ -461,7 +469,7 @@ impl<'a> Bcs2View<'a> {
                 let chain = GenerationChain::parse(
                     bytes,
                     latest_footer_offset,
-                    accepted_bounds.max_index_entries,
+                    accepted_bounds.max_generations,
                 )?;
                 let latest = chain
                     .newest_first()

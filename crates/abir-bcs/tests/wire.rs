@@ -172,6 +172,14 @@ fn generational_dataset_exposes_only_the_verified_latest_root() {
         latest.semantic_json(),
         abir::canonical_debug_json(&second).unwrap()
     );
+    let generation_zero_footer = chain[0].previous_offset as usize;
+
+    let mut tampered_footer_digest = artifact.clone();
+    tampered_footer_digest[generation_zero_footer + 128] ^= 1;
+    assert_eq!(
+        Bcs2View::parse(&tampered_footer_digest, 0, ResourceBounds::default()).unwrap_err(),
+        Bcs2Error::CatalogDigestMismatch
+    );
 
     let mut false_latest_root = artifact.clone();
     false_latest_root[96] ^= 1;
