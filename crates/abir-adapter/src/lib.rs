@@ -62,6 +62,11 @@ impl AdapterProfileRegistry {
             if profile.id.0.is_empty()
                 || profile.standard.is_empty()
                 || profile.edition.is_empty()
+                || profile.media_types.is_empty()
+                || profile
+                    .media_types
+                    .iter()
+                    .any(|media_type| !valid_media_type(media_type))
                 || profile.required_validator.is_empty()
                 || profile.capabilities.is_empty()
                 || !ids.insert(profile.id.clone())
@@ -318,8 +323,19 @@ impl AdapterRegistry {
         Ok(())
     }
 
-    pub fn declare_provider(&mut self, id: ProfileId, package: impl Into<String>) {
+    pub fn declare_provider(
+        &mut self,
+        id: ProfileId,
+        package: impl Into<String>,
+    ) -> Result<(), AdapterError> {
+        if self.providers.contains_key(&id) {
+            return Err(AdapterError::InvalidSource(format!(
+                "duplicate adapter provider {}",
+                id.0
+            )));
+        }
         self.providers.insert(id, package.into());
+        Ok(())
     }
 
     pub fn get(&self, id: &ProfileId) -> Result<&(dyn Adapter + Send + Sync), AdapterError> {
@@ -586,6 +602,16 @@ fn hash_foreign_object(source: &ForeignObject) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+fn valid_media_type(media_type: &str) -> bool {
+    let Some((kind, subtype)) = media_type.split_once('/') else {
+        return false;
+    };
+    !kind.is_empty()
+        && !subtype.is_empty()
+        && !media_type.chars().any(char::is_whitespace)
+        && media_type.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
 fn export_plan_id(plan: &ExportPlan) -> String {
     let mut normalized = plan.clone();
     normalized.plan_id.clear();
@@ -698,7 +724,9 @@ mod tests {
     #[test]
     fn missing_adapter_is_installable_structured_failure() {
         let mut registry = AdapterRegistry::default();
-        registry.declare_provider(ProfileId("bcs1".to_owned()), "lamquant-legacy");
+        registry
+            .declare_provider(ProfileId("bcs1".to_owned()), "lamquant-legacy")
+            .unwrap();
         match registry.get(&ProfileId("bcs1".to_owned())) {
             Err(AdapterError::AdapterUnavailable {
                 package,
@@ -709,6 +737,16 @@ mod tests {
             }
             _ => panic!("missing adapter must return AdapterUnavailable"),
         }
+    }
+
+    #[test]
+    fn duplicate_provider_declaration_fails_closed() {
+        let mut registry = AdapterRegistry::default();
+        let id = ProfileId("bcs1".to_owned());
+        registry
+            .declare_provider(id.clone(), "lamquant-legacy")
+            .unwrap();
+        assert!(registry.declare_provider(id, "other-package").is_err());
     }
 
     #[test]

@@ -18,7 +18,7 @@
           "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
           "standard": {"type": "string", "minLength": 1},
           "edition": {"type": "string", "minLength": 1},
-          "media_types": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "media_types": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[^/\\s]+/[^\\s]+$"}, "uniqueItems": true},
           "status": {"enum": ["forensic", "semantic", "stream", "hardware"]},
           "validator": {"type": "string", "minLength": 1},
           "capabilities": {
