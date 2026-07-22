@@ -1,5 +1,8 @@
-use crate::{ContentKey, TrainingError, TrainingRow, TrainingSnapshot};
-use abir::{ByteOrder, ElementType};
+use crate::{
+    model::expected_payloads, ContentKey, TrainingError, TrainingLabelPayloadAssociation,
+    TrainingRow, TrainingSnapshot,
+};
+use abir::{ByteOrder, ElementType, Presence};
 use abir_bcs::{Bcs2View, FrameKind, ResourceBounds, RootKind, StorageContract};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +30,55 @@ impl DecisionLogReplayState {
 pub struct TrainingRowLease<'a> {
     bytes: &'a [u8],
     row: &'a TrainingRow,
+}
+
+/// A validated lease for typed label data associated with one logical row.
+#[derive(Clone, Copy, Debug)]
+pub struct TrainingLabelPayloadLease<'a> {
+    association: &'a TrainingLabelPayloadAssociation,
+    bytes: Option<&'a [u8]>,
+}
+
+impl<'a> TrainingLabelPayloadLease<'a> {
+    pub fn concept(self) -> &'a str {
+        &self.association.concept
+    }
+
+    pub const fn presence(self) -> Presence {
+        self.association.presence
+    }
+
+    pub const fn bytes(self) -> Option<&'a [u8]> {
+        self.bytes
+    }
+
+    pub fn element(self) -> Option<ElementType> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.element)
+    }
+
+    pub fn byte_order(self) -> Option<ByteOrder> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.byte_order)
+    }
+
+    pub fn shape(self) -> Option<&'a [u64]> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.shape.as_slice())
+    }
+
+    pub fn payload_id(self) -> Option<ContentKey> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.payload)
+    }
 }
 
 impl<'a> TrainingRowLease<'a> {
@@ -100,7 +152,7 @@ impl<'a> TrainingWindowStore<'a> {
             return Err(TrainingError::ExternalReference(*reference));
         }
 
-        let expected: BTreeSet<_> = snapshot.rows().iter().map(|row| row.payload).collect();
+        let expected: BTreeSet<_> = expected_payloads(&snapshot);
         let mut frame_index = BTreeMap::new();
         for (index, frame) in view.frames().iter().enumerate() {
             if frame.kind() != FrameKind::SemanticPayload {
@@ -123,6 +175,19 @@ impl<'a> TrainingWindowStore<'a> {
                 || u64::try_from(frame.bytes().len()).ok() != Some(row.logical_bytes)
             {
                 return Err(TrainingError::InvalidRowExtent(row.logical_id.content_id()));
+            }
+        }
+        for association in snapshot.label_payloads() {
+            let Some(payload) = &association.payload else {
+                continue;
+            };
+            let frame = &view.frames()[frame_index[&payload.payload]];
+            if frame.element() != Some(payload.element)
+                || u64::try_from(frame.bytes().len()).ok() != Some(payload.logical_bytes)
+            {
+                return Err(TrainingError::InvalidRowExtent(
+                    association.logical_id.content_id(),
+                ));
             }
         }
 
@@ -179,5 +244,25 @@ impl<'a> TrainingWindowStore<'a> {
                 row,
             }
         })
+    }
+
+    pub fn label_payload(
+        &self,
+        logical_id: ContentKey,
+        concept: &str,
+    ) -> Option<TrainingLabelPayloadLease<'_>> {
+        let association = self
+            .snapshot
+            .label_payloads()
+            .binary_search_by(|association| {
+                (association.logical_id, association.concept.as_str()).cmp(&(logical_id, concept))
+            })
+            .ok()
+            .map(|index| &self.snapshot.label_payloads()[index])?;
+        let bytes = association
+            .payload
+            .as_ref()
+            .map(|payload| self.view.frames()[self.frame_index[&payload.payload]].bytes());
+        Some(TrainingLabelPayloadLease { association, bytes })
     }
 }

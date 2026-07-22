@@ -2,8 +2,9 @@ use abir::{payload_content_id, ByteOrder, ContentId, ElementType};
 use abir_bcs::{Bcs2View, ResourceBounds, SemanticPayloadFrame};
 use abir_training::{
     encode_snapshot, ContentKey, DatasetSubscription, DecisionLog, DecisionLogReplayState,
-    DecisionRecord, MicroSnapshot, SubscriptionCorrection, TrainingError, TrainingProfile,
-    TrainingRow, TrainingSnapshot, TrainingSpec, TrainingWindowStore,
+    DecisionRecord, MicroSnapshot, SubscriptionCorrection, TrainingAssociatedPayload,
+    TrainingError, TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingSnapshot,
+    TrainingSpec, TrainingWindowStore,
 };
 
 fn key(seed: u8) -> ContentKey {
@@ -26,6 +27,130 @@ fn row(logical_seed: u8, group_seed: u8, bytes: &[u8]) -> TrainingRow {
 
 fn snapshot(profile: TrainingProfile, rows: Vec<TrainingRow>) -> TrainingSnapshot {
     TrainingSnapshot::seal(vec![key(2), key(1)], key(3), profile, rows, key(4)).unwrap()
+}
+
+const SEIZURE_MASK: &str = "org.quitetall.lamquant.label.seizure-mask-v1";
+
+fn seizure_mask_association(
+    logical_id: ContentKey,
+    bytes: &[u8],
+) -> TrainingLabelPayloadAssociation {
+    TrainingLabelPayloadAssociation {
+        concept: SEIZURE_MASK.to_owned(),
+        logical_id,
+        payload: Some(TrainingAssociatedPayload {
+            byte_order: ByteOrder::NotApplicable,
+            element: ElementType::U8,
+            logical_bytes: bytes.len() as u64,
+            payload: ContentKey::new(payload_content_id(ElementType::U8, bytes)),
+            shape: vec![bytes.len() as u64],
+        }),
+        presence: abir::Presence::Present,
+    }
+}
+
+#[test]
+fn typed_label_payload_is_leased_with_exact_presence_and_bytes() {
+    let signal = [1_u8, 0, 2, 0];
+    let mask = [0_u8, 1];
+    let row = row(10, 20, &signal);
+    let snapshot = TrainingSnapshot::seal_with_label_payloads(
+        vec![key(1)],
+        key(3),
+        TrainingProfile::Balanced,
+        vec![row.clone()],
+        vec![seizure_mask_association(row.logical_id, &mask)],
+        key(4),
+    )
+    .unwrap();
+    let catalog = String::from_utf8(snapshot.canonical_json().unwrap()).unwrap();
+    assert!(catalog.contains("org.quitetall.abir.training.snapshot-v2"));
+    assert!(catalog.contains("label_payloads"));
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[
+            SemanticPayloadFrame::new(ElementType::I16, &signal),
+            SemanticPayloadFrame::new(ElementType::U8, &mask),
+        ],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+
+    let store = TrainingWindowStore::open(&encoded, ResourceBounds::default()).unwrap();
+    let lease = store
+        .label_payload(row.logical_id, SEIZURE_MASK)
+        .expect("sealed association");
+
+    assert_eq!(lease.presence(), abir::Presence::Present);
+    assert_eq!(lease.bytes(), Some(mask.as_slice()));
+    assert_eq!(lease.element(), Some(ElementType::U8));
+    assert_eq!(lease.shape(), Some([2].as_slice()));
+}
+
+#[test]
+fn unavailable_label_payloads_are_explicit_and_carry_no_frame() {
+    let signal = [1_u8, 0, 2, 0];
+    let row = row(10, 20, &signal);
+    let association = TrainingLabelPayloadAssociation {
+        concept: SEIZURE_MASK.to_owned(),
+        logical_id: row.logical_id,
+        payload: None,
+        presence: abir::Presence::UnknownAtSource,
+    };
+    let snapshot = TrainingSnapshot::seal_with_label_payloads(
+        vec![key(1)],
+        key(3),
+        TrainingProfile::Balanced,
+        vec![row.clone()],
+        vec![association],
+        key(4),
+    )
+    .unwrap();
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &signal)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+
+    let store = TrainingWindowStore::open(&encoded, ResourceBounds::default()).unwrap();
+    let lease = store.label_payload(row.logical_id, SEIZURE_MASK).unwrap();
+    assert_eq!(lease.presence(), abir::Presence::UnknownAtSource);
+    assert_eq!(lease.bytes(), None);
+}
+
+#[test]
+fn label_payload_presence_and_association_identity_fail_closed() {
+    let signal = [1_u8, 0, 2, 0];
+    let mask = [0_u8, 1];
+    let row = row(10, 20, &signal);
+    let mut absent_with_payload = seizure_mask_association(row.logical_id, &mask);
+    absent_with_payload.presence = abir::Presence::AbsentAtSource;
+    assert!(TrainingSnapshot::seal_with_label_payloads(
+        vec![key(1)],
+        key(3),
+        TrainingProfile::Balanced,
+        vec![row.clone()],
+        vec![absent_with_payload],
+        key(4),
+    )
+    .is_err());
+
+    let unknown_row = TrainingLabelPayloadAssociation {
+        concept: SEIZURE_MASK.to_owned(),
+        logical_id: key(99),
+        payload: None,
+        presence: abir::Presence::UnknownAtSource,
+    };
+    assert!(TrainingSnapshot::seal_with_label_payloads(
+        vec![key(1)],
+        key(3),
+        TrainingProfile::Balanced,
+        vec![row],
+        vec![unknown_row],
+        key(4),
+    )
+    .is_err());
 }
 
 fn training_spec(knobs: Vec<&str>) -> TrainingSpec {
@@ -77,6 +202,9 @@ fn source_equivalent_rows_and_roots_have_the_same_snapshot_identity() {
         first.canonical_json().unwrap(),
         second.canonical_json().unwrap()
     );
+    let catalog = String::from_utf8(first.canonical_json().unwrap()).unwrap();
+    assert!(catalog.contains("org.quitetall.abir.training.snapshot-v1"));
+    assert!(!catalog.contains("label_payloads"));
 }
 
 #[test]

@@ -57,25 +57,28 @@ fn bcs2_manifest_hashes_match() {
 #[test]
 fn training_manifest_hashes_match() {
     let root = root();
-    let manifest: Value = serde_json::from_slice(
-        &fs::read(root.join("spec/training-v1.manifest.json")).expect("read training manifest"),
-    )
-    .expect("parse training manifest");
+    for version in ["v1", "v2"] {
+        let manifest_path = format!("spec/training-{version}.manifest.json");
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(root.join(&manifest_path)).expect("read training manifest"),
+        )
+        .expect("parse training manifest");
 
-    for artifact in manifest["artifacts"]
-        .as_array()
-        .expect("training manifest.artifacts must be an array")
-    {
-        let path = artifact["path"].as_str().expect("artifact path");
-        let expected = artifact["sha256"].as_str().expect("artifact digest");
-        let actual = format!(
-            "{:x}",
-            Sha256::digest(fs::read(root.join(path)).expect(path))
-        );
-        assert_eq!(
-            actual, expected,
-            "normative training artifact changed: {path}"
-        );
+        for artifact in manifest["artifacts"]
+            .as_array()
+            .expect("training manifest.artifacts must be an array")
+        {
+            let path = artifact["path"].as_str().expect("artifact path");
+            let expected = artifact["sha256"].as_str().expect("artifact digest");
+            let actual = format!(
+                "{:x}",
+                Sha256::digest(fs::read(root.join(path)).expect(path))
+            );
+            assert_eq!(
+                actual, expected,
+                "normative training artifact changed in {manifest_path}: {path}"
+            );
+        }
     }
 }
 

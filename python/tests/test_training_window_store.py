@@ -8,6 +8,7 @@ import sys
 import abir
 import numpy as np
 import pytest
+import jsonschema
 
 
 def test_training_window_store_opens_validated_bundle_and_lends_rows():
@@ -195,3 +196,76 @@ print(json.dumps({'before': before, 'after': after, 'rows': store.row_count}))
     # resident. A second full heap copy would push growth toward 2x.
     assert measurement["rows"] == 1
     assert measurement["after"] - measurement["before"] < artifact_bytes * 3 // 2
+
+
+def test_typed_label_payload_preserves_present_and_unknown_semantics():
+    concept = "org.quitetall.lamquant.label.seizure-mask-v1"
+    present = abir.TrainingWindowStore.open_bytes(
+        abir._training_fixture_bytes(label_presence="present")
+    )
+    row_id = present.row_ids[0]
+
+    info = present.row_label_payload_info(row_id, concept)
+    assert info["presence"] == "present"
+    assert info["element"] == "u8"
+    assert info["byte_order"] == "not-applicable"
+    assert info["shape"] == [2]
+    mask = present.row_label_payload_numpy(row_id, concept)
+    assert mask.tolist() == [0, 1]
+    assert not mask.flags.writeable
+
+    unknown = abir.TrainingWindowStore.open_bytes(
+        abir._training_fixture_bytes(label_presence="unknown-at-source")
+    )
+    unknown_row_id = unknown.row_ids[0]
+    assert unknown.row_label_payload_info(unknown_row_id, concept) == {
+        "concept": concept,
+        "presence": "unknown-at-source",
+    }
+    with pytest.raises(ValueError, match="unknown-at-source"):
+        unknown.row_label_payload_numpy(unknown_row_id, concept)
+
+
+def test_training_v2_schema_admits_typed_labels_and_v1_rejects_them():
+    root = Path(__file__).parents[2]
+    v1 = json.loads((root / "schema/training-snapshot-v1.schema.json").read_text())
+    v2 = json.loads((root / "schema/training-snapshot-v2.schema.json").read_text())
+    jsonschema.Draft202012Validator.check_schema(v2)
+    content_id = "1" * 64
+    catalog = {
+        "dataset_roots": [content_id],
+        "decision_log_id": "2" * 64,
+        "label_payloads": [{
+            "concept": "org.quitetall.lamquant.label.seizure-mask-v1",
+            "logical_id": "3" * 64,
+            "payload": {
+                "byte_order": "not-applicable",
+                "element": "u8",
+                "logical_bytes": 2,
+                "payload": "4" * 64,
+                "shape": [2],
+            },
+            "presence": "present",
+        }],
+        "profile": "balanced",
+        "rows": [{
+            "byte_order": "little",
+            "element": "i16",
+            "group": "5" * 64,
+            "label": "6" * 64,
+            "logical_bytes": 4,
+            "logical_id": "3" * 64,
+            "payload": "7" * 64,
+            "shape": [2],
+            "split": "8" * 64,
+        }],
+        "schema": "org.quitetall.abir.training.snapshot-v2",
+        "sealed": True,
+        "spec_id": "9" * 64,
+    }
+
+    jsonschema.validate(catalog, v2)
+    assert list(jsonschema.Draft202012Validator(v1).iter_errors(catalog))
+
+    catalog["label_payloads"][0]["presence"] = "unknown-at-source"
+    assert list(jsonschema.Draft202012Validator(v2).iter_errors(catalog))

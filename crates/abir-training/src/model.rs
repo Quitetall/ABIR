@@ -1,13 +1,15 @@
 use crate::TrainingError;
-use abir::{ByteOrder, ContentId, ElementType};
+use abir::{ByteOrder, ContentId, ElementType, Presence};
 use abir_bcs::{encode_semantic_bundle, ProfileId, ResourceBounds, SemanticPayloadFrame};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 const SPEC_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.spec-v1\0";
-const SNAPSHOT_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.snapshot-v1\0";
-const SNAPSHOT_SCHEMA: &str = "org.quitetall.abir.training.snapshot-v1";
+const SNAPSHOT_V1_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.snapshot-v1\0";
+const SNAPSHOT_V2_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.snapshot-v2\0";
+const SNAPSHOT_V1_SCHEMA: &str = "org.quitetall.abir.training.snapshot-v1";
+const SNAPSHOT_V2_SCHEMA: &str = "org.quitetall.abir.training.snapshot-v2";
 
 /// A serde-compatible lowercase hexadecimal wrapper around an ABIR ContentId.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -209,40 +211,71 @@ pub struct TrainingRow {
 
 impl TrainingRow {
     fn validate(&self) -> Result<(), TrainingError> {
-        if self.shape.is_empty() || self.shape.contains(&0) || self.logical_bytes == 0 {
-            return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+        validate_extent(
+            self.element,
+            self.byte_order,
+            &self.shape,
+            self.logical_bytes,
+            self.logical_id.0,
+        )
+    }
+}
+
+/// A typed payload associated with a training label for one logical row.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TrainingAssociatedPayload {
+    #[serde(with = "byte_order_serde")]
+    pub byte_order: ByteOrder,
+    #[serde(with = "element_serde")]
+    pub element: ElementType,
+    pub logical_bytes: u64,
+    pub payload: ContentKey,
+    pub shape: Vec<u64>,
+}
+
+impl TrainingAssociatedPayload {
+    fn validate(&self, logical_id: ContentId) -> Result<(), TrainingError> {
+        validate_extent(
+            self.element,
+            self.byte_order,
+            &self.shape,
+            self.logical_bytes,
+            logical_id,
+        )
+    }
+}
+
+/// An explicit semantic association between a logical row and label data.
+///
+/// `Present` requires a payload descriptor. Every other ABIR presence state
+/// forbids one: absence, uncertainty, withholding, redaction, and
+/// non-applicability never silently become an empty or all-zero label.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TrainingLabelPayloadAssociation {
+    pub concept: String,
+    pub logical_id: ContentKey,
+    pub payload: Option<TrainingAssociatedPayload>,
+    #[serde(with = "presence_serde")]
+    pub presence: Presence,
+}
+
+impl TrainingLabelPayloadAssociation {
+    fn validate(&self, rows: &[TrainingRow]) -> Result<(), TrainingError> {
+        validate_label_concept(&self.concept)?;
+        if rows
+            .binary_search_by_key(&self.logical_id, |row| row.logical_id)
+            .is_err()
+        {
+            return Err(TrainingError::UnknownLabelRow(self.logical_id.0));
         }
-        match self.element.byte_width() {
-            Some(width) if width > 1 && self.byte_order == ByteOrder::NotApplicable => {
-                return Err(TrainingError::InvalidByteOrder(format!(
-                    "{:?} requires explicit little or big endian order",
-                    self.element
-                )));
+        match (self.presence, &self.payload) {
+            (Presence::Present, Some(payload)) => payload.validate(self.logical_id.0),
+            (Presence::Present, None) => {
+                Err(TrainingError::InvalidLabelPresence(self.logical_id.0))
             }
-            Some(1) if self.byte_order != ByteOrder::NotApplicable => {
-                return Err(TrainingError::InvalidByteOrder(format!(
-                    "{:?} requires not-applicable byte order",
-                    self.element
-                )));
-            }
-            None if self.byte_order != ByteOrder::NotApplicable => {
-                return Err(TrainingError::InvalidByteOrder(format!(
-                    "{:?} requires not-applicable byte order",
-                    self.element
-                )));
-            }
-            _ => {}
+            (_, None) => Ok(()),
+            (_, Some(_)) => Err(TrainingError::InvalidLabelPresence(self.logical_id.0)),
         }
-        if let Some(width) = self.element.byte_width() {
-            let expected = self
-                .shape
-                .iter()
-                .try_fold(width, |total, extent| total.checked_mul(*extent));
-            if expected != Some(self.logical_bytes) {
-                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
-            }
-        }
-        Ok(())
     }
 }
 
@@ -251,6 +284,8 @@ impl TrainingRow {
 pub struct TrainingSnapshot {
     dataset_roots: Vec<ContentKey>,
     decision_log_id: ContentKey,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    label_payloads: Vec<TrainingLabelPayloadAssociation>,
     profile: TrainingProfile,
     rows: Vec<TrainingRow>,
     schema: String,
@@ -260,10 +295,28 @@ pub struct TrainingSnapshot {
 
 impl TrainingSnapshot {
     pub fn seal(
+        dataset_roots: Vec<ContentKey>,
+        spec_id: ContentKey,
+        profile: TrainingProfile,
+        rows: Vec<TrainingRow>,
+        decision_log_id: ContentKey,
+    ) -> Result<Self, TrainingError> {
+        Self::seal_with_label_payloads(
+            dataset_roots,
+            spec_id,
+            profile,
+            rows,
+            Vec::new(),
+            decision_log_id,
+        )
+    }
+
+    pub fn seal_with_label_payloads(
         mut dataset_roots: Vec<ContentKey>,
         spec_id: ContentKey,
         profile: TrainingProfile,
         mut rows: Vec<TrainingRow>,
+        mut label_payloads: Vec<TrainingLabelPayloadAssociation>,
         decision_log_id: ContentKey,
     ) -> Result<Self, TrainingError> {
         dataset_roots.sort_unstable();
@@ -285,13 +338,33 @@ impl TrainingSnapshot {
         for row in &rows {
             row.validate()?;
         }
-        validate_payload_metadata(&rows)?;
+        label_payloads.sort_by(|left, right| {
+            (left.logical_id, left.concept.as_str())
+                .cmp(&(right.logical_id, right.concept.as_str()))
+        });
+        if let Some(duplicate) = label_payloads.windows(2).find(|pair| {
+            pair[0].logical_id == pair[1].logical_id && pair[0].concept == pair[1].concept
+        }) {
+            return Err(TrainingError::DuplicateLabelAssociation {
+                logical_id: duplicate[0].logical_id.0,
+                concept: duplicate[0].concept.clone(),
+            });
+        }
+        for association in &label_payloads {
+            association.validate(&rows)?;
+        }
+        validate_payload_metadata(&rows, &label_payloads)?;
         let snapshot = Self {
             dataset_roots,
             decision_log_id,
+            schema: if label_payloads.is_empty() {
+                SNAPSHOT_V1_SCHEMA.to_owned()
+            } else {
+                SNAPSHOT_V2_SCHEMA.to_owned()
+            },
+            label_payloads,
             profile,
             rows,
-            schema: SNAPSHOT_SCHEMA.to_owned(),
             sealed: true,
             spec_id,
         };
@@ -305,7 +378,12 @@ impl TrainingSnapshot {
     }
 
     pub fn content_id(&self) -> Result<ContentId, TrainingError> {
-        hash_canonical(SNAPSHOT_HASH_DOMAIN, &self.canonical_json()?)
+        let domain = match self.schema.as_str() {
+            SNAPSHOT_V1_SCHEMA => SNAPSHOT_V1_HASH_DOMAIN,
+            SNAPSHOT_V2_SCHEMA => SNAPSHOT_V2_HASH_DOMAIN,
+            _ => return Err(TrainingError::InvalidSnapshot),
+        };
+        hash_canonical(domain, &self.canonical_json()?)
     }
 
     pub fn dataset_roots(&self) -> &[ContentKey] {
@@ -314,6 +392,10 @@ impl TrainingSnapshot {
 
     pub const fn decision_log_id(&self) -> ContentKey {
         self.decision_log_id
+    }
+
+    pub fn label_payloads(&self) -> &[TrainingLabelPayloadAssociation] {
+        &self.label_payloads
     }
 
     pub const fn profile(&self) -> TrainingProfile {
@@ -338,8 +420,13 @@ impl TrainingSnapshot {
     }
 
     fn validate(&self) -> Result<(), TrainingError> {
-        if self.schema != SNAPSHOT_SCHEMA || !self.sealed {
+        if !self.sealed {
             return Err(TrainingError::NotSealed);
+        }
+        match self.schema.as_str() {
+            SNAPSHOT_V1_SCHEMA if self.label_payloads.is_empty() => {}
+            SNAPSHOT_V2_SCHEMA if !self.label_payloads.is_empty() => {}
+            _ => return Err(TrainingError::InvalidSnapshot),
         }
         if self.dataset_roots.is_empty()
             || self.rows.is_empty()
@@ -354,7 +441,16 @@ impl TrainingSnapshot {
         for row in &self.rows {
             row.validate()?;
         }
-        validate_payload_metadata(&self.rows)
+        if self.label_payloads.windows(2).any(|pair| {
+            (pair[0].logical_id, pair[0].concept.as_str())
+                >= (pair[1].logical_id, pair[1].concept.as_str())
+        }) {
+            return Err(TrainingError::InvalidSnapshot);
+        }
+        for association in &self.label_payloads {
+            association.validate(&self.rows)?;
+        }
+        validate_payload_metadata(&self.rows, &self.label_payloads)
     }
 }
 
@@ -364,7 +460,7 @@ pub fn encode_snapshot(
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, TrainingError> {
     snapshot.validate()?;
-    let expected: BTreeSet<_> = snapshot.rows.iter().map(|row| row.payload).collect();
+    let expected = expected_payloads(snapshot);
     let mut actual = BTreeMap::new();
     for frame in frames {
         let key = ContentKey::from(frame.content_id());
@@ -410,10 +506,41 @@ fn validate_frame_closure(
             return Err(TrainingError::InvalidRowExtent(row.logical_id.0));
         }
     }
+    for association in &snapshot.label_payloads {
+        let Some(payload) = &association.payload else {
+            continue;
+        };
+        let (element, bytes) = actual
+            .get(&payload.payload)
+            .ok_or(TrainingError::MissingPayload(payload.payload.0))?;
+        if *element != payload.element
+            || u64::try_from(bytes.len()).ok() != Some(payload.logical_bytes)
+            || abir::payload_content_id(*element, bytes) != payload.payload.0
+        {
+            return Err(TrainingError::InvalidRowExtent(association.logical_id.0));
+        }
+    }
     Ok(())
 }
 
-fn validate_payload_metadata(rows: &[TrainingRow]) -> Result<(), TrainingError> {
+pub(crate) fn expected_payloads(snapshot: &TrainingSnapshot) -> BTreeSet<ContentKey> {
+    snapshot
+        .rows
+        .iter()
+        .map(|row| row.payload)
+        .chain(
+            snapshot
+                .label_payloads
+                .iter()
+                .filter_map(|association| association.payload.as_ref().map(|value| value.payload)),
+        )
+        .collect()
+}
+
+fn validate_payload_metadata(
+    rows: &[TrainingRow],
+    label_payloads: &[TrainingLabelPayloadAssociation],
+) -> Result<(), TrainingError> {
     let mut payloads = BTreeMap::new();
     for row in rows {
         let metadata = (row.element, row.byte_order, row.logical_bytes);
@@ -422,6 +549,69 @@ fn validate_payload_metadata(rows: &[TrainingRow]) -> Result<(), TrainingError> 
                 return Err(TrainingError::DuplicatePayload(row.payload.0));
             }
         }
+    }
+    for association in label_payloads {
+        let Some(payload) = &association.payload else {
+            continue;
+        };
+        let metadata = (payload.element, payload.byte_order, payload.logical_bytes);
+        if let Some(previous) = payloads.insert(payload.payload, metadata) {
+            if previous != metadata {
+                return Err(TrainingError::DuplicatePayload(payload.payload.0));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_extent(
+    element: ElementType,
+    byte_order: ByteOrder,
+    shape: &[u64],
+    logical_bytes: u64,
+    logical_id: ContentId,
+) -> Result<(), TrainingError> {
+    if shape.is_empty() || shape.contains(&0) || logical_bytes == 0 {
+        return Err(TrainingError::InvalidRowExtent(logical_id));
+    }
+    match element.byte_width() {
+        Some(width) if width > 1 && byte_order == ByteOrder::NotApplicable => {
+            return Err(TrainingError::InvalidByteOrder(format!(
+                "{element:?} requires explicit little or big endian order"
+            )));
+        }
+        Some(1) | None if byte_order != ByteOrder::NotApplicable => {
+            return Err(TrainingError::InvalidByteOrder(format!(
+                "{element:?} requires not-applicable byte order"
+            )));
+        }
+        _ => {}
+    }
+    if let Some(width) = element.byte_width() {
+        let expected = shape
+            .iter()
+            .try_fold(width, |total, extent| total.checked_mul(*extent));
+        if expected != Some(logical_bytes) {
+            return Err(TrainingError::InvalidRowExtent(logical_id));
+        }
+    }
+    Ok(())
+}
+
+fn validate_label_concept(concept: &str) -> Result<(), TrainingError> {
+    if concept.len() < 3
+        || concept.len() > 256
+        || concept.trim() != concept
+        || !concept.contains('.')
+        || !concept.as_bytes()[0].is_ascii_lowercase() && !concept.as_bytes()[0].is_ascii_digit()
+        || concept.ends_with('.')
+        || concept.as_bytes().iter().any(|byte| {
+            !byte.is_ascii_lowercase()
+                && !byte.is_ascii_digit()
+                && !matches!(byte, b'.' | b'-' | b'_')
+        })
+    {
+        return Err(TrainingError::InvalidLabelConcept(concept.to_owned()));
     }
     Ok(())
 }
@@ -562,6 +752,43 @@ mod byte_order_serde {
             other => Err(serde::de::Error::custom(TrainingError::InvalidByteOrder(
                 other.to_owned(),
             ))),
+        }
+    }
+}
+
+mod presence_serde {
+    use super::TrainingError;
+    use abir::Presence;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(presence: &Presence, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match presence {
+            Presence::Present => "present",
+            Presence::AbsentAtSource => "absent-at-source",
+            Presence::UnknownAtSource => "unknown-at-source",
+            Presence::Withheld => "withheld",
+            Presence::Redacted => "redacted",
+            Presence::NotApplicable => "not-applicable",
+        })
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Presence, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "present" => Ok(Presence::Present),
+            "absent-at-source" => Ok(Presence::AbsentAtSource),
+            "unknown-at-source" => Ok(Presence::UnknownAtSource),
+            "withheld" => Ok(Presence::Withheld),
+            "redacted" => Ok(Presence::Redacted),
+            "not-applicable" => Ok(Presence::NotApplicable),
+            other => Err(serde::de::Error::custom(
+                TrainingError::InvalidLabelPresenceName(other.to_owned()),
+            )),
         }
     }
 }

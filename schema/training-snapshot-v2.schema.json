@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quitetall.org/abir/schema/training-snapshot-v2.schema.json",
+  "title": "ABIR sealed training snapshot v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dataset_roots",
+    "decision_log_id",
+    "label_payloads",
+    "profile",
+    "rows",
+    "schema",
+    "sealed",
+    "spec_id"
+  ],
+  "properties": {
+    "dataset_roots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/contentId" }
+    },
+    "decision_log_id": { "$ref": "#/$defs/contentId" },
+    "label_payloads": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/labelPayloadAssociation" }
+    },
+    "profile": {
+      "enum": ["speed", "balanced", "memory", "compact", "ultra-compact", "stream"]
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/row" }
+    },
+    "schema": { "const": "org.quitetall.abir.training.snapshot-v2" },
+    "sealed": { "const": true },
+    "spec_id": { "$ref": "#/$defs/contentId" }
+  },
+  "$defs": {
+    "contentId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "associatedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byte_order", "element", "logical_bytes", "payload", "shape"],
+      "properties": {
+        "byte_order": { "enum": ["little", "big", "not-applicable"] },
+        "element": {
+          "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"]
+        },
+        "logical_bytes": { "type": "integer", "minimum": 1 },
+        "payload": { "$ref": "#/$defs/contentId" },
+        "shape": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "labelPayloadAssociation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["concept", "logical_id", "payload", "presence"],
+      "properties": {
+        "concept": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 256,
+          "pattern": "^[a-z0-9][a-z0-9._-]*\\.[a-z0-9._-]+$"
+        },
+        "logical_id": { "$ref": "#/$defs/contentId" },
+        "payload": {
+          "oneOf": [
+            { "$ref": "#/$defs/associatedPayload" },
+            { "type": "null" }
+          ]
+        },
+        "presence": {
+          "enum": ["present", "absent-at-source", "unknown-at-source", "withheld", "redacted", "not-applicable"]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "presence": { "const": "present" } } },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/associatedPayload" } } },
+          "else": { "properties": { "payload": { "type": "null" } } }
+        }
+      ]
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byte_order", "group", "label", "logical_bytes", "logical_id", "payload", "element", "shape", "split"],
+      "properties": {
+        "byte_order": { "enum": ["little", "big", "not-applicable"] },
+        "group": { "$ref": "#/$defs/contentId" },
+        "label": { "$ref": "#/$defs/contentId" },
+        "logical_bytes": { "type": "integer", "minimum": 1 },
+        "logical_id": { "$ref": "#/$defs/contentId" },
+        "payload": { "$ref": "#/$defs/contentId" },
+        "element": {
+          "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"]
+        },
+        "shape": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 1 }
+        },
+        "split": { "$ref": "#/$defs/contentId" }
+      }
+    }
+  }
+}

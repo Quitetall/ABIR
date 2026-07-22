@@ -1,9 +1,12 @@
 use abir_bcs::ResourceBounds;
 #[cfg(feature = "test-fixtures")]
 use abir_bcs::SemanticPayloadFrame;
-use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType};
+use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType, Presence};
 #[cfg(feature = "test-fixtures")]
-use abir_training::{encode_snapshot, ContentKey, TrainingRow, TrainingSnapshot};
+use abir_training::{
+    encode_snapshot, ContentKey, TrainingAssociatedPayload, TrainingLabelPayloadAssociation,
+    TrainingRow, TrainingSnapshot,
+};
 use abir_training::{DecisionLogReplayState, TrainingProfile, TrainingWindowStore};
 use memmap2::MmapOptions;
 use pyo3::exceptions::{PyKeyError, PyOSError, PyValueError};
@@ -46,6 +49,38 @@ struct RowLocation {
     split: String,
 }
 
+#[derive(Debug)]
+enum LabelPayloadLocation {
+    Present {
+        byte_order: ByteOrder,
+        concept: String,
+        element: ElementType,
+        logical_bytes: usize,
+        offset: usize,
+        payload_id: ContentId,
+        shape: Vec<u64>,
+    },
+    Unavailable {
+        concept: String,
+        presence: Presence,
+    },
+}
+
+impl LabelPayloadLocation {
+    fn concept(&self) -> &str {
+        match self {
+            Self::Present { concept, .. } | Self::Unavailable { concept, .. } => concept,
+        }
+    }
+
+    const fn presence(&self) -> Presence {
+        match self {
+            Self::Present { .. } => Presence::Present,
+            Self::Unavailable { presence, .. } => *presence,
+        }
+    }
+}
+
 /// A validated, immutable view of a sealed ABIR BCS2 training bundle.
 ///
 /// The Python object owns the original `bytes` object. NumPy rows use that
@@ -58,6 +93,7 @@ pub(crate) struct PyTrainingWindowStore {
     decision_log_id: String,
     profile: &'static str,
     rows: Vec<RowLocation>,
+    label_payloads: Vec<Vec<LabelPayloadLocation>>,
     snapshot_id: String,
     spec_id: String,
 }
@@ -75,6 +111,7 @@ impl PyTrainingWindowStore {
             decision_log_id: metadata.decision_log_id,
             profile: metadata.profile,
             rows: metadata.rows,
+            label_payloads: metadata.label_payloads,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
         })
@@ -146,6 +183,7 @@ impl PyTrainingWindowStore {
             decision_log_id: metadata.decision_log_id,
             profile: metadata.profile,
             rows: metadata.rows,
+            label_payloads: metadata.label_payloads,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
         })
@@ -225,54 +263,83 @@ impl PyTrainingWindowStore {
 
     fn row_numpy(&self, py: Python<'_>, logical_id: &str) -> PyResult<Py<PyAny>> {
         let row = self.row(logical_id)?;
-        let dtype = super::numpy_dtype(row.element, row.byte_order)?;
-        let width = row.element.byte_width().ok_or_else(|| {
-            PyValueError::new_err("training row element has no fixed-width NumPy dtype")
-        })?;
-        let count = row
-            .logical_bytes
-            .checked_div(usize::try_from(width).map_err(|_| {
-                PyValueError::new_err("training row element width exceeds the host")
-            })?)
-            .ok_or_else(|| PyValueError::new_err("training row has an invalid element width"))?;
+        numpy_from_location(
+            &self.artifact,
+            py,
+            "row",
+            row.element,
+            row.byte_order,
+            row.logical_bytes,
+            row.payload_id,
+            row.offset,
+            &row.shape,
+        )
+    }
 
-        let numpy = PyModule::import_bound(py, "numpy")?;
-        let (buffer, offset) = match &self.artifact {
-            ArtifactOwner::Bytes(artifact) => (artifact.clone_ref(py).into_any(), row.offset),
-            ArtifactOwner::PathFile { file } => {
-                let offset = u64::try_from(row.offset)
-                    .map_err(|_| PyValueError::new_err("training row offset exceeds u64"))?;
-                let bytes = PyBytes::new_bound_with(py, row.logical_bytes, |destination| {
-                    let mut file = file.lock().map_err(|_| {
-                        PyOSError::new_err("training artifact file lock is poisoned")
-                    })?;
-                    file.seek(SeekFrom::Start(offset)).map_err(|error| {
-                        PyOSError::new_err(format!("seek training row: {error}"))
-                    })?;
-                    file.read_exact(destination).map_err(|error| {
-                        PyOSError::new_err(format!("read training row: {error}"))
-                    })?;
-                    let actual = payload_content_id(row.element, destination);
-                    if actual != row.payload_id {
-                        return Err(PyValueError::new_err(format!(
-                            "training row payload changed after validation: expected {}, got {}",
-                            row.payload_id, actual
-                        )));
-                    }
-                    Ok(())
-                })?;
-                (bytes.unbind().into_any(), 0)
+    fn row_label_payload_info<'py>(
+        &self,
+        py: Python<'py>,
+        logical_id: &str,
+        concept: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let association = self.label_payload(logical_id, concept)?;
+        let info = PyDict::new_bound(py);
+        info.set_item("concept", association.concept())?;
+        info.set_item("presence", presence_name(association.presence()))?;
+        if let LabelPayloadLocation::Present {
+            byte_order,
+            element,
+            logical_bytes,
+            payload_id,
+            shape,
+            ..
+        } = association
+        {
+            info.set_item("payload", payload_id.to_string())?;
+            info.set_item("element", element_name(*element))?;
+            info.set_item("byte_order", byte_order_name(*byte_order))?;
+            info.set_item("logical_bytes", logical_bytes)?;
+            info.set_item("shape", shape)?;
+            info.set_item("materialized", self.artifact.materializes_rows())?;
+            info.set_item("backing", self.artifact.backing())?;
+        }
+        Ok(info)
+    }
+
+    fn row_label_payload_numpy(
+        &self,
+        py: Python<'_>,
+        logical_id: &str,
+        concept: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let association = self.label_payload(logical_id, concept)?;
+        match association {
+            LabelPayloadLocation::Present {
+                byte_order,
+                element,
+                logical_bytes,
+                offset,
+                payload_id,
+                shape,
+                ..
+            } => numpy_from_location(
+                &self.artifact,
+                py,
+                "label",
+                *element,
+                *byte_order,
+                *logical_bytes,
+                *payload_id,
+                *offset,
+                shape,
+            ),
+            LabelPayloadLocation::Unavailable { presence, .. } => {
+                Err(PyValueError::new_err(format!(
+                    "label payload {concept:?} for row {logical_id} is {}",
+                    presence_name(*presence)
+                )))
             }
-        };
-        let kwargs = PyDict::new_bound(py);
-        kwargs.set_item("dtype", dtype)?;
-        kwargs.set_item("count", count)?;
-        kwargs.set_item("offset", offset)?;
-        let array = numpy.call_method("frombuffer", (buffer.bind(py),), Some(&kwargs))?;
-        let shape = PyTuple::new_bound(py, row.shape.iter().copied());
-        let reshaped = array.call_method("reshape", shape, None)?;
-        reshaped.getattr("flags")?.setattr("writeable", false)?;
-        Ok(reshaped.unbind())
+        }
     }
 }
 
@@ -281,8 +348,73 @@ struct SnapshotMetadata {
     decision_log_id: String,
     profile: &'static str,
     rows: Vec<RowLocation>,
+    label_payloads: Vec<Vec<LabelPayloadLocation>>,
     snapshot_id: String,
     spec_id: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn numpy_from_location(
+    artifact: &ArtifactOwner,
+    py: Python<'_>,
+    kind: &str,
+    element: ElementType,
+    byte_order: ByteOrder,
+    logical_bytes: usize,
+    payload_id: ContentId,
+    row_offset: usize,
+    shape: &[u64],
+) -> PyResult<Py<PyAny>> {
+    let dtype = super::numpy_dtype(element, byte_order)?;
+    let width = element.byte_width().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "training {kind} element has no fixed-width NumPy dtype"
+        ))
+    })?;
+    let count = logical_bytes
+        .checked_div(usize::try_from(width).map_err(|_| {
+            PyValueError::new_err(format!("training {kind} element width exceeds the host"))
+        })?)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!("training {kind} has an invalid element width"))
+        })?;
+    let numpy = PyModule::import_bound(py, "numpy")?;
+    let (buffer, offset) = match artifact {
+        ArtifactOwner::Bytes(artifact) => (artifact.clone_ref(py).into_any(), row_offset),
+        ArtifactOwner::PathFile { file } => {
+            let offset = u64::try_from(row_offset).map_err(|_| {
+                PyValueError::new_err(format!("training {kind} offset exceeds u64"))
+            })?;
+            let bytes = PyBytes::new_bound_with(py, logical_bytes, |destination| {
+                let mut file = file
+                    .lock()
+                    .map_err(|_| PyOSError::new_err("training artifact file lock is poisoned"))?;
+                file.seek(SeekFrom::Start(offset)).map_err(|error| {
+                    PyOSError::new_err(format!("seek training {kind}: {error}"))
+                })?;
+                file.read_exact(destination).map_err(|error| {
+                    PyOSError::new_err(format!("read training {kind}: {error}"))
+                })?;
+                let actual = payload_content_id(element, destination);
+                if actual != payload_id {
+                    return Err(PyValueError::new_err(format!(
+                        "training {kind} payload changed after validation: expected {payload_id}, got {actual}"
+                    )));
+                }
+                Ok(())
+            })?;
+            (bytes.unbind().into_any(), 0)
+        }
+    };
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("dtype", dtype)?;
+    kwargs.set_item("count", count)?;
+    kwargs.set_item("offset", offset)?;
+    let array = numpy.call_method("frombuffer", (buffer.bind(py),), Some(&kwargs))?;
+    let shape = PyTuple::new_bound(py, shape.iter().copied());
+    let reshaped = array.call_method("reshape", shape, None)?;
+    reshaped.getattr("flags")?.setattr("writeable", false)?;
+    Ok(reshaped.unbind())
 }
 
 fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
@@ -318,6 +450,60 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
             })
         })
         .collect::<PyResult<Vec<_>>>()?;
+    let mut associations = store.snapshot().label_payloads().iter().peekable();
+    let label_payloads = store
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| {
+            let mut row_payloads = Vec::new();
+            while associations
+                .peek()
+                .is_some_and(|association| association.logical_id == row.logical_id)
+            {
+                let association = associations
+                    .next()
+                    .expect("peeked validated label association");
+                let lease = store
+                    .label_payload(association.logical_id, &association.concept)
+                    .expect("validated label association");
+                let location = match (&association.payload, lease.bytes()) {
+                    (Some(payload), Some(bytes)) => {
+                        let offset = (bytes.as_ptr() as usize)
+                            .checked_sub(base)
+                            .filter(|offset| {
+                                offset
+                                    .checked_add(bytes.len())
+                                    .is_some_and(|end| end <= artifact_len)
+                            })
+                            .ok_or_else(|| {
+                                PyValueError::new_err(
+                                    "validated label payload is outside its artifact",
+                                )
+                            })?;
+                        Ok(LabelPayloadLocation::Present {
+                            byte_order: payload.byte_order,
+                            concept: lease.concept().to_owned(),
+                            element: payload.element,
+                            logical_bytes: bytes.len(),
+                            offset,
+                            payload_id: payload.payload.content_id(),
+                            shape: payload.shape.clone(),
+                        })
+                    }
+                    (None, None) => Ok(LabelPayloadLocation::Unavailable {
+                        concept: lease.concept().to_owned(),
+                        presence: lease.presence(),
+                    }),
+                    _ => Err(PyValueError::new_err(
+                        "validated label presence conflicts with its payload",
+                    )),
+                }?;
+                row_payloads.push(location);
+            }
+            Ok(row_payloads)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
     let snapshot_id = store
         .snapshot()
         .content_id()
@@ -332,6 +518,7 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
         decision_log_id: store.decision_log_id().to_string(),
         profile: profile_name(store.snapshot().profile()),
         rows,
+        label_payloads,
         snapshot_id,
         spec_id: store.spec_id().to_string(),
     })
@@ -344,6 +531,18 @@ impl PyTrainingWindowStore {
             .ok()
             .map(|index| &self.rows[index])
             .ok_or_else(|| PyKeyError::new_err(logical_id.to_owned()))
+    }
+
+    fn label_payload(&self, logical_id: &str, concept: &str) -> PyResult<&LabelPayloadLocation> {
+        let row_index = self
+            .rows
+            .binary_search_by(|row| row.logical_id.as_str().cmp(logical_id))
+            .map_err(|_| PyKeyError::new_err(logical_id.to_owned()))?;
+        self.label_payloads[row_index]
+            .binary_search_by(|association| association.concept().cmp(concept))
+            .ok()
+            .map(|index| &self.label_payloads[row_index][index])
+            .ok_or_else(|| PyKeyError::new_err(concept.to_owned()))
     }
 }
 
@@ -386,6 +585,17 @@ fn byte_order_name(byte_order: ByteOrder) -> &'static str {
     }
 }
 
+fn presence_name(presence: Presence) -> &'static str {
+    match presence {
+        Presence::Present => "present",
+        Presence::AbsentAtSource => "absent-at-source",
+        Presence::UnknownAtSource => "unknown-at-source",
+        Presence::Withheld => "withheld",
+        Presence::Redacted => "redacted",
+        Presence::NotApplicable => "not-applicable",
+    }
+}
+
 fn training_error(error: impl core::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
@@ -396,12 +606,13 @@ fn key(seed: u8) -> ContentKey {
 }
 
 /// Deterministic private fixture for cross-language ownership and corruption tests.
-#[pyfunction(name = "_training_fixture_bytes", signature = (payload_bytes=8))]
+#[pyfunction(name = "_training_fixture_bytes", signature = (payload_bytes=8, label_presence=None))]
 #[cfg(feature = "test-fixtures")]
-pub(crate) fn training_fixture_bytes(
-    py: Python<'_>,
+pub(crate) fn training_fixture_bytes<'py>(
+    py: Python<'py>,
     payload_bytes: usize,
-) -> PyResult<Bound<'_, PyBytes>> {
+    label_presence: Option<&str>,
+) -> PyResult<Bound<'py, PyBytes>> {
     if payload_bytes == 0 || payload_bytes % 2 != 0 {
         return Err(PyValueError::new_err(
             "training fixture payload size must be a positive multiple of two",
@@ -430,19 +641,47 @@ pub(crate) fn training_fixture_bytes(
         shape,
         split: key(8),
     };
-    let snapshot = TrainingSnapshot::seal(
+    let mask = [0_u8, 1];
+    let label_payloads = match label_presence {
+        None => Vec::new(),
+        Some(presence) => {
+            let presence = match presence {
+                "present" => Presence::Present,
+                "absent-at-source" => Presence::AbsentAtSource,
+                "unknown-at-source" => Presence::UnknownAtSource,
+                "withheld" => Presence::Withheld,
+                "redacted" => Presence::Redacted,
+                "not-applicable" => Presence::NotApplicable,
+                _ => return Err(PyValueError::new_err("unsupported label presence fixture")),
+            };
+            vec![TrainingLabelPayloadAssociation {
+                concept: "org.quitetall.lamquant.label.seizure-mask-v1".to_owned(),
+                logical_id: key(7),
+                payload: (presence == Presence::Present).then(|| TrainingAssociatedPayload {
+                    byte_order: ByteOrder::NotApplicable,
+                    element: ElementType::U8,
+                    logical_bytes: mask.len() as u64,
+                    payload: ContentKey::new(payload_content_id(ElementType::U8, &mask)),
+                    shape: vec![mask.len() as u64],
+                }),
+                presence,
+            }]
+        }
+    };
+    let snapshot = TrainingSnapshot::seal_with_label_payloads(
         vec![key(1)],
         key(2),
         TrainingProfile::Balanced,
         vec![row],
+        label_payloads,
         key(3),
     )
     .map_err(training_error)?;
-    let encoded = encode_snapshot(
-        &snapshot,
-        &[SemanticPayloadFrame::new(ElementType::I16, &payload)],
-        ResourceBounds::default(),
-    )
-    .map_err(training_error)?;
+    let mask_frame = (label_presence == Some("present"))
+        .then(|| SemanticPayloadFrame::new(ElementType::U8, &mask));
+    let mut frames = vec![SemanticPayloadFrame::new(ElementType::I16, &payload)];
+    frames.extend(mask_frame);
+    let encoded =
+        encode_snapshot(&snapshot, &frames, ResourceBounds::default()).map_err(training_error)?;
     Ok(PyBytes::new_bound(py, &encoded))
 }

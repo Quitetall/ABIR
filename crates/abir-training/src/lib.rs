@@ -22,7 +22,9 @@ pub use continual::{
 pub use decision::{DecisionLog, DecisionRecord};
 pub use error::TrainingError;
 pub use model::{
-    encode_snapshot, ContentKey, TrainingInput, TrainingProfile, TrainingRow, TrainingSnapshot,
-    TrainingSpec,
+    encode_snapshot, ContentKey, TrainingAssociatedPayload, TrainingInput,
+    TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingSnapshot, TrainingSpec,
 };
-pub use store::{DecisionLogReplayState, TrainingRowLease, TrainingWindowStore};
+pub use store::{
+    DecisionLogReplayState, TrainingLabelPayloadLease, TrainingRowLease, TrainingWindowStore,
+};

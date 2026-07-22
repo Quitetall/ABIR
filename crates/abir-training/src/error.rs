@@ -3,7 +3,10 @@ use core::fmt;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TrainingError {
-    ActivationBarrierRegression { previous: u64, next: u64 },
+    ActivationBarrierRegression {
+        previous: u64,
+        next: u64,
+    },
     Bcs2(String),
     CanonicalCatalog,
     ClosedSubscription,
@@ -14,6 +17,10 @@ pub enum TrainingError {
     DecisionWasNotDurable,
     DuplicateDatasetRoot(ContentId),
     DuplicateLogicalRow(ContentId),
+    DuplicateLabelAssociation {
+        logical_id: ContentId,
+        concept: String,
+    },
     DuplicatePayload(ContentId),
     ExternalReference(ContentId),
     ExtraPayload(ContentId),
@@ -21,20 +28,33 @@ pub enum TrainingError {
     InvalidAuthorizedPurpose,
     InvalidByteOrder(String),
     InvalidContentKey,
-    InvalidDecisionSequence { expected: u64, actual: u64 },
+    InvalidDecisionSequence {
+        expected: u64,
+        actual: u64,
+    },
     InvalidElement(String),
+    InvalidLabelConcept(String),
+    InvalidLabelPresence(ContentId),
+    InvalidLabelPresenceName(String),
     InvalidProfile,
     InvalidRowExtent(ContentId),
     InvalidSnapshot,
-    InvalidSubscriptionSequence { expected: u64, actual: u64 },
+    InvalidSubscriptionSequence {
+        expected: u64,
+        actual: u64,
+    },
     MissingPayload(ContentId),
-    NonMonotonicWatermark { previous: u64, next: u64 },
+    NonMonotonicWatermark {
+        previous: u64,
+        next: u64,
+    },
     NotBundle,
     NotSealed,
     ProfileMismatch,
     RankNotZero(u32),
     Serialization(String),
     UnknownCorrection(ContentId),
+    UnknownLabelRow(ContentId),
 }
 
 impl fmt::Display for TrainingError {
@@ -57,6 +77,15 @@ impl fmt::Display for TrainingError {
             }
             Self::DuplicateDatasetRoot(id) => write!(f, "duplicate dataset root {id}"),
             Self::DuplicateLogicalRow(id) => write!(f, "duplicate logical row {id}"),
+            Self::DuplicateLabelAssociation {
+                logical_id,
+                concept,
+            } => {
+                write!(
+                    f,
+                    "duplicate label association {concept:?} for row {logical_id}"
+                )
+            }
             Self::DuplicatePayload(id) => write!(f, "conflicting duplicate payload {id}"),
             Self::ExternalReference(id) => write!(f, "undeclared external reference {id}"),
             Self::ExtraPayload(id) => write!(f, "extra payload frame {id}"),
@@ -69,6 +98,18 @@ impl fmt::Display for TrainingError {
                 "decision sequence is not consecutive: expected {expected}, got {actual}"
             ),
             Self::InvalidElement(element) => write!(f, "unknown element type {element}"),
+            Self::InvalidLabelConcept(concept) => {
+                write!(f, "invalid label payload concept {concept:?}")
+            }
+            Self::InvalidLabelPresence(id) => {
+                write!(
+                    f,
+                    "label payload presence conflicts with payload for row {id}"
+                )
+            }
+            Self::InvalidLabelPresenceName(presence) => {
+                write!(f, "invalid label payload presence {presence:?}")
+            }
             Self::InvalidProfile => f.write_str("not a registered training profile"),
             Self::InvalidRowExtent(id) => write!(f, "invalid logical extent for row {id}"),
             Self::InvalidSnapshot => f.write_str("invalid sealed training snapshot"),
@@ -88,6 +129,9 @@ impl fmt::Display for TrainingError {
             }
             Self::Serialization(error) => write!(f, "serialization error: {error}"),
             Self::UnknownCorrection(id) => write!(f, "correction has no prior generation for {id}"),
+            Self::UnknownLabelRow(id) => {
+                write!(f, "label payload association references unknown row {id}")
+            }
         }
     }
 }
