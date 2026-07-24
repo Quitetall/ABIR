@@ -85,9 +85,7 @@ fn lmq_input(semantics: &[u8]) -> CodecBundleInput<'_> {
             },
             CodecParameter {
                 name: "temporal.tokens".into(),
-                value: CodecParameterValue::Integer {
-                    value: "79".into(),
-                },
+                value: CodecParameterValue::Integer { value: "79".into() },
             },
         ],
         profile: CodecProfile::LmqProgressive,
