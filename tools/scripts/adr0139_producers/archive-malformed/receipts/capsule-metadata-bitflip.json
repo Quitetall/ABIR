@@ -1,0 +1,9 @@
+{
+  "case_id": "capsule-metadata-bitflip",
+  "damage_offset": 64,
+  "fixture_sha256": "6d1ffdcfdea4b69ac1937024f54ca0f0a979824459d3e51b7c052fb4d5578fca",
+  "reader_exit_code": 1,
+  "rejected": true,
+  "schema": "lamquant.adr0139.archive-malformed-receipt/v1",
+  "status": "pass"
+}
