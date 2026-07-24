@@ -1,0 +1,8 @@
+{
+  "case_id": "rust",
+  "plan_id": "66c435e3d3f0a2082ebf65f00f2a5353f3bae7cc174ab74b95918444da2f2882",
+  "realm": "rust",
+  "schema": "lamquant.adr0139.core-target-receipt/v1",
+  "semantic_content_id": "cf6164c58c0737571c41e4aea4b4df8d71600245f788b02e33abc370f1b2ddc8",
+  "status": "pass"
+}
