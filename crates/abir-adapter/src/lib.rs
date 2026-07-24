@@ -804,13 +804,24 @@ mod tests {
             profile.capabilities.contains(&AdapterCapability::Inspect)
                 && profile.capabilities.contains(&AdapterCapability::Validate)
         }));
-        assert_eq!(
-            registry
-                .profiles
+        // Semantic promotion is earned at the conformance/standards gate (ADR 0143;
+        // see verify_adapter_contract.py), not asserted structurally here — a
+        // permanent "no semantic profiles" assertion would invalidate every
+        // correctly promoted Adapter. Structural contract: any semantic profile
+        // declares the full core Adapter capability set.
+        let core = [
+            AdapterCapability::Inspect,
+            AdapterCapability::Import,
+            AdapterCapability::PlanExport,
+            AdapterCapability::Export,
+            AdapterCapability::Validate,
+        ];
+        assert!(registry
+            .profiles
+            .iter()
+            .filter(|profile| profile.status == ProfileStatus::Semantic)
+            .all(|profile| core
                 .iter()
-                .filter(|profile| profile.status == ProfileStatus::Semantic)
-                .count(),
-            0
-        );
+                .all(|capability| profile.capabilities.contains(capability))));
     }
 }
