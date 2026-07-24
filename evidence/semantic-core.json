@@ -6,13 +6,13 @@
     "fixtures/valid/semantic-matrix.json": "c5512d106382b5e4d1143c3ef05ed8b8af2ba0f1487fcad24738033f5360709c",
     "fuzz/corpus/dataset_draft.sha256": "852aeb5f6898728676d4a445232136954bbf37fc3ed050e690e810fc0b79d9fb",
     "schema/abir-semantic-v1.schema.json": "ff8a1941697a7b241d7d75ba70b450c7ba5a65211d36bd1611136ebdea49e7b0",
-    "spec/semantic-v1.manifest.json": "b93eb28de529892673143b63a1e37b2bfe3a9fb041f1d714893353f34bb41655"
+    "spec/semantic-v1.manifest.json": "7ca3899e4c3b369bd483b7b180ce24f1cedf2e9354daf5f4faeb34746174387e"
   },
-  "collected_at": "2026-07-20T23:06:26.830316+00:00",
+  "collected_at": "2026-07-24T16:33:10.751819+00:00",
   "commands": [
-    "ABIR_BENCH_ITERS=100000 cargo run -q -p abir-conformance --release --bin measure_semantic_core",
+    "ABIR_BENCH_ITERS=10000 cargo run -q -p abir-conformance --release --bin measure_semantic_core",
     "/usr/bin/python3 -m venv --system-site-packages <temporary-venv>",
-    "<temporary-venv>/bin/python -m pip install --no-index --no-deps /tmp/abir-dist-0140-final4/abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
+    "<temporary-venv>/bin/python -m pip install --no-index --no-deps /tmp/abirtest2/wheels/abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
     "<temporary-venv>/bin/python -c <import-timer>",
     "<temporary-venv>/bin/python -c <zero-copy-probe>"
   ],
@@ -24,26 +24,26 @@
   },
   "python": {
     "import_seconds": {
-      "maximum": 0.0013413580018095672,
-      "mean": 0.0009862157981842755,
+      "maximum": 0.0004520229995250702,
+      "mean": 0.0003226123924832791,
       "samples": [
-        0.0009108039666898549,
-        0.0009155509760603309,
-        0.0006588909891434014,
-        0.0013413580018095672,
-        0.0013163529802113771,
-        0.0012543200282379985,
-        0.0008359070052392781,
-        0.0007798009901307523,
-        0.0011340880300849676,
-        0.0007150850142352283
+        0.0003327849553897977,
+        0.0002939300029538572,
+        0.00029539898969233036,
+        0.00032871298026293516,
+        0.00029924302361905575,
+        0.0004520229995250702,
+        0.0002905349829234183,
+        0.00029063201509416103,
+        0.000324777967762202,
+        0.0003180860076099634
       ]
     },
     "wheel": {
       "distribution_version": "0.1.0",
       "filename": "abir_biosignal-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl",
-      "module_path": "/tmp/abir-evidence-python-kl5e8mvs/venv/lib/python3.14/site-packages/abir/__init__.py",
-      "sha256": "5880e525107e451309f11fd2f2f8ac28366c694d15d293ba12251b6cd2f54d07"
+      "module_path": "/tmp/abir-evidence-python-wvwm5728/venv/lib/python3.14/site-packages/abir/__init__.py",
+      "sha256": "7c80758211e0fe4535636820c29bea00e4c46179d03afa575ebedff024c3ac00"
     },
     "zero_copy": {
       "content_id": "6f8244472204b5ed25ebd67a1abd88e24f2addd6b152bb1857b27b78e7d02ebe",
@@ -58,12 +58,12 @@
     "performance_ceiling": "trusted-baseline-only-until-multi-host-samples",
     "structural_limits": "enforced-now"
   },
-  "revision": "3181bbc7d6ac66fe899c5b168bcf61c2e1c6c04a",
+  "revision": "331fa51a300619dc8ae58d3d9f1a1b476ffe0bb4",
   "rust": {
-    "iterations": 100000,
+    "iterations": 10000,
     "logical_hash": {
-      "hashes_per_second": 70260.07743575319,
-      "seconds": 1.423283373
+      "hashes_per_second": 100371.28039216023,
+      "seconds": 0.099630093
     },
     "metadata": {
       "budget_definition": "target-independent UTF-8 text, normative collection widths, and 64 bytes per semantic record; excludes payload bytes and allocator spare capacity",
@@ -74,13 +74,13 @@
     },
     "schema_version": 1,
     "validation": {
-      "datasets_per_second": 1163974.5138933978,
-      "seconds": 0.085912534
+      "datasets_per_second": 1756775.7964079557,
+      "seconds": 0.005692246
     },
     "view": {
-      "nanoseconds_per_lease": 18.35248,
+      "nanoseconds_per_lease": 15.4616,
       "pointer_identity": true,
-      "seconds": 0.001835248
+      "seconds": 0.000154616
     }
   },
   "schema_version": 1,
