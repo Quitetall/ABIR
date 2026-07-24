@@ -66,8 +66,8 @@ def produce_evidence():
 
 
 def main():
-    sys.stdout.write(json.dumps(produce_evidence(), indent=2, sort_keys=True))
-    sys.stdout.write("\n")
+    rendered = json.dumps(produce_evidence(), indent=2, sort_keys=True) + "\n"
+    sys.stdout.write(rendered)
 
 
 if __name__ == "__main__":
