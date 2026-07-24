@@ -22,7 +22,7 @@
     },
     {
       "path": "registries/adapter-profiles-v1.json",
-      "sha256": "9eadc0771fac77a2628a63a58d631dc1dbb4d9fac2bff383adb3bd1754ce4523"
+      "sha256": "e0ede8d07c269b44dc4dfbf2ac613ed6fa652019a8cba9e8e41ac0fb9921f050"
     },
     {
       "path": "tools/verify_adapter_contract.py",
