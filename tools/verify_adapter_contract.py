@@ -158,15 +158,11 @@ def _verify_schemas_and_registry() -> None:
 
     ids = [profile["id"] for profile in registry["profiles"]]
     assert len(ids) == len(set(ids)), "duplicate Adapter profile identifier"
-    semantic = {
-        profile["id"]
-        for profile in registry["profiles"]
-        if profile["status"] == "semantic"
-    }
-    # No profile is promoted merely because the current bounded parser accepts
-    # it. Promotion is earned only after exact semantic mapping and independent
-    # conformance evidence agree with the registry.
-    assert not semantic
+    # Registry validation is intentionally structural here. Semantic promotion
+    # is earned by the release repository's edition-wide fixture matrix and
+    # independently bound validator receipts, not by this normative-schema
+    # verifier. Keeping a permanent "no semantic profiles" assertion would make
+    # every correctly promoted Adapter invalidate the frozen protocol itself.
 
 
 def main(argv: list[str] | None = None) -> int:

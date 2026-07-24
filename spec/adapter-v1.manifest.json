@@ -4,12 +4,33 @@
   "hash_algorithm": "sha256",
   "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
   "artifacts": [
-    {"path": "spec/ADAPTER_V1.md", "sha256": "0f4be74c812ace70379e84608303b1cba46b5a44dc806edcedf815bfb8bdc12e"},
-    {"path": "schema/adapter-profile-v1.schema.json", "sha256": "aaee42d529907a2915d80e131fbaf98e964f968dfc73f5b72bd9f14e8d023d74"},
-    {"path": "schema/adapter-mapping-v1.schema.json", "sha256": "7848ba0584b5e9507ddb2c20f06e14e9f96bf56153a554179077f1688c3c6bfe"},
-    {"path": "schema/adapter-validation-v1.schema.json", "sha256": "7f784b0201e416601562a709254537d398d84f37936066cb83325dee4037f188"},
-    {"path": "registries/adapter-profiles-v1.json", "sha256": "8d1b14497f4efdc1a361a42c6a98719419551dc3779521ad8dffd9c3c1d8650c"},
-    {"path": "tools/verify_adapter_contract.py", "sha256": "5aefd4136efea6be9f4339b26ea7760469299f5233466b710312e74283a01034"},
-    {"path": "tools/test_adapter_validation_contract.py", "sha256": "aa46dbca002b608c212dafb74fd33d3fed85af59742171d11f58a070d53c3c0f"}
+    {
+      "path": "spec/ADAPTER_V1.md",
+      "sha256": "0f4be74c812ace70379e84608303b1cba46b5a44dc806edcedf815bfb8bdc12e"
+    },
+    {
+      "path": "schema/adapter-profile-v1.schema.json",
+      "sha256": "aaee42d529907a2915d80e131fbaf98e964f968dfc73f5b72bd9f14e8d023d74"
+    },
+    {
+      "path": "schema/adapter-mapping-v1.schema.json",
+      "sha256": "7848ba0584b5e9507ddb2c20f06e14e9f96bf56153a554179077f1688c3c6bfe"
+    },
+    {
+      "path": "schema/adapter-validation-v1.schema.json",
+      "sha256": "7f784b0201e416601562a709254537d398d84f37936066cb83325dee4037f188"
+    },
+    {
+      "path": "registries/adapter-profiles-v1.json",
+      "sha256": "9eadc0771fac77a2628a63a58d631dc1dbb4d9fac2bff383adb3bd1754ce4523"
+    },
+    {
+      "path": "tools/verify_adapter_contract.py",
+      "sha256": "9fa48c7d1ff86f74e225803831fd94b25261a99068b3860dcd6fede4a9c91cb0"
+    },
+    {
+      "path": "tools/test_adapter_validation_contract.py",
+      "sha256": "e5e6307b73bd8b6adcffff43c6c24335bf84df75d32d6282187690411a7aa02b"
+    }
   ]
 }

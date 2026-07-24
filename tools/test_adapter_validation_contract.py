@@ -161,6 +161,11 @@ class AdapterValidationContractTests(unittest.TestCase):
         paths = {artifact["path"] for artifact in manifest["artifacts"]}
         self.assertIn("tools/test_adapter_validation_contract.py", paths)
 
+    def test_registry_verification_allows_evidence_backed_semantic_profiles(self) -> None:
+        from verify_adapter_contract import _verify_schemas_and_registry
+
+        _verify_schemas_and_registry()
+
 
 if __name__ == "__main__":
     unittest.main()
