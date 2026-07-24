@@ -1,0 +1,9 @@
+{
+  "bundle_bytes": 3102,
+  "case_id": "bcs.lml.lossless.v1",
+  "packet_count": 2,
+  "profile_code": 65537,
+  "profile_id": "bcs.lml.lossless.v1",
+  "schema": "lamquant.adr0139.compute-profile-receipt/v1",
+  "status": "pass"
+}

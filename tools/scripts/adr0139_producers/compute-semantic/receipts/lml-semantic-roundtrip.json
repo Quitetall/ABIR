@@ -1,0 +1,8 @@
+{
+  "case_id": "lml-semantic-roundtrip",
+  "input_content_id": "51d4391d78ff85156bd0de05a16370e8dbfaa248bbcddfe6f545a76d26c5a658",
+  "output_content_id": "51d4391d78ff85156bd0de05a16370e8dbfaa248bbcddfe6f545a76d26c5a658",
+  "profile_id": "bcs.lml.lossless.v1",
+  "schema": "lamquant.adr0139.compute-semantic-receipt/v1",
+  "status": "pass"
+}

@@ -1,0 +1,9 @@
+{
+  "case_id": "lmq-model-provenance",
+  "checkpoint_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "pccp_status": "candidate",
+  "profile_id": "bcs.lmq.progressive.v1",
+  "schema": "lamquant.adr0139.compute-pccp-receipt/v1",
+  "status": "pass",
+  "typed_training_attestation_verified": true
+}
