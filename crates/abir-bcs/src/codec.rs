@@ -15,6 +15,27 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 const CODEC_BUNDLE_SCHEMA: &str = "org.quitetall.abir.bcs2.codec-bundle-v1";
 const CODEC_BUNDLE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.codec-bundle-v1\0";
 
+/// Required-capability bit for the LML *optimum* kernel family.
+///
+/// The optimum tier (`LMO1`/`BGF1`/`LQW1`/`LQR1` in the pre-BCS2 world) produces
+/// the same semantics as baseline LML — same root kinds, exact fidelity, the same
+/// decoded signal — using a materially different and more expensive bitstream. So
+/// it is NOT a separate [`ProfileId`]: it is [`ProfileId::LML_LOSSLESS_V1`] plus
+/// this capability plus a distinct [`CodecImplementation::kernel_id`].
+///
+/// The distinction matters because profiles answer "what kind of artifact is
+/// this" while capabilities answer "can this reader decode it at all". A
+/// baseline-only reader must refuse an optimum payload rather than mis-parse it,
+/// and the header's required-capability mask is fail-closed
+/// (`Bcs2Error::UnsupportedCapabilities`) precisely so that refusal is automatic
+/// rather than something each reader has to remember.
+///
+/// Giving optimum its own profile would have fragmented the wire family that
+/// ADR 0139 contract 5 exists to unify — one grammar, many profiles — and would
+/// have implied a different *kind* of artifact where there is only a different
+/// compressor.
+pub const CAP_LML_OPTIMUM_V1: u64 = 1 << 1;
+
 /// A registered ABIR codec-bundle profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

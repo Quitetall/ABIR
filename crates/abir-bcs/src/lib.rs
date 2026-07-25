@@ -40,7 +40,7 @@ pub use blob::{encode_blob, BlobView};
 pub use codec::{
     encode_codec_bundle, CodecBundleCatalog, CodecBundleError, CodecBundleInput, CodecBundleView,
     CodecFidelity, CodecFidelityKind, CodecImplementation, CodecParameter, CodecParameterValue,
-    CodecProfile, ModelProvenance, PccpStatus,
+    CodecProfile, ModelProvenance, PccpStatus, CAP_LML_OPTIMUM_V1,
 };
 
 #[cfg(feature = "alloc")]
