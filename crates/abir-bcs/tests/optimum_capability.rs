@@ -54,9 +54,12 @@ fn reader_without_the_optimum_bit_is_refused() {
     );
 
     // Advertising an unrelated capability must not help.
-    let still_refused =
-        Bcs2View::parse(&bytes, abir_bcs::CAP_XCHACHA20_POLY1305, ResourceBounds::default())
-            .unwrap_err();
+    let still_refused = Bcs2View::parse(
+        &bytes,
+        abir_bcs::CAP_XCHACHA20_POLY1305,
+        ResourceBounds::default(),
+    )
+    .unwrap_err();
     assert_eq!(
         still_refused,
         Bcs2Error::UnsupportedCapabilities(CAP_LML_OPTIMUM_V1)
