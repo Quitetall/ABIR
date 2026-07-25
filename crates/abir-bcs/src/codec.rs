@@ -15,6 +15,22 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 const CODEC_BUNDLE_SCHEMA: &str = "org.quitetall.abir.bcs2.codec-bundle-v1";
 const CODEC_BUNDLE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.codec-bundle-v1\0";
 
+/// Required-capability bit for zstd-transformed frames.
+///
+/// Compression is not special. It is one instance of the general contract: a
+/// frame declares the programmed functionality a consumer must possess to turn
+/// its stored bytes into its logical content. Encryption
+/// ([`CAP_XCHACHA20_POLY1305`](crate::CAP_XCHACHA20_POLY1305)), a specific codec
+/// kernel ([`CAP_LML_OPTIMUM_V1`]), and compression all use the same mechanism
+/// and the same registry, so nothing needs a bespoke "compressed frame" concept.
+///
+/// The registry is deliberately shared with the Node capability vocabulary: a
+/// Node Module *advertises* capabilities, an artifact *requires* them, and a
+/// graph compiler can therefore decide statically whether a plan is able to
+/// consume a given artifact — rather than a reader discovering at parse time
+/// that it is holding bytes it cannot interpret.
+pub const CAP_ZSTD: u64 = 1 << 2;
+
 /// Required-capability bit for the LML *optimum* kernel family.
 ///
 /// The optimum tier (`LMO1`/`BGF1`/`LQW1`/`LQR1` in the pre-BCS2 world) produces

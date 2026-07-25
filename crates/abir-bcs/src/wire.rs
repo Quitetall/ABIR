@@ -456,6 +456,7 @@ pub struct FrameView<'a> {
     element: Option<ElementType>,
     content_id: ContentId,
     storage_id: StorageId,
+    required_capabilities: u64,
     bytes: &'a [u8],
 }
 
@@ -470,6 +471,18 @@ pub enum FrameKind {
 impl<'a> FrameView<'a> {
     pub const fn kind(&self) -> FrameKind {
         self.kind
+    }
+    /// Capabilities required to interpret this frame's stored bytes.
+    ///
+    /// Zero means the bytes are directly interpretable. A non-zero mask names
+    /// programmed functionality a consumer must possess — a decompressor, a
+    /// decryptor, a specific codec kernel — drawn from the SAME capability
+    /// vocabulary a Node Module advertises. That shared vocabulary is the point:
+    /// "this artifact requires X" and "this node provides X" are two sides of one
+    /// contract, so a graph compiler can decide statically whether a plan can
+    /// consume a given artifact instead of discovering it at read time.
+    pub const fn required_capabilities(&self) -> u64 {
+        self.required_capabilities
     }
     pub const fn element(&self) -> Option<ElementType> {
         self.element
@@ -687,7 +700,23 @@ impl<'a> Bcs2View<'a> {
                 }
                 None
             };
-            if entry[82..96].iter().any(|byte| *byte != 0) {
+            // `[82..90]` declares the capabilities required to interpret THIS
+            // frame's stored bytes — compression, encryption, a specific codec
+            // kernel, or any future programmed transform. Zero means the bytes
+            // are directly interpretable.
+            //
+            // The envelope's `required` mask must be a superset, so the header
+            // check above already refused any artifact this reader cannot fully
+            // decode, before a single frame was touched or allocated. That
+            // ordering is the point: capability refusal happens once, cheaply,
+            // at the envelope rather than per-frame deep inside a parse.
+            let frame_capabilities = get_u64(entry, 82)?;
+            if frame_capabilities & !required != 0 {
+                // A frame demanding something the envelope never declared is a
+                // malformed artifact, not a capability negotiation failure.
+                return Err(Bcs2Error::CatalogCorrupt);
+            }
+            if entry[90..96].iter().any(|byte| *byte != 0) {
                 return Err(Bcs2Error::CatalogCorrupt);
             }
             if frame_kind == FrameKind::EmbeddedBcs2 && !allow_embedded_frames {
@@ -749,6 +778,7 @@ impl<'a> Bcs2View<'a> {
                 element,
                 content_id,
                 storage_id,
+                required_capabilities: frame_capabilities,
                 bytes: frame,
             });
             expected_frame_offset = frame_end;
@@ -923,12 +953,54 @@ pub fn raw_storage_id(bytes: &[u8]) -> StorageId {
     StorageId::from_bytes(*hasher.finalize().as_bytes())
 }
 
+/// Encode a root whose frames each declare the capabilities needed to interpret
+/// them.
+///
+/// The envelope's required-capability mask is the UNION of the per-frame masks,
+/// which is what lets a reader refuse an artifact once, at the header, instead of
+/// discovering mid-parse that frame 400 needs a decompressor it does not have.
+pub(crate) fn encode_raw_root_with_capabilities<'a>(
+    root_kind: RootKind,
+    profile: ProfileId,
+    root_content_id: ContentId,
+    semantic_json: &[u8],
+    raw_frames: impl IntoIterator<Item = (&'a [u8], u64)>,
+    bounds: ResourceBounds,
+) -> Result<Vec<u8>, Bcs2Error> {
+    encode_raw_root_inner(
+        root_kind,
+        profile,
+        root_content_id,
+        semantic_json,
+        raw_frames,
+        bounds,
+    )
+}
+
 pub(crate) fn encode_raw_root<'a>(
     root_kind: RootKind,
     profile: ProfileId,
     root_content_id: ContentId,
     semantic_json: &[u8],
     raw_frames: impl IntoIterator<Item = &'a [u8]>,
+    bounds: ResourceBounds,
+) -> Result<Vec<u8>, Bcs2Error> {
+    encode_raw_root_inner(
+        root_kind,
+        profile,
+        root_content_id,
+        semantic_json,
+        raw_frames.into_iter().map(|frame| (frame, 0u64)),
+        bounds,
+    )
+}
+
+fn encode_raw_root_inner<'a>(
+    root_kind: RootKind,
+    profile: ProfileId,
+    root_content_id: ContentId,
+    semantic_json: &[u8],
+    raw_frames: impl IntoIterator<Item = (&'a [u8], u64)>,
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
     if !profile.accepts(root_kind) {
@@ -943,17 +1015,23 @@ pub(crate) fn encode_raw_root<'a>(
         return Err(Bcs2Error::BoundsExceeded);
     }
 
-    let mut frames = BTreeMap::<ContentId, &'a [u8]>::new();
-    for frame in raw_frames {
+    let mut frames = BTreeMap::<ContentId, (&'a [u8], u64)>::new();
+    let mut union_capabilities = 0u64;
+    for (frame, capabilities) in raw_frames {
         if frame.len() > bounds.max_frame_bytes as usize {
             return Err(Bcs2Error::BoundsExceeded);
         }
         let content_id = raw_content_id(frame);
-        if let Some(previous) = frames.insert(content_id, frame) {
-            if previous != frame {
+        if let Some((previous, previous_capabilities)) =
+            frames.insert(content_id, (frame, capabilities))
+        {
+            // Identical bytes that disagree about how to interpret them are two
+            // different objects wearing one content id. Refuse rather than pick.
+            if previous != frame || previous_capabilities != capabilities {
                 return Err(Bcs2Error::DuplicateFrame);
             }
         }
+        union_capabilities |= capabilities;
     }
     if frames.len() > bounds.max_index_entries as usize {
         return Err(Bcs2Error::BoundsExceeded);
@@ -974,7 +1052,7 @@ pub(crate) fn encode_raw_root<'a>(
         return Err(Bcs2Error::BoundsExceeded);
     }
 
-    let frame_bytes = frames.values().try_fold(0_usize, |total, frame| {
+    let frame_bytes = frames.values().try_fold(0_usize, |total, (frame, _)| {
         total
             .checked_add(frame.len())
             .ok_or(Bcs2Error::BoundsExceeded)
@@ -1003,6 +1081,12 @@ pub(crate) fn encode_raw_root<'a>(
     put_u32(&mut bytes, 12, BCS2_HEADER_LEN as u32);
     put_u32(&mut bytes, 16, profile.get());
     put_u32(&mut bytes, 20, SEMANTIC_GENERATION);
+    // Union of every frame's declared requirement. Readers AND-mask this against
+    // what they support and refuse the whole artifact up front, so no consumer
+    // ever gets halfway through a parse and then discovers it cannot interpret a
+    // frame. Artifacts with no transformed frames write zero here and stay
+    // readable by any reader, exactly as before.
+    put_u64(&mut bytes, 24, union_capabilities);
     bytes[40] = root_kind as u8;
     bytes[41] = StorageContract::SealedImmutable as u8;
     bytes[42] = PrivacyMode::Plaintext as u8;
@@ -1025,7 +1109,7 @@ pub(crate) fn encode_raw_root<'a>(
     );
     bytes[index_offset + 16..index_offset + 48].copy_from_slice(blake3::hash(&catalog).as_bytes());
     let mut next_frame_offset = frame_offset;
-    for (entry_number, (content_id, frame)) in frames.iter().enumerate() {
+    for (entry_number, (content_id, (frame, capabilities))) in frames.iter().enumerate() {
         let frame_end = next_frame_offset
             .checked_add(frame.len())
             .ok_or(Bcs2Error::BoundsExceeded)?;
@@ -1036,10 +1120,13 @@ pub(crate) fn encode_raw_root<'a>(
         put_u64(&mut bytes, entry + 64, next_frame_offset as u64);
         put_u64(&mut bytes, entry + 72, frame.len() as u64);
         bytes[entry + 80] = FrameKind::RawBlob as u8;
+        put_u64(&mut bytes, entry + 82, *capabilities);
         bytes[entry + 96..entry + 128].copy_from_slice(blake3::hash(frame).as_bytes());
         next_frame_offset = frame_end;
     }
-    Bcs2View::parse(&bytes, 0, bounds)?;
+    // The reader must be able to decode every frame it is handed, so verify with
+    // exactly the union we declared rather than with zero.
+    Bcs2View::parse(&bytes, union_capabilities, bounds)?;
     Ok(bytes)
 }
 
