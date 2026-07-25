@@ -1,4 +1,4 @@
-use crate::wire::{encode_raw_root, raw_content_id};
+use crate::wire::{encode_raw_root_with_capabilities, raw_content_id};
 use crate::{
     Bcs2Error, Bcs2View, FrameKind, PrivacyMode, ProfileId, ResourceBounds, RootKind,
     StorageContract,
@@ -11,7 +11,16 @@ use alloc::vec::Vec;
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 
+/// Metadata document shape holding one field group per entry.
 const FORENSIC_TREE_VERSION: u8 = 1;
+/// Same shape plus a per-entry stored-form declaration.
+///
+/// The version is a function of the content, not a global switch: a tree in
+/// which every entry is stored verbatim still encodes as v1, byte for byte.
+/// That keeps every capsule written before stored forms existed re-encoding
+/// identically under `decode_metadata`'s canonicalisation check, so this
+/// extension costs no existing artifact its readability.
+const FORENSIC_TREE_VERSION_STORED_FORM: u8 = 2;
 const FORENSIC_TREE_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.forensic-tree-v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,7 +91,43 @@ pub struct ForensicEntry {
     pub flags: u64,
     pub device: Option<(u32, u32)>,
     pub special_type: Option<Vec<u8>>,
+    /// The bytes to store for this entry.
+    ///
+    /// Verbatim file content unless `content_transform` says otherwise.
     pub content: Option<Vec<u8>>,
+    /// Set when `content` holds a transformed encoding instead of the file bytes.
+    pub content_transform: Option<ForensicContentTransform>,
+}
+
+/// A declaration that a stored frame is an encoding of the file rather than the
+/// file itself.
+///
+/// A forensic capsule's per-entry `content_id` is the chain-of-custody anchor:
+/// it answers "is this the file that was seized?". Letting a transform quietly
+/// redefine it as the hash of a compressed blob would keep every check passing
+/// while destroying the only claim the capsule exists to make. So the logical
+/// identity stays primary and travels here, and the stored frame's own identity
+/// is recorded beside it as a second, subordinate fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForensicContentTransform {
+    /// What a consumer must be able to do to recover the file bytes. Must be
+    /// non-zero — a transform that requires nothing is a verbatim entry, and
+    /// admitting both spellings would give one tree two encodings.
+    pub capabilities: u64,
+    /// blake3 of the original file bytes.
+    pub logical_content_id: ContentId,
+    /// Length of the original file in bytes.
+    pub logical_len: u64,
+}
+
+/// How an entry's stored frame differs from its logical content, as recovered
+/// from a parsed capsule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForensicStoredForm {
+    pub capabilities: u64,
+    /// blake3 of the frame as stored — what locates it in the artifact index.
+    pub stored_content_id: ContentId,
+    pub stored_len: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,8 +151,38 @@ pub struct ForensicEntryMetadata {
     pub flags: u64,
     pub device: Option<(u32, u32)>,
     pub special_type: Option<Vec<u8>>,
+    /// blake3 of the *logical* file content, whatever form it is stored in.
     pub content_id: Option<ContentId>,
+    /// Length of the logical file content.
     pub content_len: Option<u64>,
+    /// `None` when the frame holds the file bytes verbatim.
+    pub stored_form: Option<ForensicStoredForm>,
+}
+
+impl ForensicEntryMetadata {
+    /// The content id under which this entry's frame is filed in the artifact.
+    ///
+    /// Equal to `content_id` for verbatim entries; use this, never `content_id`,
+    /// to look a frame up.
+    pub fn frame_content_id(&self) -> Option<ContentId> {
+        match self.stored_form {
+            Some(stored) => Some(stored.stored_content_id),
+            None => self.content_id,
+        }
+    }
+
+    /// Length of the frame as stored.
+    pub fn frame_len(&self) -> Option<u64> {
+        match self.stored_form {
+            Some(stored) => Some(stored.stored_len),
+            None => self.content_len,
+        }
+    }
+
+    /// Capabilities a consumer needs to recover this entry's file bytes.
+    pub fn required_capabilities(&self) -> u64 {
+        self.stored_form.map_or(0, |stored| stored.capabilities)
+    }
 }
 
 #[derive(Debug)]
@@ -156,14 +231,20 @@ impl<'a> ForensicTreeView<'a> {
 
         let mut expected_frames = BTreeSet::from([metadata_id]);
         for entry in &entries {
-            if let Some(content_id) = entry.content_id {
-                expected_frames.insert(content_id);
+            if let Some(frame_id) = entry.frame_content_id() {
+                expected_frames.insert(frame_id);
                 let frame = artifact
                     .frames()
                     .iter()
-                    .find(|frame| frame.content_id() == content_id)
-                    .ok_or(Bcs2Error::IncompletePortableClosure(content_id))?;
-                if entry.content_len != Some(frame.bytes().len() as u64) {
+                    .find(|frame| frame.content_id() == frame_id)
+                    .ok_or(Bcs2Error::IncompletePortableClosure(frame_id))?;
+                if entry.frame_len() != Some(frame.bytes().len() as u64) {
+                    return Err(Bcs2Error::FrameIdentityMismatch);
+                }
+                // The metadata is bound into the root content id; the index entry
+                // is not. Requiring the two to agree is what makes an index-only
+                // edit of a capability mask detectable rather than merely wrong.
+                if frame.required_capabilities() != entry.required_capabilities() {
                     return Err(Bcs2Error::FrameIdentityMismatch);
                 }
             }
@@ -200,12 +281,29 @@ impl<'a> ForensicTreeView<'a> {
         &self.entries
     }
 
+    /// The entry's file bytes, or `None` if it has none *or* is stored in a
+    /// transformed form.
+    ///
+    /// Deliberately refuses transformed entries rather than returning their
+    /// stored bytes: every caller written before stored forms existed treats
+    /// this return value as the file, and handing back a compressed blob would
+    /// turn a wire extension into silent data corruption at each of them. Use
+    /// [`Self::stored_bytes`] plus
+    /// [`ForensicEntryMetadata::required_capabilities`] to handle both.
     pub fn content_bytes(&self, entry: &ForensicEntryMetadata) -> Option<&'a [u8]> {
-        let content_id = entry.content_id?;
+        if entry.stored_form.is_some() {
+            return None;
+        }
+        self.stored_bytes(entry)
+    }
+
+    /// The entry's frame exactly as stored, transformed or not.
+    pub fn stored_bytes(&self, entry: &ForensicEntryMetadata) -> Option<&'a [u8]> {
+        let frame_id = entry.frame_content_id()?;
         self.artifact
             .frames()
             .iter()
-            .find(|frame| frame.content_id() == content_id)
+            .find(|frame| frame.content_id() == frame_id)
             .map(|frame| frame.bytes())
     }
 
@@ -228,12 +326,16 @@ pub fn encode_forensic_tree(
         metadata_id,
         entries.len()
     );
-    let raw_frames = core::iter::once(metadata.as_slice()).chain(
-        tree.entries
-            .iter()
-            .filter_map(|entry| entry.content.as_deref()),
+    let raw_frames = core::iter::once((metadata.as_slice(), 0_u64)).chain(
+        tree.entries.iter().filter_map(|entry| {
+            let content = entry.content.as_deref()?;
+            let capabilities = entry
+                .content_transform
+                .map_or(0, |transform| transform.capabilities);
+            Some((content, capabilities))
+        }),
     );
-    let bytes = encode_raw_root(
+    let bytes = encode_raw_root_with_capabilities(
         RootKind::Bundle,
         ProfileId::FORENSIC_TREE_V1,
         root_content_id,
@@ -241,7 +343,10 @@ pub fn encode_forensic_tree(
         raw_frames,
         bounds,
     )?;
-    ForensicTreeView::parse(&bytes, 0, bounds)?;
+    let union_capabilities = entries
+        .iter()
+        .fold(0_u64, |union, entry| union | entry.required_capabilities());
+    ForensicTreeView::parse(&bytes, union_capabilities, bounds)?;
     Ok(bytes)
 }
 
@@ -249,11 +354,35 @@ fn metadata_from_tree(tree: &ForensicTree) -> Result<Vec<ForensicEntryMetadata>,
     tree.entries
         .iter()
         .map(|entry| {
-            let content_len = entry
+            let stored_len = entry
                 .content
                 .as_ref()
                 .map(|bytes| u64::try_from(bytes.len()).map_err(|_| Bcs2Error::BoundsExceeded))
                 .transpose()?;
+            let stored_id = entry.content.as_deref().map(raw_content_id);
+            let (content_id, content_len, stored_form) = match entry.content_transform {
+                None => (stored_id, stored_len, None),
+                Some(transform) => {
+                    // A transform declared on an entry that stores nothing has
+                    // nothing to describe.
+                    let stored_id = stored_id.ok_or(Bcs2Error::SemanticEncoding)?;
+                    let stored_len = stored_len.ok_or(Bcs2Error::SemanticEncoding)?;
+                    // Zero capabilities is the verbatim spelling; allowing it
+                    // here would give one tree two encodings.
+                    if transform.capabilities == 0 || transform.logical_content_id == stored_id {
+                        return Err(Bcs2Error::SemanticEncoding);
+                    }
+                    (
+                        Some(transform.logical_content_id),
+                        Some(transform.logical_len),
+                        Some(ForensicStoredForm {
+                            capabilities: transform.capabilities,
+                            stored_content_id: stored_id,
+                            stored_len,
+                        }),
+                    )
+                }
+            };
             Ok(ForensicEntryMetadata {
                 path: entry.path.clone(),
                 file_type: entry.file_type,
@@ -268,8 +397,9 @@ fn metadata_from_tree(tree: &ForensicTree) -> Result<Vec<ForensicEntryMetadata>,
                 flags: entry.flags,
                 device: entry.device,
                 special_type: entry.special_type.clone(),
-                content_id: entry.content.as_deref().map(raw_content_id),
+                content_id,
                 content_len,
+                stored_form,
             })
         })
         .collect()
@@ -282,20 +412,42 @@ fn forensic_tree_content_id(metadata_id: ContentId) -> ContentId {
     ContentId::from_bytes(*hasher.finalize().as_bytes())
 }
 
+/// The lowest document version that can express these entries.
+///
+/// Encoding is canonical, so this must be a pure function of the content:
+/// `decode_metadata` re-encodes what it read and rejects any difference.
+fn metadata_version(entries: &[ForensicEntryMetadata]) -> u8 {
+    if entries.iter().any(|entry| entry.stored_form.is_some()) {
+        FORENSIC_TREE_VERSION_STORED_FORM
+    } else {
+        FORENSIC_TREE_VERSION
+    }
+}
+
+const fn entry_field_count(version: u8) -> u64 {
+    if version >= FORENSIC_TREE_VERSION_STORED_FORM {
+        16
+    } else {
+        15
+    }
+}
+
 fn encode_metadata(
     platform: &str,
     entries: &[ForensicEntryMetadata],
 ) -> Result<Vec<u8>, Bcs2Error> {
+    let version = metadata_version(entries);
+    let entry_fields = entry_field_count(version);
     let mut encoder = Encoder::new(Vec::new());
     encoder
         .array(3)
-        .and_then(|encoder| encoder.u8(FORENSIC_TREE_VERSION))
+        .and_then(|encoder| encoder.u8(version))
         .and_then(|encoder| encoder.str(platform))
         .and_then(|encoder| encoder.array(entries.len() as u64))
         .map_err(|_| Bcs2Error::SemanticEncoding)?;
     for entry in entries {
         encoder
-            .array(15)
+            .array(entry_fields)
             .and_then(|encoder| encoder.bytes(&entry.path))
             .and_then(|encoder| encoder.u8(entry.file_type as u8))
             .and_then(|encoder| encoder.u32(entry.mode))
@@ -341,6 +493,21 @@ fn encode_metadata(
                 .map_err(|_| Bcs2Error::SemanticEncoding)?,
             None => encoder.null().map_err(|_| Bcs2Error::SemanticEncoding)?,
         };
+        if version >= FORENSIC_TREE_VERSION_STORED_FORM {
+            match entry.stored_form {
+                Some(stored) => {
+                    encoder
+                        .array(3)
+                        .and_then(|encoder| encoder.u64(stored.capabilities))
+                        .and_then(|encoder| encoder.bytes(stored.stored_content_id.as_bytes()))
+                        .and_then(|encoder| encoder.u64(stored.stored_len))
+                        .map_err(|_| Bcs2Error::SemanticEncoding)?;
+                }
+                None => {
+                    encoder.null().map_err(|_| Bcs2Error::SemanticEncoding)?;
+                }
+            }
+        }
     }
     Ok(encoder.into_writer())
 }
@@ -351,9 +518,14 @@ fn decode_metadata(
 ) -> Result<(String, Vec<ForensicEntryMetadata>), Bcs2Error> {
     let mut decoder = Decoder::new(bytes);
     require_array(&mut decoder, 3)?;
-    if decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != FORENSIC_TREE_VERSION {
+    let version = decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+    if !matches!(
+        version,
+        FORENSIC_TREE_VERSION | FORENSIC_TREE_VERSION_STORED_FORM
+    ) {
         return Err(Bcs2Error::CatalogCorrupt);
     }
+    let entry_fields = entry_field_count(version);
     let platform = String::from(decoder.str().map_err(|_| Bcs2Error::CatalogCorrupt)?);
     let entry_count = definite_array(&mut decoder)?;
     let entry_count = usize::try_from(entry_count).map_err(|_| Bcs2Error::BoundsExceeded)?;
@@ -362,7 +534,7 @@ fn decode_metadata(
     }
     let mut entries = Vec::with_capacity(entry_count);
     for _ in 0..entry_count {
-        require_array(&mut decoder, 15)?;
+        require_array(&mut decoder, entry_fields)?;
         let path = decoder
             .bytes()
             .map_err(|_| Bcs2Error::CatalogCorrupt)?
@@ -423,6 +595,11 @@ fn decode_metadata(
             } else {
                 Some(decoder.u64().map_err(|_| Bcs2Error::CatalogCorrupt)?)
             };
+        let stored_form = if version >= FORENSIC_TREE_VERSION_STORED_FORM {
+            decode_stored_form(&mut decoder)?
+        } else {
+            None
+        };
         entries.push(ForensicEntryMetadata {
             path,
             file_type,
@@ -439,8 +616,11 @@ fn decode_metadata(
             special_type,
             content_id,
             content_len,
+            stored_form,
         });
     }
+    // A v2 document in which nothing declares a stored form would re-encode as
+    // v1, so this catches it as the non-canonical encoding it is.
     if decoder.position() != bytes.len() || encode_metadata(&platform, &entries)? != bytes {
         return Err(Bcs2Error::CatalogCorrupt);
     }
@@ -503,6 +683,17 @@ fn validate_metadata(platform: &str, entries: &[ForensicEntryMetadata]) -> Resul
                 .is_some_and(|name| name.is_empty() || name.contains(&0))
         {
             return Err(Bcs2Error::SemanticEncoding);
+        }
+        // Only a regular file has content, so only a regular file can have a
+        // transformed encoding of it. Checked once here rather than in each arm
+        // so a file type added later cannot acquire one by omission.
+        if entry.stored_form.is_some() && entry.file_type != ForensicFileType::Regular {
+            return Err(Bcs2Error::SemanticEncoding);
+        }
+        if let Some(stored) = entry.stored_form {
+            if stored.capabilities == 0 || Some(stored.stored_content_id) == entry.content_id {
+                return Err(Bcs2Error::SemanticEncoding);
+            }
         }
         match entry.file_type {
             ForensicFileType::Regular => {
@@ -792,6 +983,23 @@ fn encode_optional_content_id(
         }
     }
     Ok(())
+}
+
+fn decode_stored_form(decoder: &mut Decoder<'_>) -> Result<Option<ForensicStoredForm>, Bcs2Error> {
+    if decoder.datatype().map_err(|_| Bcs2Error::CatalogCorrupt)? == Type::Null {
+        decoder.null().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+        return Ok(None);
+    }
+    require_array(decoder, 3)?;
+    let capabilities = decoder.u64().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+    let stored_content_id =
+        decode_optional_content_id(decoder)?.ok_or(Bcs2Error::CatalogCorrupt)?;
+    let stored_len = decoder.u64().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+    Ok(Some(ForensicStoredForm {
+        capabilities,
+        stored_content_id,
+        stored_len,
+    }))
 }
 
 fn decode_optional_content_id(decoder: &mut Decoder<'_>) -> Result<Option<ContentId>, Bcs2Error> {

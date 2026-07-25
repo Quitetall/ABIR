@@ -140,5 +140,6 @@ fn entry(path: &[u8], file_type: ForensicFileType, content: Option<Vec<u8>>) -> 
         device: None,
         special_type: None,
         content,
+        content_transform: None,
     }
 }
