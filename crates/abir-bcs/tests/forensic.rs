@@ -19,6 +19,7 @@ fn entry(path: &[u8], file_type: ForensicFileType) -> ForensicEntry {
         device: None,
         special_type: None,
         content: None,
+        content_transform: None,
     }
 }
 

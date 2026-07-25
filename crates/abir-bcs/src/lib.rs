@@ -29,8 +29,9 @@ pub use generation::{
 
 #[cfg(feature = "alloc")]
 pub use forensic::{
-    encode_forensic_tree, ForensicEntry, ForensicEntryMetadata, ForensicFileType,
-    ForensicTimestamp, ForensicTree, ForensicTreeView, ForensicXattr, SparseExtent,
+    encode_forensic_tree, ForensicContentTransform, ForensicEntry, ForensicEntryMetadata,
+    ForensicFileType, ForensicStoredForm, ForensicTimestamp, ForensicTree, ForensicTreeView,
+    ForensicXattr, SparseExtent,
 };
 
 #[cfg(feature = "alloc")]
