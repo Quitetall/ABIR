@@ -80,6 +80,20 @@ pub const CAP_LML_LOSSLESS_V1: u64 = 1 << 3;
 /// required.
 pub const CAP_LMA_SYNTHETIC_REEMIT: u64 = 1 << 4;
 
+/// Required-capability bit for block-floating-point encoded training rows.
+///
+/// A training window pack stores each window as a per-channel `f32` scale plus
+/// integer mantissas: a third the size of raw `f32`, and exactly the form a GPU
+/// wants to load before dequantising itself. The row still declares its logical
+/// content — real-valued `[channels, samples]` — so the frame needs to say that
+/// what it holds is the encoding.
+///
+/// Fail-closed matters unusually much here. Mantissas are plausible-looking
+/// integers; a consumer that read them as amplitudes would train on numerically
+/// wrong data with no error raised anywhere, and the resulting model would be
+/// merely bad rather than obviously broken.
+pub const CAP_LAMQUANT_BFP_V1: u64 = 1 << 5;
+
 /// A registered ABIR codec-bundle profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

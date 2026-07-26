@@ -1242,6 +1242,7 @@ fn parse_bound_row<'py>(dictionary: &Bound<'py, PyDict>) -> PyResult<BoundTraini
     let logical_bytes = u64::try_from(payload.as_bytes().len())
         .map_err(|_| PyValueError::new_err("training row payload is too large"))?;
     let metadata = TrainingRow {
+        encoding: None,
         byte_order: super::parse_byte_order(&required_string(dictionary, "byte_order")?)?,
         group: ContentKey::new(super::parse_content_id(&required_string(
             dictionary, "group",
@@ -1810,6 +1811,7 @@ pub(crate) fn training_fixture_bytes<'py>(
         vec![(payload_bytes / 2) as u64]
     };
     let row = TrainingRow {
+        encoding: None,
         byte_order: ByteOrder::Little,
         group: key(5),
         label: key(6),
