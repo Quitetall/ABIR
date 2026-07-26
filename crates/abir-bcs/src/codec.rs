@@ -52,6 +52,34 @@ pub const CAP_ZSTD: u64 = 1 << 2;
 /// compressor.
 pub const CAP_LML_OPTIMUM_V1: u64 = 1 << 1;
 
+/// Required-capability bit for frames stored as a baseline LML bitstream.
+///
+/// A forensic capsule may store an EEG recording LML-coded rather than verbatim.
+/// The stored bytes are then a lossless *encoding* of the file, and recovering
+/// the file needs the LML decoder — exactly the same relationship zstd has to a
+/// compressed frame, so it uses the same mechanism.
+///
+/// Distinct from [`CAP_LML_OPTIMUM_V1`]: this bit means baseline LML, which every
+/// tier can decode. A reader holding only the optimum kernel does not satisfy it,
+/// and vice versa, because the two bitstreams are not interchangeable.
+pub const CAP_LML_LOSSLESS_V1: u64 = 1 << 3;
+
+/// Required-capability bit for entries whose original bytes are re-emitted from
+/// a stored template rather than decoded directly.
+///
+/// Some sources (ASCII sample-per-line files, for instance) are not EEG
+/// containers the codec reads natively. They are converted to an intermediate
+/// EDF, coded, and the byte-level shape of the original — line endings, field
+/// widths, leading whitespace — is kept as a template so the exact original file
+/// can be rebuilt. Decoding alone is therefore not enough to recover the file,
+/// and a reader that can decode but not re-emit would produce a *plausible wrong
+/// answer*: a valid EDF that is not the file that was archived.
+///
+/// This bit is what makes that refusal automatic. It accompanies
+/// [`CAP_LML_LOSSLESS_V1`] rather than replacing it, because both steps are
+/// required.
+pub const CAP_LMA_SYNTHETIC_REEMIT: u64 = 1 << 4;
+
 /// A registered ABIR codec-bundle profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
