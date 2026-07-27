@@ -15,7 +15,41 @@ const TAG_LEN: usize = 16;
 const WIRE_MAJOR: u16 = 2;
 const WIRE_MINOR: u16 = 0;
 const SEMANTIC_GENERATION: u32 = 1;
-const CIPHERTEXT_OFFSET: usize = BCS2_HEADER_LEN + NONCE_LEN;
+/// Offset of the key-derivation descriptor length, and of its algorithm id.
+///
+/// These eight bytes were enforced-zero, so every reader written before this
+/// change rejects an envelope that uses them — forward compatibility that fails
+/// closed by construction rather than by convention.
+const KDF_LEN_OFFSET: usize = 32;
+const KDF_ALGORITHM_OFFSET: usize = 36;
+
+/// Argon2id, the only registered derivation today.
+pub const KDF_ALGORITHM_ARGON2ID: u32 = 1;
+
+/// Descriptors are small by nature — a salt and a few cost parameters. The cap
+/// exists so a malformed length cannot drive an allocation.
+const MAX_KDF_LEN: usize = 256;
+
+/// Where the nonce ends and the descriptor begins.
+const NONCE_END: usize = BCS2_HEADER_LEN + NONCE_LEN;
+
+/// The bytes authenticated alongside the ciphertext: header, then descriptor.
+///
+/// Header and descriptor are not adjacent -- the nonce sits between them -- so
+/// this has to be materialised rather than borrowed. Cheap: the header is fixed
+/// and the descriptor is capped at [`MAX_KDF_LEN`].
+///
+/// With no descriptor the result is exactly the header, which is what keeps
+/// every envelope written before this field existed decryptable byte for byte.
+/// Binding the descriptor here is the entire point: a descriptor that does not
+/// belong to this ciphertext fails authentication instead of quietly deriving
+/// the wrong key.
+fn associated_data(header: &[u8], kdf_descriptor: &[u8]) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(header.len() + kdf_descriptor.len());
+    aad.extend_from_slice(header);
+    aad.extend_from_slice(kdf_descriptor);
+    aad
+}
 
 #[derive(Debug)]
 pub struct EncryptedEnvelopeView<'a> {
@@ -25,12 +59,16 @@ pub struct EncryptedEnvelopeView<'a> {
     root_kind: Option<RootKind>,
     root_content_id: Option<ContentId>,
     nonce: &'a [u8; NONCE_LEN],
+    kdf_descriptor: &'a [u8],
+    kdf_algorithm: u32,
     ciphertext: &'a [u8],
 }
 
 impl<'a> EncryptedEnvelopeView<'a> {
     pub fn parse(bytes: &'a [u8], accepted_bounds: ResourceBounds) -> Result<Self, Bcs2Error> {
-        if bytes.len() < CIPHERTEXT_OFFSET + TAG_LEN {
+        // Minimum: header + nonce + tag. A descriptor only adds to this, and its
+        // declared length is validated once the header is readable.
+        if bytes.len() < NONCE_END + TAG_LEN {
             return Err(Bcs2Error::TooShort);
         }
         if bytes[..8] != BCS2_MAGIC {
@@ -43,16 +81,30 @@ impl<'a> EncryptedEnvelopeView<'a> {
         }
         if get_u32(bytes, 12)? != BCS2_HEADER_LEN as u32
             || get_u64(bytes, 24)? != CAP_XCHACHA20_POLY1305
-            || get_u64(bytes, 32)? != 0
             || StorageContract::try_from(bytes[41])? != StorageContract::SealedImmutable
             || bytes[43] != 2
             || get_u32(bytes, 48)? as usize != NONCE_LEN
             || get_u32(bytes, 52)? as usize != TAG_LEN
-            || to_usize(get_u64(bytes, 56)?)? != CIPHERTEXT_OFFSET
             || to_usize(get_u64(bytes, 72)?)? != BCS2_HEADER_LEN
             || to_usize(get_u64(bytes, 80)?)? != NONCE_LEN
             || get_u64(bytes, 88)? != 0
         {
+            return Err(Bcs2Error::InvalidEncryptedEnvelope);
+        }
+        let kdf_len = get_u32(bytes, KDF_LEN_OFFSET)? as usize;
+        let kdf_algorithm = get_u32(bytes, KDF_ALGORITHM_OFFSET)?;
+        if kdf_len > MAX_KDF_LEN
+            // An algorithm without a descriptor, or a descriptor without an
+            // algorithm, is a half-written statement. Refuse both spellings so
+            // one envelope has one meaning.
+            || (kdf_len == 0) != (kdf_algorithm == 0)
+        {
+            return Err(Bcs2Error::InvalidEncryptedEnvelope);
+        }
+        let ciphertext_offset = NONCE_END
+            .checked_add(kdf_len)
+            .ok_or(Bcs2Error::InvalidExtent)?;
+        if to_usize(get_u64(bytes, 56)?)? != ciphertext_offset {
             return Err(Bcs2Error::InvalidEncryptedEnvelope);
         }
         let privacy_mode = PrivacyMode::try_from(bytes[42])?;
@@ -66,17 +118,18 @@ impl<'a> EncryptedEnvelopeView<'a> {
         if ciphertext_len < TAG_LEN
             || ciphertext_len > accepted_bounds.max_frame_bytes as usize
             || get_u32(bytes, 44)? as usize != ciphertext_len
-            || CIPHERTEXT_OFFSET
+            || ciphertext_offset
                 .checked_add(ciphertext_len)
                 .ok_or(Bcs2Error::InvalidExtent)?
                 != bytes.len()
         {
             return Err(Bcs2Error::BoundsExceeded);
         }
-        let nonce: &[u8; NONCE_LEN] = bytes[BCS2_HEADER_LEN..CIPHERTEXT_OFFSET]
+        let nonce: &[u8; NONCE_LEN] = bytes[BCS2_HEADER_LEN..NONCE_END]
             .try_into()
             .map_err(|_| Bcs2Error::InvalidEncryptedEnvelope)?;
-        let ciphertext = &bytes[CIPHERTEXT_OFFSET..];
+        let kdf_descriptor = &bytes[NONCE_END..ciphertext_offset];
+        let ciphertext = &bytes[ciphertext_offset..];
         let (profile, root_kind, root_content_id) = if privacy_mode == PrivacyMode::EncryptedOpaque
         {
             if bytes[16..24].iter().any(|byte| *byte != 0)
@@ -105,6 +158,8 @@ impl<'a> EncryptedEnvelopeView<'a> {
             root_kind,
             root_content_id,
             nonce,
+            kdf_descriptor,
+            kdf_algorithm,
             ciphertext,
         })
     }
@@ -124,6 +179,21 @@ impl<'a> EncryptedEnvelopeView<'a> {
     pub const fn nonce(&self) -> &'a [u8; NONCE_LEN] {
         self.nonce
     }
+    /// The key-derivation descriptor, empty when the key was supplied directly.
+    ///
+    /// Authenticated as associated data, so a descriptor that does not belong to
+    /// this ciphertext is DETECTED rather than silently deriving the wrong key —
+    /// which is the failure a detached sidecar produces, and which is
+    /// indistinguishable from corruption when it happens.
+    pub const fn kdf_descriptor(&self) -> &'a [u8] {
+        self.kdf_descriptor
+    }
+
+    /// Registered algorithm id for [`Self::kdf_descriptor`]; zero when absent.
+    pub const fn kdf_algorithm(&self) -> u32 {
+        self.kdf_algorithm
+    }
+
     pub const fn ciphertext(&self) -> &'a [u8] {
         self.ciphertext
     }
@@ -137,11 +207,47 @@ impl<'a> EncryptedEnvelopeView<'a> {
 /// `nonce` must be generated by a CSPRNG and must never repeat for the same
 /// key. Already-encrypted envelopes are deliberately rejected; decrypt before
 /// changing encryption or discovery policy.
+/// Encrypt with the key supplied directly.
+///
+/// Byte-identical to what this function produced before key-derivation
+/// descriptors existed, because an absent descriptor writes no bytes and
+/// authenticates exactly the header.
 pub fn encrypt_bcs2(
     plaintext: &[u8],
     privacy_mode: PrivacyMode,
     key: &[u8; 32],
     nonce: &[u8; NONCE_LEN],
+    supported_capabilities: u64,
+    accepted_bounds: ResourceBounds,
+) -> Result<Vec<u8>, Bcs2Error> {
+    encrypt_bcs2_with_kdf(
+        plaintext,
+        privacy_mode,
+        key,
+        nonce,
+        None,
+        supported_capabilities,
+        accepted_bounds,
+    )
+}
+
+/// Encrypt, recording how the key was derived.
+///
+/// `kdf` is `(algorithm, descriptor)` — for Argon2id, the salt and cost
+/// parameters. It is stored in the clear (these are not secrets) and
+/// authenticated, so it travels WITH the ciphertext instead of beside it.
+///
+/// That is the whole reason this exists. A detached sidecar means losing one
+/// file destroys the ciphertext permanently, and nothing binds the pair, so a
+/// mismatched sidecar derives the wrong key and fails in a way indistinguishable
+/// from corruption. Here a mismatch is an authentication failure, which is a
+/// different and honest answer.
+pub fn encrypt_bcs2_with_kdf(
+    plaintext: &[u8],
+    privacy_mode: PrivacyMode,
+    key: &[u8; 32],
+    nonce: &[u8; NONCE_LEN],
+    kdf: Option<(u32, &[u8])>,
     supported_capabilities: u64,
     accepted_bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
@@ -151,6 +257,20 @@ pub fn encrypt_bcs2(
     ) {
         return Err(Bcs2Error::InvalidEncryptedEnvelope);
     }
+    let (kdf_algorithm, kdf_descriptor) = match kdf {
+        // Zero is the spelling for "no descriptor", so an algorithm id of zero
+        // with a descriptor would be unreadable on the way back in.
+        Some((algorithm, descriptor)) => {
+            if algorithm == 0 || descriptor.is_empty() || descriptor.len() > MAX_KDF_LEN {
+                return Err(Bcs2Error::InvalidEncryptedEnvelope);
+            }
+            (algorithm, descriptor)
+        }
+        None => (0, &[][..]),
+    };
+    let ciphertext_offset = NONCE_END
+        .checked_add(kdf_descriptor.len())
+        .ok_or(Bcs2Error::BoundsExceeded)?;
     let inner = Bcs2View::parse(plaintext, supported_capabilities, accepted_bounds)?;
     let ciphertext_len = plaintext
         .len()
@@ -161,7 +281,7 @@ pub fn encrypt_bcs2(
     }
     let ciphertext_len_u32 =
         u32::try_from(ciphertext_len).map_err(|_| Bcs2Error::BoundsExceeded)?;
-    let total = CIPHERTEXT_OFFSET
+    let total = ciphertext_offset
         .checked_add(ciphertext_len)
         .ok_or(Bcs2Error::BoundsExceeded)?;
     let mut bytes = vec![0_u8; total];
@@ -182,22 +302,26 @@ pub fn encrypt_bcs2(
     put_u32(&mut bytes, 44, ciphertext_len_u32);
     put_u32(&mut bytes, 48, NONCE_LEN as u32);
     put_u32(&mut bytes, 52, TAG_LEN as u32);
-    put_u64(&mut bytes, 56, CIPHERTEXT_OFFSET as u64);
+    put_u32(&mut bytes, KDF_LEN_OFFSET, kdf_descriptor.len() as u32);
+    put_u32(&mut bytes, KDF_ALGORITHM_OFFSET, kdf_algorithm);
+    put_u64(&mut bytes, 56, ciphertext_offset as u64);
     put_u64(&mut bytes, 64, ciphertext_len as u64);
     put_u64(&mut bytes, 72, BCS2_HEADER_LEN as u64);
     put_u64(&mut bytes, 80, NONCE_LEN as u64);
-    bytes[BCS2_HEADER_LEN..CIPHERTEXT_OFFSET].copy_from_slice(nonce);
+    bytes[BCS2_HEADER_LEN..NONCE_END].copy_from_slice(nonce);
+    bytes[NONCE_END..ciphertext_offset].copy_from_slice(kdf_descriptor);
+    let aad = associated_data(&bytes[..BCS2_HEADER_LEN], kdf_descriptor);
     let cipher = XChaCha20Poly1305::new(key.into());
     let ciphertext = cipher
         .encrypt(
             XNonce::from_slice(nonce),
             Payload {
                 msg: plaintext,
-                aad: &bytes[..BCS2_HEADER_LEN],
+                aad: &aad,
             },
         )
         .map_err(|_| Bcs2Error::AuthenticationFailed)?;
-    bytes[CIPHERTEXT_OFFSET..].copy_from_slice(&ciphertext);
+    bytes[ciphertext_offset..].copy_from_slice(&ciphertext);
     Ok(bytes)
 }
 
@@ -214,7 +338,7 @@ pub fn decrypt_bcs2(
             XNonce::from_slice(envelope.nonce),
             Payload {
                 msg: envelope.ciphertext,
-                aad: &encrypted[..BCS2_HEADER_LEN],
+                aad: &associated_data(&encrypted[..BCS2_HEADER_LEN], envelope.kdf_descriptor()),
             },
         )
         .map_err(|_| Bcs2Error::AuthenticationFailed)?;

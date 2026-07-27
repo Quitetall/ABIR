@@ -52,7 +52,10 @@ pub use pack::repack_with_frames;
 pub use payload::{encode_dataset_with_payloads, encode_semantic_bundle, SemanticPayloadFrame};
 
 #[cfg(feature = "alloc")]
-pub use privacy::{decrypt_bcs2, encrypt_bcs2, EncryptedEnvelopeView, CAP_XCHACHA20_POLY1305};
+pub use privacy::{
+    decrypt_bcs2, encrypt_bcs2, encrypt_bcs2_with_kdf, EncryptedEnvelopeView,
+    CAP_XCHACHA20_POLY1305, KDF_ALGORITHM_ARGON2ID,
+};
 
 #[cfg(feature = "std")]
 pub use restore::{
