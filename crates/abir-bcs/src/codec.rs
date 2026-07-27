@@ -94,6 +94,30 @@ pub const CAP_LMA_SYNTHETIC_REEMIT: u64 = 1 << 4;
 /// merely bad rather than obviously broken.
 pub const CAP_LAMQUANT_BFP_V1: u64 = 1 << 5;
 
+/// Required-capability bit for LML packets carrying arithmetic-coded subband
+/// payloads.
+///
+/// The LML track-2 payload coder is chosen per subband as whichever of
+/// Golomb (`0x00`), zero-run-length (`0x01`) or — in a build with the
+/// arithmetic coders compiled in — the empirical-categorical range coders
+/// (`0x02`/`0x03`) produces the smallest output. All four tags are part of the
+/// packet format and a reader without the range coders already fails closed on
+/// the latter two.
+///
+/// The problem this bit solves is *where* that refusal happens. Without it the
+/// failure surfaces deep inside a subband parse, after the artifact has been
+/// accepted, on an artifact that is indistinguishable up front from one any
+/// reader could decode. Worse, because the range coders are selected only when
+/// they win, whether a given recording is readable depends on its *content* —
+/// so a fixture can pass while production data does not.
+///
+/// Declaring the bit moves the refusal to the envelope, where it is a property
+/// of the artifact rather than a surprise during decode. It is set by scanning
+/// the sealed packets for those tags, so an artifact that happens to contain
+/// none stays readable by every baseline reader even when the producer could
+/// have emitted them.
+pub const CAP_LML_ARITHMETIC_V1: u64 = 1 << 6;
+
 /// A registered ABIR codec-bundle profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
