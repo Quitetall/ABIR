@@ -368,8 +368,22 @@ pub struct CodecBundleView<'a> {
 }
 
 impl<'a> CodecBundleView<'a> {
+    /// Open a bundle whose packets a baseline reader can decode.
+    ///
+    /// Advertises no capabilities, so an optimum-coded bundle is refused here
+    /// rather than opened and then mis-decoded. That is the correct default: a
+    /// baseline-only reader must not be handed a bitstream it cannot parse.
     pub fn open(bytes: &'a [u8], bounds: ResourceBounds) -> Result<Self, CodecBundleError> {
-        let view = Bcs2View::parse(bytes, 0, bounds)?;
+        Self::open_with_capabilities(bytes, 0, bounds)
+    }
+
+    /// Open a bundle, declaring which packet encodings this consumer can decode.
+    pub fn open_with_capabilities(
+        bytes: &'a [u8],
+        supported_capabilities: u64,
+        bounds: ResourceBounds,
+    ) -> Result<Self, CodecBundleError> {
+        let view = Bcs2View::parse(bytes, supported_capabilities, bounds)?;
         if view.root_kind() != RootKind::Bundle {
             return Err(CodecBundleError::NotBundle);
         }
@@ -475,6 +489,20 @@ pub struct CodecBundleInput<'a> {
     pub packets: &'a [&'a [u8]],
     pub parameters: Vec<CodecParameter>,
     pub profile: CodecProfile,
+    /// What a consumer must be able to do to decode these packets.
+    ///
+    /// Zero for baseline kernels, whose packets any reader of the profile can
+    /// decode. The optimum tier sets [`CAP_LML_OPTIMUM_V1`]: it produces the
+    /// same semantics as baseline LML from a materially different bitstream, so
+    /// it is the same [`CodecProfile`] with a distinct
+    /// [`CodecImplementation::kernel_id`] rather than a profile of its own --
+    /// profiles answer "what kind of artifact is this", capabilities answer
+    /// "can this reader decode it at all".
+    ///
+    /// Applies to the packet frames only. The canonical-semantics frame is
+    /// never encoded, because a reader must be able to learn what an artifact
+    /// describes even when it cannot decode the signal.
+    pub required_capabilities: u64,
 }
 
 pub fn encode_codec_bundle(
@@ -487,6 +515,7 @@ pub fn encode_codec_bundle(
         implementation,
         model_provenance,
         packets,
+        required_capabilities,
         mut parameters,
         profile,
     } = input;
@@ -533,8 +562,12 @@ pub fn encode_codec_bundle(
     catalog.validate()?;
     let canonical_catalog = catalog.canonical_json()?;
     let root = catalog.content_id()?;
-    let frames = core::iter::once(canonical_semantics).chain(packets.iter().copied());
-    let bytes = super::wire::encode_raw_root(
+    let frames = core::iter::once((canonical_semantics, 0_u64)).chain(
+        packets
+            .iter()
+            .map(|packet| (*packet, required_capabilities)),
+    );
+    let bytes = super::wire::encode_raw_root_with_capabilities(
         RootKind::Bundle,
         profile.bcs2_profile(),
         root,
@@ -542,7 +575,7 @@ pub fn encode_codec_bundle(
         frames,
         bounds,
     )?;
-    CodecBundleView::open(&bytes, bounds)?;
+    CodecBundleView::open_with_capabilities(&bytes, required_capabilities, bounds)?;
     Ok(bytes)
 }
 
@@ -835,6 +868,7 @@ mod tests {
     fn encode_lml(semantics: &[u8], packets: &[&[u8]]) -> Vec<u8> {
         encode_codec_bundle(
             CodecBundleInput {
+                required_capabilities: 0,
                 canonical_semantics: semantics,
                 fidelity: exact_fidelity(),
                 implementation: implementation(),
@@ -924,6 +958,7 @@ mod tests {
         assert_eq!(
             encode_codec_bundle(
                 CodecBundleInput {
+                    required_capabilities: 0,
                     canonical_semantics: &semantics,
                     fidelity: CodecFidelity {
                         bound: Some(CodecParameterValue::Rational {
@@ -1151,6 +1186,7 @@ mod tests {
         assert!(matches!(
             encode_codec_bundle(
                 CodecBundleInput {
+                    required_capabilities: 0,
                     canonical_semantics: &semantics,
                     fidelity: CodecFidelity {
                         bound: None,

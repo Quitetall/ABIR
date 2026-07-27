@@ -29,6 +29,7 @@ fn semantics_path() -> PathBuf {
 
 fn lml_input(semantics: &[u8]) -> CodecBundleInput<'_> {
     CodecBundleInput {
+        required_capabilities: 0,
         canonical_semantics: semantics,
         fidelity: CodecFidelity {
             bound: None,
@@ -53,6 +54,7 @@ fn lml_input(semantics: &[u8]) -> CodecBundleInput<'_> {
 
 fn lmq_input(semantics: &[u8]) -> CodecBundleInput<'_> {
     CodecBundleInput {
+        required_capabilities: 0,
         canonical_semantics: semantics,
         fidelity: CodecFidelity {
             bound: Some(CodecParameterValue::Rational {

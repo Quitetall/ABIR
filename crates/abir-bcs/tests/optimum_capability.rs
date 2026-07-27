@@ -87,3 +87,125 @@ fn baseline_artifacts_stay_readable_by_baseline_readers() {
     Bcs2View::parse(&bytes, 0, ResourceBounds::default())
         .expect("baseline artifact still parses with no capabilities");
 }
+
+// ─── The real codec-bundle path ───────────────────────────────────────────
+//
+// The tests above patch a blob's mask by hand, which pins the wire rule but not
+// the producer. These pin that an optimum bundle built through the actual
+// encoder declares the bit, that a baseline reader is refused, and — the part
+// that would otherwise rot silently — that the canonical semantics frame stays
+// readable regardless, because a consumer must be able to learn what an artifact
+// describes even when it cannot decode the signal.
+
+use abir::ContentId;
+use abir_bcs::{
+    encode_codec_bundle, CodecBundleInput, CodecBundleView, CodecFidelity, CodecFidelityKind,
+    CodecImplementation, CodecParameter, CodecParameterValue, CodecProfile,
+};
+
+fn semantics() -> Vec<u8> {
+    std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("fixtures/valid/canonical-tensor.json"),
+    )
+    .expect("canonical semantics fixture")
+}
+
+/// An LML bundle whose packets are optimum-coded.
+///
+/// Same profile and same exact fidelity as baseline — only the kernel id and the
+/// declared capability differ, which is precisely the claim being made.
+fn optimum_bundle(semantics: &[u8], capabilities: u64, kernel_id: &str) -> Vec<u8> {
+    encode_codec_bundle(
+        CodecBundleInput {
+            required_capabilities: capabilities,
+            canonical_semantics: semantics,
+            fidelity: CodecFidelity {
+                bound: None,
+                contract_id: ContentId::from_bytes([0x32; 32]),
+                kind: CodecFidelityKind::Exact,
+                metric: None,
+            },
+            implementation: CodecImplementation {
+                build_id: "optimum-capability-test".into(),
+                implementation_id: ContentId::from_bytes([0x31; 32]),
+                kernel_id: kernel_id.into(),
+            },
+            model_provenance: None,
+            packets: &[b"optimum packet\x00"],
+            parameters: vec![CodecParameter {
+                name: "predictor.order".into(),
+                value: CodecParameterValue::Integer { value: "8".into() },
+            }],
+            profile: CodecProfile::LmlLossless,
+        },
+        ResourceBounds::default(),
+    )
+    .expect("bundle encodes")
+}
+
+#[test]
+fn an_optimum_bundle_refuses_a_baseline_reader() {
+    let semantics = semantics();
+    let bytes = optimum_bundle(
+        &semantics,
+        CAP_LML_OPTIMUM_V1,
+        "org.quitetall.lamquant.lml.optimum-v1",
+    );
+
+    assert!(
+        CodecBundleView::open(&bytes, ResourceBounds::default()).is_err(),
+        "the default open advertises nothing and must refuse an optimum bitstream"
+    );
+    let view = CodecBundleView::open_with_capabilities(
+        &bytes,
+        CAP_LML_OPTIMUM_V1,
+        ResourceBounds::default(),
+    )
+    .expect("a reader holding the optimum kernel is admitted");
+    assert_eq!(
+        view.catalog().profile(),
+        CodecProfile::LmlLossless,
+        "optimum is the SAME profile as baseline; only the kernel and capability differ"
+    );
+}
+
+#[test]
+fn a_baseline_bundle_still_opens_with_no_capabilities() {
+    // The bit is opt-in at the producer too: a baseline bundle must not acquire
+    // a requirement merely because the field now exists.
+    let semantics = semantics();
+    let bytes = optimum_bundle(&semantics, 0, "org.quitetall.lamquant.lml.baseline-v1");
+    assert!(CodecBundleView::open(&bytes, ResourceBounds::default()).is_ok());
+}
+
+#[test]
+fn the_semantics_frame_is_never_capability_gated() {
+    // A reader that cannot decode optimum packets must still be able to learn
+    // what the artifact describes. Gating the semantics frame would make an
+    // undecodable artifact also unidentifiable, which is a worse failure than
+    // the one the capability exists to prevent.
+    let semantics = semantics();
+    let bytes = optimum_bundle(
+        &semantics,
+        CAP_LML_OPTIMUM_V1,
+        "org.quitetall.lamquant.lml.optimum-v1",
+    );
+    let view = Bcs2View::parse(&bytes, CAP_LML_OPTIMUM_V1, ResourceBounds::default())
+        .expect("parses with the bit");
+
+    let gated: Vec<u64> = view
+        .frames()
+        .iter()
+        .map(|frame| frame.required_capabilities())
+        .collect();
+    assert!(
+        gated.contains(&0),
+        "the canonical semantics frame must remain ungated"
+    );
+    assert!(
+        gated.contains(&CAP_LML_OPTIMUM_V1),
+        "the packet frames must carry the requirement"
+    );
+}
