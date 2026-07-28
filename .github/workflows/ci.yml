@@ -58,7 +58,7 @@ jobs:
 
       - name: Build and install Python extension
         run: |
-          maturin build -m crates/abir-python/Cargo.toml --release --out dist
+          maturin build -m crates/abir-python/Cargo.toml --release --features test-fixtures --out dist
           python -m pip install dist/*.whl
 
       - name: Python parity and schema tests
@@ -71,6 +71,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo +nightly install cargo-fuzz --locked
       - name: Execute committed dataset corpus
-        run: cargo fuzz run dataset_draft fuzz/corpus/dataset_draft -- -runs=1000
+        run: cargo +nightly fuzz run dataset_draft fuzz/corpus/dataset_draft -- -runs=1000
