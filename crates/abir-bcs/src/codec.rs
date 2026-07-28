@@ -118,6 +118,15 @@ pub const CAP_LAMQUANT_BFP_V1: u64 = 1 << 5;
 /// have emitted them.
 pub const CAP_LML_ARITHMETIC_V1: u64 = 1 << 6;
 
+/// Required-capability bit for packets imported from legacy `LMQC` containers.
+///
+/// `LMQC` payload kinds predate the registered `LMQP` packet grammar. Both
+/// describe progressive LMQ neural artifacts, so they share
+/// [`ProfileId::LMQ_PROGRESSIVE_V1`], but a normal LMQP reader cannot interpret
+/// legacy FP16-latent or reserved FSQ payload bytes. Marking imported frames
+/// with this bit makes that distinction fail closed at the BCS2 envelope.
+pub const CAP_LMQC_LEGACY_V1: u64 = 1 << 7;
+
 /// A registered ABIR codec-bundle profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
