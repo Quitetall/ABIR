@@ -14,6 +14,7 @@ fn key(seed: u8) -> ContentKey {
 
 fn row(logical_seed: u8, group_seed: u8, bytes: &[u8]) -> TrainingRow {
     TrainingRow {
+        encoding: None,
         byte_order: ByteOrder::Little,
         group: key(group_seed),
         label: key(9),

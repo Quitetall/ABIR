@@ -193,11 +193,47 @@ impl TrainingSpec {
     }
 }
 
+/// How a row's stored frame differs from the logical array the row declares.
+///
+/// A training row states its logical typed content — `F32 [channels, samples]`,
+/// say. A pack may nevertheless store that window block-floating-point encoded:
+/// a per-channel scale plus integer mantissas, a third the size and exactly what
+/// a GPU wants to load before dequantising itself.
+///
+/// Without this, expressing such a pack would have meant one of two lies:
+/// declaring the row to be the integer mantissas (losing the fact that the
+/// window is real-valued, and hiding the scales) or declaring it `F32` while
+/// storing something else (breaking frame closure). So the row keeps its honest
+/// logical type and records the encoding separately, and a consumer that cannot
+/// decode is refused at the envelope rather than handed mantissas it will read
+/// as amplitudes.
+///
+/// Deliberately the same mechanism, and the same capability registry, that a
+/// forensic capsule's stored forms use.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TrainingRowEncoding {
+    /// What a consumer must be able to do to recover the logical array. Must be
+    /// non-zero: zero is the spelling for "not encoded", which is `None`.
+    pub capabilities: u64,
+    #[serde(with = "element_serde")]
+    pub stored_element: ElementType,
+    pub stored_bytes: u64,
+    pub stored_payload: ContentKey,
+}
+
 /// Metadata for one independently addressable training row.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TrainingRow {
     #[serde(with = "byte_order_serde")]
     pub byte_order: ByteOrder,
+    /// `None` when the frame holds the logical array itself.
+    ///
+    /// Skipped when absent, so a snapshot that encodes nothing serialises
+    /// byte-identically to one written before encodings existed — which is what
+    /// keeps every already-sealed snapshot's content id, and the evidence signed
+    /// over it, untouched by this field's existence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<TrainingRowEncoding>,
     pub group: ContentKey,
     pub label: ContentKey,
     pub logical_bytes: u64,
@@ -210,6 +246,24 @@ pub struct TrainingRow {
 }
 
 impl TrainingRow {
+    /// The content key under which this row's frame is filed.
+    ///
+    /// Equal to `payload` for unencoded rows; use this, never `payload`, to
+    /// locate a frame.
+    pub fn frame_payload(&self) -> ContentKey {
+        match &self.encoding {
+            Some(encoding) => encoding.stored_payload,
+            None => self.payload,
+        }
+    }
+
+    /// Capabilities needed to recover this row's logical array.
+    pub fn required_capabilities(&self) -> u64 {
+        self.encoding
+            .as_ref()
+            .map_or(0, |encoding| encoding.capabilities)
+    }
+
     fn validate(&self) -> Result<(), TrainingError> {
         validate_extent(
             self.element,
@@ -217,7 +271,19 @@ impl TrainingRow {
             &self.shape,
             self.logical_bytes,
             self.logical_id.0,
-        )
+        )?;
+        if let Some(encoding) = &self.encoding {
+            // A declared encoding that requires nothing, or that stores exactly
+            // the logical payload, is a statement with no content; admitting it
+            // would give one snapshot two spellings.
+            if encoding.capabilities == 0
+                || encoding.stored_payload == self.payload
+                || encoding.stored_bytes == 0
+            {
+                return Err(TrainingError::InvalidRowExtent(self.logical_id.0));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -496,12 +562,25 @@ fn validate_frame_closure(
         return Err(TrainingError::ExtraPayload(extra.0));
     }
     for row in &snapshot.rows {
+        // An encoded row's frame carries the ENCODING, so it must be checked
+        // against the encoding's declared element, length and identity. Checking
+        // it against the logical ones would reject every valid encoded row --
+        // and, worse, would pass for a row that had quietly stored its logical
+        // array while claiming to be encoded.
+        let (expected_key, expected_element, expected_bytes) = match &row.encoding {
+            Some(encoding) => (
+                encoding.stored_payload,
+                encoding.stored_element,
+                encoding.stored_bytes,
+            ),
+            None => (row.payload, row.element, row.logical_bytes),
+        };
         let (element, bytes) = actual
-            .get(&row.payload)
-            .ok_or(TrainingError::MissingPayload(row.payload.0))?;
-        if *element != row.element
-            || u64::try_from(bytes.len()).ok() != Some(row.logical_bytes)
-            || abir::payload_content_id(*element, bytes) != row.payload.0
+            .get(&expected_key)
+            .ok_or(TrainingError::MissingPayload(expected_key.0))?;
+        if *element != expected_element
+            || u64::try_from(bytes.len()).ok() != Some(expected_bytes)
+            || abir::payload_content_id(*element, bytes) != expected_key.0
         {
             return Err(TrainingError::InvalidRowExtent(row.logical_id.0));
         }
@@ -527,7 +606,7 @@ pub(crate) fn expected_payloads(snapshot: &TrainingSnapshot) -> BTreeSet<Content
     snapshot
         .rows
         .iter()
-        .map(|row| row.payload)
+        .map(TrainingRow::frame_payload)
         .chain(
             snapshot
                 .label_payloads

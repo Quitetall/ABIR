@@ -52,6 +52,81 @@ pub const CAP_ZSTD: u64 = 1 << 2;
 /// compressor.
 pub const CAP_LML_OPTIMUM_V1: u64 = 1 << 1;
 
+/// Required-capability bit for frames stored as a baseline LML bitstream.
+///
+/// A forensic capsule may store an EEG recording LML-coded rather than verbatim.
+/// The stored bytes are then a lossless *encoding* of the file, and recovering
+/// the file needs the LML decoder — exactly the same relationship zstd has to a
+/// compressed frame, so it uses the same mechanism.
+///
+/// Distinct from [`CAP_LML_OPTIMUM_V1`]: this bit means baseline LML, which every
+/// tier can decode. A reader holding only the optimum kernel does not satisfy it,
+/// and vice versa, because the two bitstreams are not interchangeable.
+pub const CAP_LML_LOSSLESS_V1: u64 = 1 << 3;
+
+/// Required-capability bit for entries whose original bytes are re-emitted from
+/// a stored template rather than decoded directly.
+///
+/// Some sources (ASCII sample-per-line files, for instance) are not EEG
+/// containers the codec reads natively. They are converted to an intermediate
+/// EDF, coded, and the byte-level shape of the original — line endings, field
+/// widths, leading whitespace — is kept as a template so the exact original file
+/// can be rebuilt. Decoding alone is therefore not enough to recover the file,
+/// and a reader that can decode but not re-emit would produce a *plausible wrong
+/// answer*: a valid EDF that is not the file that was archived.
+///
+/// This bit is what makes that refusal automatic. It accompanies
+/// [`CAP_LML_LOSSLESS_V1`] rather than replacing it, because both steps are
+/// required.
+pub const CAP_LMA_SYNTHETIC_REEMIT: u64 = 1 << 4;
+
+/// Required-capability bit for block-floating-point encoded training rows.
+///
+/// A training window pack stores each window as a per-channel `f32` scale plus
+/// integer mantissas: a third the size of raw `f32`, and exactly the form a GPU
+/// wants to load before dequantising itself. The row still declares its logical
+/// content — real-valued `[channels, samples]` — so the frame needs to say that
+/// what it holds is the encoding.
+///
+/// Fail-closed matters unusually much here. Mantissas are plausible-looking
+/// integers; a consumer that read them as amplitudes would train on numerically
+/// wrong data with no error raised anywhere, and the resulting model would be
+/// merely bad rather than obviously broken.
+pub const CAP_LAMQUANT_BFP_V1: u64 = 1 << 5;
+
+/// Required-capability bit for LML packets carrying arithmetic-coded subband
+/// payloads.
+///
+/// The LML track-2 payload coder is chosen per subband as whichever of
+/// Golomb (`0x00`), zero-run-length (`0x01`) or — in a build with the
+/// arithmetic coders compiled in — the empirical-categorical range coders
+/// (`0x02`/`0x03`) produces the smallest output. All four tags are part of the
+/// packet format and a reader without the range coders already fails closed on
+/// the latter two.
+///
+/// The problem this bit solves is *where* that refusal happens. Without it the
+/// failure surfaces deep inside a subband parse, after the artifact has been
+/// accepted, on an artifact that is indistinguishable up front from one any
+/// reader could decode. Worse, because the range coders are selected only when
+/// they win, whether a given recording is readable depends on its *content* —
+/// so a fixture can pass while production data does not.
+///
+/// Declaring the bit moves the refusal to the envelope, where it is a property
+/// of the artifact rather than a surprise during decode. It is set by scanning
+/// the sealed packets for those tags, so an artifact that happens to contain
+/// none stays readable by every baseline reader even when the producer could
+/// have emitted them.
+pub const CAP_LML_ARITHMETIC_V1: u64 = 1 << 6;
+
+/// Required-capability bit for packets imported from legacy `LMQC` containers.
+///
+/// `LMQC` payload kinds predate the registered `LMQP` packet grammar. Both
+/// describe progressive LMQ neural artifacts, so they share
+/// [`ProfileId::LMQ_PROGRESSIVE_V1`], but a normal LMQP reader cannot interpret
+/// legacy FP16-latent or reserved FSQ payload bytes. Marking imported frames
+/// with this bit makes that distinction fail closed at the BCS2 envelope.
+pub const CAP_LMQC_LEGACY_V1: u64 = 1 << 7;
+
 /// A registered ABIR codec-bundle profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -326,8 +401,22 @@ pub struct CodecBundleView<'a> {
 }
 
 impl<'a> CodecBundleView<'a> {
+    /// Open a bundle whose packets a baseline reader can decode.
+    ///
+    /// Advertises no capabilities, so an optimum-coded bundle is refused here
+    /// rather than opened and then mis-decoded. That is the correct default: a
+    /// baseline-only reader must not be handed a bitstream it cannot parse.
     pub fn open(bytes: &'a [u8], bounds: ResourceBounds) -> Result<Self, CodecBundleError> {
-        let view = Bcs2View::parse(bytes, 0, bounds)?;
+        Self::open_with_capabilities(bytes, 0, bounds)
+    }
+
+    /// Open a bundle, declaring which packet encodings this consumer can decode.
+    pub fn open_with_capabilities(
+        bytes: &'a [u8],
+        supported_capabilities: u64,
+        bounds: ResourceBounds,
+    ) -> Result<Self, CodecBundleError> {
+        let view = Bcs2View::parse(bytes, supported_capabilities, bounds)?;
         if view.root_kind() != RootKind::Bundle {
             return Err(CodecBundleError::NotBundle);
         }
@@ -433,6 +522,20 @@ pub struct CodecBundleInput<'a> {
     pub packets: &'a [&'a [u8]],
     pub parameters: Vec<CodecParameter>,
     pub profile: CodecProfile,
+    /// What a consumer must be able to do to decode these packets.
+    ///
+    /// Zero for baseline kernels, whose packets any reader of the profile can
+    /// decode. The optimum tier sets [`CAP_LML_OPTIMUM_V1`]: it produces the
+    /// same semantics as baseline LML from a materially different bitstream, so
+    /// it is the same [`CodecProfile`] with a distinct
+    /// [`CodecImplementation::kernel_id`] rather than a profile of its own --
+    /// profiles answer "what kind of artifact is this", capabilities answer
+    /// "can this reader decode it at all".
+    ///
+    /// Applies to the packet frames only. The canonical-semantics frame is
+    /// never encoded, because a reader must be able to learn what an artifact
+    /// describes even when it cannot decode the signal.
+    pub required_capabilities: u64,
 }
 
 pub fn encode_codec_bundle(
@@ -445,6 +548,7 @@ pub fn encode_codec_bundle(
         implementation,
         model_provenance,
         packets,
+        required_capabilities,
         mut parameters,
         profile,
     } = input;
@@ -491,8 +595,12 @@ pub fn encode_codec_bundle(
     catalog.validate()?;
     let canonical_catalog = catalog.canonical_json()?;
     let root = catalog.content_id()?;
-    let frames = core::iter::once(canonical_semantics).chain(packets.iter().copied());
-    let bytes = super::wire::encode_raw_root(
+    let frames = core::iter::once((canonical_semantics, 0_u64)).chain(
+        packets
+            .iter()
+            .map(|packet| (*packet, required_capabilities)),
+    );
+    let bytes = super::wire::encode_raw_root_with_capabilities(
         RootKind::Bundle,
         profile.bcs2_profile(),
         root,
@@ -500,7 +608,7 @@ pub fn encode_codec_bundle(
         frames,
         bounds,
     )?;
-    CodecBundleView::open(&bytes, bounds)?;
+    CodecBundleView::open_with_capabilities(&bytes, required_capabilities, bounds)?;
     Ok(bytes)
 }
 
@@ -793,6 +901,7 @@ mod tests {
     fn encode_lml(semantics: &[u8], packets: &[&[u8]]) -> Vec<u8> {
         encode_codec_bundle(
             CodecBundleInput {
+                required_capabilities: 0,
                 canonical_semantics: semantics,
                 fidelity: exact_fidelity(),
                 implementation: implementation(),
@@ -882,6 +991,7 @@ mod tests {
         assert_eq!(
             encode_codec_bundle(
                 CodecBundleInput {
+                    required_capabilities: 0,
                     canonical_semantics: &semantics,
                     fidelity: CodecFidelity {
                         bound: Some(CodecParameterValue::Rational {
@@ -1109,6 +1219,7 @@ mod tests {
         assert!(matches!(
             encode_codec_bundle(
                 CodecBundleInput {
+                    required_capabilities: 0,
                     canonical_semantics: &semantics,
                     fidelity: CodecFidelity {
                         bound: None,

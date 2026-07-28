@@ -41,7 +41,8 @@ pub use blob::{encode_blob, BlobView};
 pub use codec::{
     encode_codec_bundle, CodecBundleCatalog, CodecBundleError, CodecBundleInput, CodecBundleView,
     CodecFidelity, CodecFidelityKind, CodecImplementation, CodecParameter, CodecParameterValue,
-    CodecProfile, ModelProvenance, PccpStatus, CAP_LML_OPTIMUM_V1, CAP_ZSTD,
+    CodecProfile, ModelProvenance, PccpStatus, CAP_LAMQUANT_BFP_V1, CAP_LMA_SYNTHETIC_REEMIT,
+    CAP_LML_ARITHMETIC_V1, CAP_LML_LOSSLESS_V1, CAP_LML_OPTIMUM_V1, CAP_LMQC_LEGACY_V1, CAP_ZSTD,
 };
 
 #[cfg(feature = "alloc")]
@@ -51,7 +52,10 @@ pub use pack::repack_with_frames;
 pub use payload::{encode_dataset_with_payloads, encode_semantic_bundle, SemanticPayloadFrame};
 
 #[cfg(feature = "alloc")]
-pub use privacy::{decrypt_bcs2, encrypt_bcs2, EncryptedEnvelopeView, CAP_XCHACHA20_POLY1305};
+pub use privacy::{
+    decrypt_bcs2, encrypt_bcs2, encrypt_bcs2_with_kdf, EncryptedEnvelopeView,
+    CAP_XCHACHA20_POLY1305, KDF_ALGORITHM_ARGON2ID,
+};
 
 #[cfg(feature = "std")]
 pub use restore::{

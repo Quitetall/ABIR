@@ -20,6 +20,7 @@ fn main() {
     let lml_packets: &[&[u8]] = &[b"LML packet header\x00", b"LML packet residual\x01"];
     let lml = encode_codec_bundle(
         CodecBundleInput {
+            required_capabilities: 0,
             canonical_semantics: &semantics,
             fidelity: CodecFidelity {
                 bound: None,
@@ -47,6 +48,7 @@ fn main() {
     let lmq_packets: &[&[u8]] = &[b"LMQ base layer\x00", b"LMQ enhancement layer\x01"];
     let lmq = encode_codec_bundle(
         CodecBundleInput {
+            required_capabilities: 0,
             canonical_semantics: &semantics,
             fidelity: CodecFidelity {
                 bound: Some(CodecParameterValue::Rational {

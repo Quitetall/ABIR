@@ -1,7 +1,7 @@
 use crate::{
     model::expected_payloads, ContentKey, DecisionRecord, DecisionReplayReceipt,
     ReopenedDecisionLog, TrainingError, TrainingLabelPayloadAssociation, TrainingRow,
-    TrainingSnapshot, TrainingSpec, VerifiedTrainingSnapshot,
+    TrainingRowEncoding, TrainingSnapshot, TrainingSpec, VerifiedTrainingSnapshot,
 };
 use abir::{ByteOrder, ElementType, Presence};
 use abir_bcs::{Bcs2View, FrameKind, ResourceBounds, RootKind, StorageContract};
@@ -122,6 +122,26 @@ impl<'a> TrainingRowLease<'a> {
     pub const fn payload_id(self) -> ContentKey {
         self.row.payload
     }
+
+    /// How this row's frame is encoded, if it is.
+    pub const fn encoding(self) -> Option<&'a TrainingRowEncoding> {
+        self.row.encoding.as_ref()
+    }
+
+    /// The row's logical array, or `None` when the frame holds an encoding of it.
+    ///
+    /// Refuses encoded rows rather than returning their stored bytes: every
+    /// caller written before encodings existed reads [`Self::bytes`] as the
+    /// logical array, and handing back block-floating-point mantissas would turn
+    /// a wire extension into silent numerical corruption -- integers read as
+    /// amplitudes, with no error anywhere. Use [`Self::bytes`] plus
+    /// [`Self::encoding`] to consume the stored form deliberately.
+    pub const fn logical_bytes(self) -> Option<&'a [u8]> {
+        match self.row.encoding {
+            Some(_) => None,
+            None => Some(self.bytes),
+        }
+    }
 }
 
 /// A validated host-side view of an immutable BCS2 training bundle.
@@ -133,8 +153,28 @@ pub struct TrainingWindowStore<'a> {
 }
 
 impl<'a> TrainingWindowStore<'a> {
+    /// Open a snapshot whose rows are stored as their logical arrays.
+    ///
+    /// Advertises no capabilities, so a snapshot with encoded rows is refused
+    /// here rather than opened and then misread. That is the correct default:
+    /// every caller written before row encodings existed treats a lent row as
+    /// its logical array, and this keeps that belief true by construction.
     pub fn open(bytes: &'a [u8], bounds: ResourceBounds) -> Result<Self, TrainingError> {
-        let view = Bcs2View::parse(bytes, 0, bounds)?;
+        Self::open_with_capabilities(bytes, 0, bounds)
+    }
+
+    /// Open a snapshot, declaring which row encodings this consumer can handle.
+    ///
+    /// The store never decodes: it lends frame bytes. Passing a capability here
+    /// is the caller asserting that *it* can turn those bytes into values --
+    /// which is why it must be explicit rather than assumed on the store's
+    /// behalf.
+    pub fn open_with_capabilities(
+        bytes: &'a [u8],
+        supported_capabilities: u64,
+        bounds: ResourceBounds,
+    ) -> Result<Self, TrainingError> {
+        let view = Bcs2View::parse(bytes, supported_capabilities, bounds)?;
         if view.root_kind() != RootKind::Bundle {
             return Err(TrainingError::NotBundle);
         }
@@ -171,10 +211,22 @@ impl<'a> TrainingWindowStore<'a> {
             return Err(TrainingError::MissingPayload(missing.content_id()));
         }
         for row in snapshot.rows() {
-            let frame = &view.frames()[frame_index[&row.payload]];
-            if frame.element() != Some(row.element)
-                || u64::try_from(frame.bytes().len()).ok() != Some(row.logical_bytes)
+            // Locate and check the frame against the STORED extent: for an
+            // encoded row the frame holds the encoding, not the logical array.
+            let frame = &view.frames()[frame_index[&row.frame_payload()]];
+            let (element, bytes) = match &row.encoding {
+                Some(encoding) => (encoding.stored_element, encoding.stored_bytes),
+                None => (row.element, row.logical_bytes),
+            };
+            if frame.element() != Some(element)
+                || u64::try_from(frame.bytes().len()).ok() != Some(bytes)
             {
+                return Err(TrainingError::InvalidRowExtent(row.logical_id.content_id()));
+            }
+            // The catalog is bound into the snapshot's content id; the index is
+            // not. Requiring them to agree is what makes an index-only edit of a
+            // capability mask detectable rather than merely wrong.
+            if frame.required_capabilities() != row.required_capabilities() {
                 return Err(TrainingError::InvalidRowExtent(row.logical_id.content_id()));
             }
         }
@@ -251,7 +303,7 @@ impl<'a> TrainingWindowStore<'a> {
             .binary_search_by_key(&logical_id, |row| row.logical_id)
             .ok()
             .map(|index| &self.snapshot.rows()[index])?;
-        let frame = &self.view.frames()[self.frame_index[&row.payload]];
+        let frame = &self.view.frames()[self.frame_index[&row.frame_payload()]];
         Some(TrainingRowLease {
             bytes: frame.bytes(),
             row,
@@ -260,7 +312,7 @@ impl<'a> TrainingWindowStore<'a> {
 
     pub fn rows(&self) -> impl ExactSizeIterator<Item = TrainingRowLease<'_>> {
         self.snapshot.rows().iter().map(|row| {
-            let frame = &self.view.frames()[self.frame_index[&row.payload]];
+            let frame = &self.view.frames()[self.frame_index[&row.frame_payload()]];
             TrainingRowLease {
                 bytes: frame.bytes(),
                 row,

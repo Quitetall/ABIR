@@ -20,8 +20,9 @@
 //! construction rather than by convention.
 
 use abir_bcs::{
-    encode_blob, Bcs2Error, Bcs2View, ResourceBounds, CAP_LML_OPTIMUM_V1, CAP_XCHACHA20_POLY1305,
-    CAP_ZSTD,
+    encode_blob, Bcs2Error, Bcs2View, ResourceBounds, CAP_LAMQUANT_BFP_V1,
+    CAP_LMA_SYNTHETIC_REEMIT, CAP_LML_ARITHMETIC_V1, CAP_LML_LOSSLESS_V1, CAP_LML_OPTIMUM_V1,
+    CAP_LMQC_LEGACY_V1, CAP_XCHACHA20_POLY1305, CAP_ZSTD,
 };
 
 const HEADER_REQUIRED_OFFSET: usize = 24;
@@ -51,7 +52,16 @@ fn set_header_required(bytes: &mut [u8], capabilities: u64) {
 #[test]
 fn capability_registry_bits_are_distinct() {
     // Three transforms sharing a bit would make one silently pass as another.
-    let bits = [CAP_XCHACHA20_POLY1305, CAP_ZSTD, CAP_LML_OPTIMUM_V1];
+    let bits = [
+        CAP_XCHACHA20_POLY1305,
+        CAP_ZSTD,
+        CAP_LML_OPTIMUM_V1,
+        CAP_LML_LOSSLESS_V1,
+        CAP_LMA_SYNTHETIC_REEMIT,
+        CAP_LAMQUANT_BFP_V1,
+        CAP_LML_ARITHMETIC_V1,
+        CAP_LMQC_LEGACY_V1,
+    ];
     for (index, bit) in bits.iter().enumerate() {
         assert_eq!(bit.count_ones(), 1, "capability {index} must be one bit");
         for other in &bits[index + 1..] {

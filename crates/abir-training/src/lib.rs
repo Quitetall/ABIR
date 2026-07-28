@@ -28,7 +28,8 @@ pub use decision::{DecisionLog, DecisionRecord, ReopenedDecisionLog};
 pub use error::TrainingError;
 pub use model::{
     encode_snapshot, ContentKey, TrainingAssociatedPayload, TrainingInput,
-    TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingSnapshot, TrainingSpec,
+    TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingRowEncoding,
+    TrainingSnapshot, TrainingSpec,
 };
 pub use store::{
     DecisionLogReplayState, TrainingLabelPayloadLease, TrainingRowLease, TrainingWindowStore,

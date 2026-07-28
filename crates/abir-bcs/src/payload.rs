@@ -15,17 +15,42 @@ use alloc::{vec, vec::Vec};
 struct SemanticPayload {
     element: ElementType,
     bytes: Vec<u8>,
+    capabilities: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SemanticPayloadFrame<'a> {
     element: ElementType,
     bytes: &'a [u8],
+    capabilities: u64,
 }
 
 impl<'a> SemanticPayloadFrame<'a> {
+    /// A frame whose stored bytes are its logical content.
     pub const fn new(element: ElementType, bytes: &'a [u8]) -> Self {
-        Self { element, bytes }
+        Self {
+            element,
+            bytes,
+            capabilities: 0,
+        }
+    }
+
+    /// A frame holding an encoding of its logical content.
+    ///
+    /// `capabilities` names what a consumer must be able to do to recover the
+    /// logical array — the same registry a forensic capsule's stored forms draw
+    /// on, so a block-floating-point training row and a compressed archive entry
+    /// declare themselves the same way rather than through two mechanisms.
+    ///
+    /// `element` and `bytes` still describe the *stored* frame, because that is
+    /// what the frame's content id is computed over and what the catalog must
+    /// close against. The logical shape lives in the profile's own catalog.
+    pub const fn encoded(element: ElementType, bytes: &'a [u8], capabilities: u64) -> Self {
+        Self {
+            element,
+            bytes,
+            capabilities,
+        }
     }
 
     pub const fn element(self) -> ElementType {
@@ -34,6 +59,10 @@ impl<'a> SemanticPayloadFrame<'a> {
 
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
+    }
+
+    pub const fn capabilities(self) -> u64 {
+        self.capabilities
     }
 
     pub fn content_id(self) -> ContentId {
@@ -59,6 +88,9 @@ pub fn encode_dataset_with_payloads<A: PayloadAccess>(
         let payload = SemanticPayload {
             element: descriptor.element(),
             bytes: lease.bytes().to_vec(),
+            // A dataset payload is always its own logical content; only the
+            // profile-owned bundle path can declare an encoding.
+            capabilities: 0,
         };
         if let Some(previous) = payloads.get(&descriptor.content_id()) {
             if previous.element != payload.element || previous.bytes != payload.bytes {
@@ -110,9 +142,16 @@ pub fn encode_semantic_bundle(
         let payload = SemanticPayload {
             element: frame.element(),
             bytes: frame.bytes().to_vec(),
+            capabilities: frame.capabilities(),
         };
         if let Some(previous) = payloads.get(&content_id) {
-            if previous.element != payload.element || previous.bytes != payload.bytes {
+            // Identical bytes under different capability masks is a
+            // contradiction, not a duplicate: one of the two statements about
+            // how to read them must be false.
+            if previous.element != payload.element
+                || previous.bytes != payload.bytes
+                || previous.capabilities != payload.capabilities
+            {
                 return Err(Bcs2Error::DuplicateFrame);
             }
         } else {
@@ -212,11 +251,19 @@ fn repack_with_payloads(
         put_u64(&mut packed, entry + 72, payload.bytes.len() as u64);
         packed[entry + 80] = FrameKind::SemanticPayload as u8;
         packed[entry + 81] = element_wire_code(payload.element);
+        put_u64(&mut packed, entry + 82, payload.capabilities);
         packed[entry + 96..entry + 128].copy_from_slice(blake3::hash(&payload.bytes).as_bytes());
         frame_offset = frame_end;
     }
 
-    let verified = Bcs2View::parse(&packed, 0, accepted_bounds)?;
+    // The envelope's required mask is the union, so a reader is refused once at
+    // the header rather than mid-parse.
+    let union_capabilities = payloads
+        .values()
+        .fold(0_u64, |union, payload| union | payload.capabilities);
+    put_u64(&mut packed, 24, union_capabilities);
+
+    let verified = Bcs2View::parse(&packed, union_capabilities, accepted_bounds)?;
     if verified.root_content_id() != root.root_content_id()
         || verified.frames().len() != payloads.len()
         || verified
