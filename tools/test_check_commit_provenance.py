@@ -79,6 +79,27 @@ class CorrectionTests(unittest.TestCase):
                     {"corrections_path": PROVENANCE.CORRECTIONS_PATH},
                 )
 
+    def test_loader_accepts_role_only_correction_without_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            correction = {
+                "commit": "a" * 40,
+                "message_sha256": "b" * 64,
+                "reason": "Restore a role omitted from an existing actor declaration.",
+                "actors": [{"id": "ai:test", "add_roles": ["generator"]}],
+            }
+            path = Path(directory) / PROVENANCE.CORRECTIONS_PATH
+            path.write_text(
+                json.dumps({"schema_version": 2, "corrections": [correction]}),
+                encoding="utf-8",
+            )
+
+            loaded = PROVENANCE._load_corrections(
+                Path(directory),
+                {"corrections_path": PROVENANCE.CORRECTIONS_PATH},
+            )
+
+            self.assertEqual(loaded, {"a" * 40: correction})
+
     def test_role_only_correction_remains_supported(self) -> None:
         message = (
             "fix: generated output\n\n"

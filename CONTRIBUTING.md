@@ -16,6 +16,9 @@ Use AGPL-3.0-or-later terms.
   must enumerate contemporaneous attribution evidence, state why that evidence
   supports the correction, and receive ordinary review plus per-file provenance
   in the correcting commit.
+  `.provenance-corrections.json` and its validator are the trust anchor for
+  append-only attestations; changes to either receive the same review and
+  provenance enforcement as implementation code.
 - Per-file roles are `author`, `editor`, `formatter`, `generator`, `tester`,
   `integrator`, and `conflict-resolver`. `tester` records test or evidence work
   materially performed on that path; generated artifacts still require an
