@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "corrections": [
     {
       "commit": "ed04e58ca4d05ba9ce6bb1daf2931e533b88adbd",
@@ -9,6 +9,172 @@
         {
           "id": "ai:openai-codex-root",
           "add_roles": ["generator"]
+        }
+      ]
+    },
+    {
+      "commit": "0bf29ae42c2881d43312fc5defaaf91d0147f8b8",
+      "message_sha256": "579a609445a69659422f154f72f62eebcb8a0c1be8f11b999fc7e53e3768fb1d",
+      "reason": "The commit declared its AI author and attributed the Rust producer pair, but omitted the four byte-identical realm copies and their receipts from the per-file trailer block.",
+      "evidence": [
+        "The original message declares ai:anthropic-claude-code-opus with the author role.",
+        "The original message states that one reviewed source produced five byte-identical named realm producers and their committed receipts.",
+        "The commit diff adds exactly those five producer names and five corresponding receipts."
+      ],
+      "add_file_contributions": [
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/blut-durable.py",
+          "summary": "Add the BLUT durable realm conformance producer copy."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/host-stream.py",
+          "summary": "Add the host stream realm conformance producer copy."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/mcu-aot.py",
+          "summary": "Add the MCU AOT realm conformance producer copy."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/python.py",
+          "summary": "Add the Python realm conformance producer copy."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/receipts/blut-durable.json",
+          "summary": "Add the deterministic BLUT durable conformance receipt."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/receipts/host-stream.json",
+          "summary": "Add the deterministic host stream conformance receipt."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/receipts/mcu-aot.json",
+          "summary": "Add the deterministic MCU AOT conformance receipt."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "tools/scripts/adr0139_producers/core/receipts/python.json",
+          "summary": "Add the deterministic Python conformance receipt."
+        }
+      ]
+    },
+    {
+      "commit": "5a9473c3d972a76bc285c52c2bf612b1660bad21",
+      "message_sha256": "4ba0e2fe8d7958656b846ae415d8b5d52b7cf8428206926538359103278fe08b",
+      "reason": "The commit declared its AI author and attributed the Rust producer fix, but omitted the four synchronized realm copies from the per-file trailer block.",
+      "evidence": [
+        "The original message declares ai:anthropic-claude-code-opus with the author role.",
+        "The original message states that the computed-write fix re-synchronizes all five byte-identical realm copies.",
+        "The commit diff applies the same change to the five named producer files."
+      ],
+      "add_file_contributions": [
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "tools/scripts/adr0139_producers/core/blut-durable.py",
+          "summary": "Synchronize the computed-write fix into the BLUT durable producer."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "tools/scripts/adr0139_producers/core/host-stream.py",
+          "summary": "Synchronize the computed-write fix into the host stream producer."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "tools/scripts/adr0139_producers/core/mcu-aot.py",
+          "summary": "Synchronize the computed-write fix into the MCU AOT producer."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "tools/scripts/adr0139_producers/core/python.py",
+          "summary": "Synchronize the computed-write fix into the Python producer."
+        }
+      ]
+    },
+    {
+      "commit": "6a5f9ad40554c98ff9b8c8d7d9a9bc8c66d014dc",
+      "message_sha256": "937bad57ea8098b480aef10e54105453eeed40babbebf6417bdf66b810952918",
+      "reason": "The commit body retained the AI actor identifier and detailed implementation evidence, but omitted machine-readable actor and per-file trailers for the eight changed paths.",
+      "evidence": [
+        "The original message ends with the contemporaneous actor marker ai:anthropic-claude-code-opus.",
+        "The original message describes the stored-form implementation and its four test-backed properties in detail.",
+        "The commit diff is limited to the described forensic implementation, examples, tests, and conformance-vector generator."
+      ],
+      "add_ai_actors": [
+        {
+          "agent": "opus-session",
+          "id": "ai:anthropic-claude-code-opus",
+          "model": "claude-opus-4-8",
+          "product": "claude-code",
+          "provider": "anthropic",
+          "roles": ["author"]
+        }
+      ],
+      "add_file_contributions": [
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "crates/abir-bcs/examples/forensic_archive_roundtrip.rs",
+          "summary": "Update forensic archive round-trip behavior for transformed stored content."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "crates/abir-bcs/examples/forensic_capsule_probe.rs",
+          "summary": "Update forensic capsule inspection for explicit stored forms."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "crates/abir-bcs/src/forensic.rs",
+          "summary": "Add identity-preserving transformed content storage semantics."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "crates/abir-bcs/src/lib.rs",
+          "summary": "Export forensic stored-form semantics through the BCS2 crate."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "crates/abir-bcs/tests/forensic.rs",
+          "summary": "Extend forensic capsule tests for transformed stored content."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "add",
+          "path": "crates/abir-bcs/tests/forensic_stored_form.rs",
+          "summary": "Add focused stored-form identity and capability regressions."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "crates/abir-bcs/tests/restore.rs",
+          "summary": "Extend restoration tests for transformed forensic entries."
+        },
+        {
+          "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}],
+          "operation": "modify",
+          "path": "crates/abir-conformance/src/bin/generate_bcs2_vectors.rs",
+          "summary": "Include forensic stored forms in deterministic BCS2 vectors."
         }
       ]
     }

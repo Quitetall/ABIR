@@ -7,11 +7,15 @@ Use AGPL-3.0-or-later terms.
 - Keep changes scoped to this repository.
 - Ensure commit messages and history include provenance where enforced by this
   repository policy (`.provenance-policy.json`).
-- Published commits are never rewritten merely to repair a provenance typo.
-  `.provenance-corrections.json` may append a hash-bound correction that adds a
-  missing role to an already-declared actor. Corrections cannot add actors,
-  files, operations, summaries, or generated commands, and require ordinary
-  review and per-file provenance in the correcting commit.
+- Published commits are never rewritten merely to repair provenance.
+  `.provenance-corrections.json` may append a correction bound to the exact
+  original commit message. A correction may add a missing role or append
+  complete actor and per-file records when the original commit omitted them.
+  Appended records pass the same schema, changed-path, operation, actor-role,
+  and generated-command validation as native commit trailers. Such corrections
+  must enumerate contemporaneous attribution evidence, state why that evidence
+  supports the correction, and receive ordinary review plus per-file provenance
+  in the correcting commit.
 - Per-file roles are `author`, `editor`, `formatter`, `generator`, `tester`,
   `integrator`, and `conflict-resolver`. `tester` records test or evidence work
   materially performed on that path; generated artifacts still require an
