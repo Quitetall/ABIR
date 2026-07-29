@@ -5,7 +5,7 @@
 
 mod semantic_matrix;
 
-pub use semantic_matrix::semantic_matrix_dataset;
+pub use semantic_matrix::{semantic_matrix_construction_free_dataset, semantic_matrix_dataset};
 
 use abir::{
     Atom, AtomTag, ByteOrder, Clock, ClockTag, ConceptId, ContentId, DatasetDraft, DatasetTag,

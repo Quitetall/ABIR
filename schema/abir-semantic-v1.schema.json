@@ -82,6 +82,18 @@
         }
       }
     },
+    "nonzero_rational": {
+      "allOf": [
+        { "$ref": "#/$defs/rational" },
+        {
+          "properties": {
+            "$rational": {
+              "prefixItems": [{ "not": { "const": "0" } }]
+            }
+          }
+        }
+      ]
+    },
     "exact": {
       "oneOf": [
         {
@@ -359,8 +371,34 @@
       "properties": {
         "id": { "$ref": "#/$defs/object_id" },
         "channels": { "type": "array", "items": { "$ref": "#/$defs/channel" } },
-        "reference": { "enum": ["absolute", "common", "differential", "unknown"] }
-      }
+        "reference": { "enum": ["absolute", "common", "differential", "unknown"] },
+        "construction": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source", "coefficient"],
+              "properties": {
+                "source": { "$ref": "#/$defs/object_id" },
+                "coefficient": { "$ref": "#/$defs/nonzero_rational" }
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "reference": { "const": "unknown" } },
+            "required": ["reference"]
+          },
+          "then": { "not": { "required": ["construction"] } }
+        }
+      ]
     },
     "event": {
       "type": "object", "additionalProperties": false,

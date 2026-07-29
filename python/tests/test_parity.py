@@ -31,7 +31,7 @@ def test_python_preserves_full_rust_semantic_matrix():
         ROOT / "fixtures/valid/semantic-matrix.content-id"
     ).read_text().strip()
     assert dataset.atom_count == 17
-    assert dataset.semantic_family_counts == (7, 1, 1, 1, 1, 1)
+    assert dataset.semantic_family_counts == (10, 1, 1, 1, 1, 1)
 
 
 def test_python_deserializes_full_semantic_matrix_without_semantic_drift():
@@ -59,6 +59,20 @@ def test_python_deserializes_full_semantic_matrix_without_semantic_drift():
     assert dataset.canonical_json() == canonical
     assert dataset.content_id() == expected_content_id
     assert dataset.atom_count == 17
+    assert dataset.semantic_family_counts == (10, 1, 1, 1, 1, 1)
+
+
+def test_python_preserves_construction_free_compatibility_golden():
+    canonical = (
+        ROOT / "fixtures/valid/semantic-matrix-construction-free-v1.json"
+    ).read_bytes()
+    expected_content_id = (
+        ROOT / "fixtures/valid/semantic-matrix-construction-free-v1.content-id"
+    ).read_text().strip()
+    dataset = abir.Dataset.from_canonical_json(canonical)
+
+    assert dataset.canonical_json() == canonical
+    assert dataset.content_id() == expected_content_id
     assert dataset.semantic_family_counts == (7, 1, 1, 1, 1, 1)
 
 
@@ -104,7 +118,11 @@ def test_python_builder_uses_rust_validation_boundary():
 def test_rust_fixture_conforms_to_normative_json_schema():
     schema = json.loads((ROOT / "schema/abir-semantic-v1.schema.json").read_text())
     jsonschema.Draft202012Validator.check_schema(schema)
-    for name in ["canonical-tensor.json", "semantic-matrix.json"]:
+    for name in [
+        "canonical-tensor.json",
+        "semantic-matrix.json",
+        "semantic-matrix-construction-free-v1.json",
+    ]:
         fixture = json.loads((ROOT / "fixtures/valid" / name).read_text())
         jsonschema.validate(fixture, schema)
 
@@ -145,6 +163,16 @@ def test_schema_rejects_contradictory_atom_fields_and_empty_rational():
 
     fixture = json.loads((ROOT / "fixtures/valid/canonical-tensor.json").read_text())
     fixture["atoms"][0]["payload"]["logical_bytes"] = 2**64
+    assert list(validator.iter_errors(fixture))
+
+    fixture = json.loads((ROOT / "fixtures/valid/semantic-matrix.json").read_text())
+    fixture["channel_bases"][0]["reference"] = "unknown"
+    assert list(validator.iter_errors(fixture))
+
+    fixture = json.loads((ROOT / "fixtures/valid/semantic-matrix.json").read_text())
+    fixture["channel_bases"][0]["construction"][0][0]["coefficient"] = {
+        "$rational": ["0", "1"]
+    }
     assert list(validator.iter_errors(fixture))
 
 

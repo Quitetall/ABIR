@@ -330,11 +330,37 @@ fn dataset_value(dataset: &AbirDataset, projection: Projection) -> Value {
             bases
                 .into_iter()
                 .map(|basis| {
-                    json!({
+                    let mut value = json!({
                         "id": basis.id().to_string(),
                         "reference": reference_name(basis.reference()),
                         "channels": basis.channels().iter().map(channel_value).collect::<Vec<_>>()
-                    })
+                    });
+                    if let Some(vectors) = basis.construction() {
+                        let construction = vectors
+                            .iter()
+                            .map(|vector| {
+                                Value::Array(
+                                    vector
+                                        .terms()
+                                        .iter()
+                                        .map(|term| {
+                                            json!({
+                                                "source": term.source().to_string(),
+                                                "coefficient": exact_value(
+                                                    ExactNumber::Rational(term.coefficient())
+                                                )
+                                            })
+                                        })
+                                        .collect(),
+                                )
+                            })
+                            .collect();
+                        value
+                            .as_object_mut()
+                            .expect("basis object")
+                            .insert("construction".into(), Value::Array(construction));
+                    }
+                    value
                 })
                 .collect(),
         ),

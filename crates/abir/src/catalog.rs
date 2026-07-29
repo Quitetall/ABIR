@@ -542,11 +542,83 @@ pub enum ReferenceKind {
     Unknown,
 }
 
+/// One exact input contribution to an output channel basis vector.
+///
+/// A channel value is the weighted sum of its vector's source channel
+/// observations. Terms are canonicalized by typed channel identity so two
+/// observations carrying the same concept remain distinct.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChannelBasisTerm {
+    source: ObjectId<ChannelTag>,
+    coefficient: Rational,
+}
+
+impl ChannelBasisTerm {
+    pub fn new(
+        source: ObjectId<ChannelTag>,
+        coefficient: Rational,
+    ) -> Result<Self, ChannelBasisConstructionError> {
+        if coefficient.is_zero() {
+            return Err(ChannelBasisConstructionError::ZeroCoefficient);
+        }
+        Ok(Self {
+            source,
+            coefficient,
+        })
+    }
+
+    pub const fn source(&self) -> ObjectId<ChannelTag> {
+        self.source
+    }
+
+    pub const fn coefficient(&self) -> Rational {
+        self.coefficient
+    }
+}
+
+/// Exact weighted construction of one output channel.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChannelBasisVector {
+    terms: Vec<ChannelBasisTerm>,
+}
+
+impl ChannelBasisVector {
+    pub fn new(mut terms: Vec<ChannelBasisTerm>) -> Result<Self, ChannelBasisConstructionError> {
+        if terms.is_empty() {
+            return Err(ChannelBasisConstructionError::EmptyVector);
+        }
+        terms.sort_by_key(ChannelBasisTerm::source);
+        if terms
+            .windows(2)
+            .any(|pair| pair[0].source == pair[1].source)
+        {
+            return Err(ChannelBasisConstructionError::DuplicateSource);
+        }
+        Ok(Self { terms })
+    }
+
+    pub fn terms(&self) -> &[ChannelBasisTerm] {
+        &self.terms
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ChannelBasisConstructionError {
+    EmptyConstruction,
+    EmptyVector,
+    ZeroCoefficient,
+    DuplicateSource,
+    RowCountMismatch { expected: usize, actual: usize },
+    UnknownReference,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChannelBasis {
     id: ObjectId<ChannelBasisTag>,
     channels: Vec<ChannelSpec>,
     reference: ReferenceKind,
+    construction: Option<Vec<ChannelBasisVector>>,
 }
 
 impl ChannelBasis {
@@ -559,7 +631,32 @@ impl ChannelBasis {
             id,
             channels,
             reference,
+            construction: None,
         }
+    }
+
+    /// Attach the exact weighted construction for every output channel.
+    ///
+    /// Legacy imports may remain construction-free, but callers requiring an
+    /// exact reference or montage can fail closed on [`Self::construction`].
+    pub fn with_construction(
+        mut self,
+        construction: Vec<ChannelBasisVector>,
+    ) -> Result<Self, ChannelBasisConstructionError> {
+        if construction.is_empty() {
+            return Err(ChannelBasisConstructionError::EmptyConstruction);
+        }
+        if self.reference == ReferenceKind::Unknown {
+            return Err(ChannelBasisConstructionError::UnknownReference);
+        }
+        if construction.len() != self.channels.len() {
+            return Err(ChannelBasisConstructionError::RowCountMismatch {
+                expected: self.channels.len(),
+                actual: construction.len(),
+            });
+        }
+        self.construction = Some(construction);
+        Ok(self)
     }
 
     pub const fn id(&self) -> ObjectId<ChannelBasisTag> {
@@ -570,6 +667,9 @@ impl ChannelBasis {
     }
     pub const fn reference(&self) -> ReferenceKind {
         self.reference
+    }
+    pub fn construction(&self) -> Option<&[ChannelBasisVector]> {
+        self.construction.as_deref()
     }
 }
 

@@ -4,6 +4,7 @@
 |---|---|---|
 | Add namespaced modality or concept | Preserve as unknown | Compatible |
 | Add optional metadata outside logical identity | Preserve when possible | Compatible |
+| Materialize the normative weighted `ChannelBasis` construction | Construction-free documents retain identity; older readers reject constructed documents. Frozen regression pair: `fixtures/valid/semantic-matrix-construction-free-v1.{json,content-id}` | Corrective v1 amendment before stable release |
 | Add registry alias without changing canonical identifier | Resolve to canonical identifier | Compatible |
 | Add atom kind or exact-number tag | Reject under v1 | New semantic major |
 | Change canonicalization or hash domain | Reject mixed identity | New semantic major |
