@@ -37,13 +37,22 @@ fn full_semantic_matrix_validates() {
     let basis_id = id::<ChannelBasisTag>(6);
     let policy_id = id::<PolicyTag>(7);
     let atom_ids: Vec<_> = (10_u8..20).map(id::<AtomTag>).collect();
-
     let mut transform = [ExactNumber::Integer(0); 16];
     for diagonal in [0_usize, 5, 10, 15] {
         transform[diagonal] = ExactNumber::Integer(1);
     }
 
     let mut draft = DatasetDraft::new(id::<DatasetTag>(1));
+    for (channel_id, concept) in [
+        (40, "eeg:electrode/fp1"),
+        (41, "eeg:electrode/fp2"),
+        (42, "eeg:electrode/a1"),
+    ] {
+        draft.add_channel(Channel::new(
+            id::<ChannelTag>(channel_id),
+            ConceptId::new(concept).unwrap(),
+        ));
+    }
     draft.add_recording(Recording::new(recording_id, vec![stream_id]));
     draft.add_stream(Stream::new(
         stream_id,
@@ -69,17 +78,32 @@ fn full_semantic_matrix_validates() {
         Some(transform),
         Rational::new(1, 1_000).unwrap(),
     ));
-    draft.add_channel_basis(ChannelBasis::new(
-        basis_id,
-        vec![
-            ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap())
-                .with_coordinate_frame(frame_id)
-                .with_source_key(SourceKey::new("legacy.channel-label", "Fp1-Ref").unwrap()),
-            ChannelSpec::new(ConceptId::new("eeg:channel/fp2").unwrap())
-                .with_coordinate_frame(frame_id),
-        ],
-        ReferenceKind::Differential,
-    ));
+    draft.add_channel_basis(
+        ChannelBasis::new(
+            basis_id,
+            vec![
+                ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap())
+                    .with_coordinate_frame(frame_id)
+                    .with_source_key(SourceKey::new("legacy.channel-label", "Fp1-Ref").unwrap()),
+                ChannelSpec::new(ConceptId::new("eeg:channel/fp2").unwrap())
+                    .with_coordinate_frame(frame_id),
+            ],
+            ReferenceKind::Differential,
+        )
+        .with_construction(vec![
+            ChannelBasisVector::new(vec![
+                ChannelBasisTerm::new(id::<ChannelTag>(40), Rational::new(1, 1).unwrap()).unwrap(),
+                ChannelBasisTerm::new(id::<ChannelTag>(42), Rational::new(-1, 1).unwrap()).unwrap(),
+            ])
+            .unwrap(),
+            ChannelBasisVector::new(vec![
+                ChannelBasisTerm::new(id::<ChannelTag>(41), Rational::new(1, 1).unwrap()).unwrap(),
+                ChannelBasisTerm::new(id::<ChannelTag>(42), Rational::new(-1, 1).unwrap()).unwrap(),
+            ])
+            .unwrap(),
+        ])
+        .unwrap(),
+    );
     draft.add_policy(Policy::new(
         policy_id,
         None,

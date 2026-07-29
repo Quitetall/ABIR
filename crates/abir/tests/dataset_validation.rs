@@ -1,8 +1,10 @@
 use abir::{
-    Atom, AtomTag, ByteOrder, Calibration, ChannelBasis, ChannelBasisTag, ChannelSpec, Clock,
-    ClockTag, ConceptId, ContentId, CoordinateFrame, CoordinateFrameTag, DatasetDraft, DatasetTag,
-    Derivation, DerivationTag, ElementType, FailureCode, Layout, ObjectId, PayloadDescriptor,
-    Policy, PolicyTag, Presence, Proof, ProofTag, Rational, Recording, RecordingTag, ReferenceKind,
+    canonical_debug_json, interchange_content_id, parse_canonical_dataset, Atom, AtomTag,
+    ByteOrder, Calibration, Channel, ChannelBasis, ChannelBasisConstructionError, ChannelBasisTag,
+    ChannelBasisTerm, ChannelBasisVector, ChannelSpec, ChannelTag, Clock, ClockTag, ConceptId,
+    ContentId, CoordinateFrame, CoordinateFrameTag, DatasetDraft, DatasetTag, Derivation,
+    DerivationTag, ElementType, FailureCode, Layout, ObjectId, PayloadDescriptor, Policy,
+    PolicyTag, Presence, Proof, ProofTag, Rational, Recording, RecordingTag, ReferenceKind,
     SemanticRef, SignalBlock, Stream, StreamTag, Table, TableColumn, TemporalTable, TimeAxis,
     TimeSegment, ValidationLimits,
 };
@@ -11,7 +13,7 @@ fn id<T>(value: u8) -> ObjectId<T> {
     ObjectId::from_bytes([value; 16])
 }
 
-fn eeg_dataset() -> DatasetDraft {
+fn eeg_dataset_with_basis(basis: Option<ChannelBasis>) -> DatasetDraft {
     let recording_id = id::<RecordingTag>(2);
     let stream_id = id::<StreamTag>(3);
     let clock_id = id::<ClockTag>(4);
@@ -68,14 +70,16 @@ fn eeg_dataset() -> DatasetDraft {
         Rational::new(1, 1).unwrap(),
         Rational::new(1, 1_000_000).unwrap(),
     ));
-    draft.add_channel_basis(ChannelBasis::new(
-        basis_id,
-        vec![
-            ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap()),
-            ChannelSpec::new(ConceptId::new("eeg:channel/fp2").unwrap()),
-        ],
-        ReferenceKind::Common,
-    ));
+    draft.add_channel_basis(basis.unwrap_or_else(|| {
+        ChannelBasis::new(
+            basis_id,
+            vec![
+                ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap()),
+                ChannelSpec::new(ConceptId::new("eeg:channel/fp2").unwrap()),
+            ],
+            ReferenceKind::Common,
+        )
+    }));
     draft.add_atom(Atom::SignalBlock(SignalBlock::new(
         atom_id,
         Presence::Present,
@@ -84,6 +88,10 @@ fn eeg_dataset() -> DatasetDraft {
         Some(calibration),
     )));
     draft
+}
+
+fn eeg_dataset() -> DatasetDraft {
+    eeg_dataset_with_basis(None)
 }
 
 #[test]
@@ -95,6 +103,185 @@ fn valid_mixed_rate_dataset_becomes_immutable_root() {
     assert_eq!(
         dataset.payload_content_ids(),
         vec![ContentId::from_bytes([9; 32])]
+    );
+}
+
+fn weighted_basis_dataset(
+    reference_source: u8,
+    reverse_terms: bool,
+    coefficient: i128,
+) -> abir::AbirDataset {
+    let outputs = [id::<ChannelTag>(40), id::<ChannelTag>(41)];
+    let vectors = outputs
+        .into_iter()
+        .map(|output| {
+            let mut terms = vec![
+                ChannelBasisTerm::new(output, Rational::new(coefficient, 1).unwrap()).unwrap(),
+                ChannelBasisTerm::new(
+                    id::<ChannelTag>(reference_source),
+                    Rational::new(-coefficient, 1).unwrap(),
+                )
+                .unwrap(),
+            ];
+            if reverse_terms {
+                terms.reverse();
+            }
+            ChannelBasisVector::new(terms).unwrap()
+        })
+        .collect();
+    let basis = ChannelBasis::new(
+        id::<ChannelBasisTag>(5),
+        vec![
+            ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap()),
+            ChannelSpec::new(ConceptId::new("eeg:channel/fp2").unwrap()),
+        ],
+        ReferenceKind::Common,
+    )
+    .with_construction(vectors)
+    .unwrap();
+    let mut draft = eeg_dataset_with_basis(Some(basis));
+    draft.add_channel(Channel::new(
+        id::<ChannelTag>(40),
+        ConceptId::new("eeg:electrode/fp1").unwrap(),
+    ));
+    draft.add_channel(Channel::new(
+        id::<ChannelTag>(41),
+        ConceptId::new("eeg:electrode/fp2").unwrap(),
+    ));
+    draft.add_channel(Channel::new(
+        id::<ChannelTag>(reference_source),
+        ConceptId::new("eeg:electrode/reference").unwrap(),
+    ));
+    draft.validate(ValidationLimits::default()).unwrap()
+}
+
+#[test]
+fn weighted_channel_basis_is_exact_canonical_and_round_trips() {
+    let a1 = weighted_basis_dataset(42, false, 1);
+    let same_reordered = weighted_basis_dataset(42, true, 1);
+    let changed_coefficient = weighted_basis_dataset(42, false, 2);
+    let cz = weighted_basis_dataset(43, false, 1);
+
+    assert_eq!(
+        interchange_content_id(&a1).unwrap(),
+        interchange_content_id(&same_reordered).unwrap()
+    );
+    assert_ne!(
+        interchange_content_id(&a1).unwrap(),
+        interchange_content_id(&cz).unwrap()
+    );
+    assert_ne!(
+        interchange_content_id(&a1).unwrap(),
+        interchange_content_id(&changed_coefficient).unwrap()
+    );
+    let canonical = canonical_debug_json(&a1).unwrap();
+    let parsed = parse_canonical_dataset(&canonical).unwrap();
+    assert_eq!(canonical_debug_json(&parsed).unwrap(), canonical);
+    assert_eq!(
+        parsed.channel_bases()[0].construction().unwrap()[0].terms()[0]
+            .source()
+            .to_bytes(),
+        id::<ChannelTag>(40).to_bytes()
+    );
+}
+
+#[test]
+fn malformed_weighted_channel_basis_is_unconstructible() {
+    let source = id::<ChannelTag>(70);
+    assert_eq!(
+        ChannelBasisVector::new(Vec::new()),
+        Err(ChannelBasisConstructionError::EmptyVector)
+    );
+    assert_eq!(
+        ChannelBasis::new(
+            id::<ChannelBasisTag>(89),
+            Vec::new(),
+            ReferenceKind::Absolute,
+        )
+        .with_construction(Vec::new()),
+        Err(ChannelBasisConstructionError::EmptyConstruction)
+    );
+    assert_eq!(
+        ChannelBasisTerm::new(source, Rational::new(0, 1).unwrap()),
+        Err(ChannelBasisConstructionError::ZeroCoefficient)
+    );
+    let term = ChannelBasisTerm::new(source, Rational::new(1, 1).unwrap()).unwrap();
+    assert_eq!(
+        ChannelBasisVector::new(vec![term, term]),
+        Err(ChannelBasisConstructionError::DuplicateSource)
+    );
+    let one_vector = ChannelBasisVector::new(vec![ChannelBasisTerm::new(
+        id::<ChannelTag>(71),
+        Rational::new(1, 1).unwrap(),
+    )
+    .unwrap()])
+    .unwrap();
+    assert_eq!(
+        ChannelBasis::new(
+            id::<ChannelBasisTag>(88),
+            vec![
+                ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap()),
+                ChannelSpec::new(ConceptId::new("eeg:channel/fp2").unwrap()),
+            ],
+            ReferenceKind::Absolute,
+        )
+        .with_construction(vec![one_vector]),
+        Err(ChannelBasisConstructionError::RowCountMismatch {
+            expected: 2,
+            actual: 1,
+        })
+    );
+    assert_eq!(
+        ChannelBasis::new(
+            id::<ChannelBasisTag>(90),
+            vec![ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap())],
+            ReferenceKind::Unknown,
+        )
+        .with_construction(vec![ChannelBasisVector::new(vec![ChannelBasisTerm::new(
+            id::<ChannelTag>(72),
+            Rational::new(1, 1).unwrap(),
+        )
+        .unwrap(),])
+        .unwrap()]),
+        Err(ChannelBasisConstructionError::UnknownReference)
+    );
+}
+
+#[test]
+fn weighted_basis_sources_are_distinct_channel_observations() {
+    let first = ChannelBasisTerm::new(id::<ChannelTag>(91), Rational::new(1, 1).unwrap()).unwrap();
+    let second = ChannelBasisTerm::new(id::<ChannelTag>(92), Rational::new(1, 1).unwrap()).unwrap();
+
+    assert!(ChannelBasisVector::new(vec![first, second]).is_ok());
+}
+
+#[test]
+fn weighted_basis_rejects_unresolved_source_channel() {
+    let basis = ChannelBasis::new(
+        id::<ChannelBasisTag>(5),
+        vec![ChannelSpec::new(ConceptId::new("eeg:channel/fp1").unwrap())],
+        ReferenceKind::Absolute,
+    )
+    .with_construction(vec![ChannelBasisVector::new(vec![ChannelBasisTerm::new(
+        id::<ChannelTag>(99),
+        Rational::new(1, 1).unwrap(),
+    )
+    .unwrap()])
+    .unwrap()])
+    .unwrap();
+
+    let report = eeg_dataset_with_basis(Some(basis))
+        .validate(ValidationLimits::default())
+        .expect_err("unresolved weighted-basis source must fail closed");
+    let failure = report
+        .failures()
+        .iter()
+        .find(|failure| failure.path() == "channel_bases[0].construction[0][0].source")
+        .expect("source-specific failure");
+    assert_eq!(failure.failure_code(), FailureCode::DanglingReference);
+    assert_eq!(
+        failure.related_object(),
+        Some(id::<ChannelTag>(99).to_bytes())
     );
 }
 

@@ -1,3 +1,6 @@
+pub(crate) const CHANNEL_BASIS_VECTOR_METADATA_BYTES: usize = 24;
+pub(crate) const CHANNEL_BASIS_TERM_METADATA_BYTES: usize = 48;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ValidationLimits {
     pub max_recordings: usize,

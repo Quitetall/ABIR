@@ -1,15 +1,16 @@
 use crate::{
     canonical_debug_json, AbirDataset, AcquisitionTag, Atom, AtomTag, BlobIntegrity, BlobRef,
-    ByteOrder, Calibration, CatalogRecord, ChannelBasis, ChannelBasisTag, ChannelSpec, ChannelTag,
-    Clock, ClockRelation, ClockRelationTag, ClockTag, ConceptDictionaryTag, ConceptId, ContentId,
-    CoordinateFrame, CoordinateFrameTag, DatasetDraft, DatasetTag, DecodedSemantics, Derivation,
-    DerivationTag, DerivedArtifact, DerivedArtifactTag, DeviceTag, ElementType, EncodedBlock,
-    Event, EventTag, ExactNumber, ExecutionRecord, Fidelity, FidelityKind, FrameTransform,
-    FrameTransformTag, Layout, ObjectId, PatientTag, PayloadDescriptor, Policy, PolicyTag,
-    Presence, Proof, ProofTag, Rational, Recording, RecordingTag, ReferenceKind, SemanticAxis,
-    SemanticRef, SemanticTag, SensorTag, SessionTag, SignalBlock, SourceCapsule, SourceKey,
-    SourceRelationship, Stream, StreamTag, SubjectTag, Table, TableColumn, TemporalTable, Tensor,
-    TimeAxis, TimeSegment, ValidationLimits,
+    ByteOrder, Calibration, CatalogRecord, ChannelBasis, ChannelBasisTag, ChannelBasisTerm,
+    ChannelBasisVector, ChannelSpec, ChannelTag, Clock, ClockRelation, ClockRelationTag, ClockTag,
+    ConceptDictionaryTag, ConceptId, ContentId, CoordinateFrame, CoordinateFrameTag, DatasetDraft,
+    DatasetTag, DecodedSemantics, Derivation, DerivationTag, DerivedArtifact, DerivedArtifactTag,
+    DeviceTag, ElementType, EncodedBlock, Event, EventTag, ExactNumber, ExecutionRecord, Fidelity,
+    FidelityKind, FrameTransform, FrameTransformTag, Layout, ObjectId, PatientTag,
+    PayloadDescriptor, Policy, PolicyTag, Presence, Proof, ProofTag, Rational, Recording,
+    RecordingTag, ReferenceKind, SemanticAxis, SemanticRef, SemanticTag, SensorTag, SessionTag,
+    SignalBlock, SourceCapsule, SourceKey, SourceRelationship, Stream, StreamTag, SubjectTag,
+    Table, TableColumn, TemporalTable, Tensor, TimeAxis, TimeSegment, ValidationFailure,
+    ValidationLimits, ValidationReport,
 };
 use alloc::borrow::ToOwned;
 use alloc::format;
@@ -128,6 +129,7 @@ pub fn parse_canonical_dataset_with_limits(
             "expected semantic version 1",
         ));
     }
+    preflight_channel_bases(values(root, "channel_bases")?, limits)?;
     let mut draft = DatasetDraft::new(parse_id(field(root, "dataset_id", "$")?, "$.dataset_id")?);
 
     for (index, value) in values(root, "subjects")?.iter().enumerate() {
@@ -293,14 +295,49 @@ pub fn parse_canonical_dataset_with_limits(
             }
             channels.push(channel);
         }
-        draft.add_channel_basis(ChannelBasis::new(
+        let mut basis = ChannelBasis::new(
             parse_id(field(item, "id", &path)?, &format!("{path}.id"))?,
             channels,
             parse_reference(
                 field(item, "reference", &path)?,
                 &format!("{path}.reference"),
             )?,
-        ));
+        );
+        if let Some(value) = item.get("construction") {
+            if !value.is_null() {
+                let construction_path = format!("{path}.construction");
+                let mut construction = Vec::new();
+                for (vector_index, value) in array(value, &construction_path)?.iter().enumerate() {
+                    let vector_path = format!("{construction_path}[{vector_index}]");
+                    let mut terms = Vec::new();
+                    for (term_index, value) in array(value, &vector_path)?.iter().enumerate() {
+                        let term_path = format!("{vector_path}[{term_index}]");
+                        let term = object(value, &term_path)?;
+                        terms.push(
+                            ChannelBasisTerm::new(
+                                parse_id(
+                                    field(term, "source", &term_path)?,
+                                    &format!("{term_path}.source"),
+                                )?,
+                                rational(
+                                    field(term, "coefficient", &term_path)?,
+                                    &format!("{term_path}.coefficient"),
+                                )?,
+                            )
+                            .map_err(|error| parse_error(&term_path, &format!("{error:?}")))?,
+                        );
+                    }
+                    construction.push(
+                        ChannelBasisVector::new(terms)
+                            .map_err(|error| parse_error(&vector_path, &format!("{error:?}")))?,
+                    );
+                }
+                basis = basis
+                    .with_construction(construction)
+                    .map_err(|error| parse_error(&construction_path, &format!("{error:?}")))?;
+            }
+        }
+        draft.add_channel_basis(basis);
     }
 
     parse_relations(root, &mut draft)?;
@@ -320,6 +357,83 @@ pub fn parse_canonical_dataset_with_limits(
         ));
     }
     Ok(dataset)
+}
+
+fn preflight_channel_bases(bases: &[Value], limits: ValidationLimits) -> ParseResult<()> {
+    let mut construction_metadata_bytes = 0_usize;
+    for (basis_index, value) in bases.iter().enumerate() {
+        let path = format!("$.channel_bases[{basis_index}]");
+        let basis = object(value, &path)?;
+        let channels_path = format!("{path}.channels");
+        ensure_structural_limit(
+            values_at(basis, "channels", &path)?.len(),
+            limits.max_channels,
+            &channels_path,
+        )?;
+
+        let Some(construction_value) = basis.get("construction") else {
+            continue;
+        };
+        if construction_value.is_null() {
+            continue;
+        }
+        let construction_path = format!("{path}.construction");
+        let construction = array(construction_value, &construction_path)?;
+        ensure_structural_limit(construction.len(), limits.max_channels, &construction_path)?;
+        charge_structural_metadata(
+            &mut construction_metadata_bytes,
+            construction.len(),
+            crate::limits::CHANNEL_BASIS_VECTOR_METADATA_BYTES,
+            limits.max_metadata_bytes,
+            &construction_path,
+        )?;
+
+        for (vector_index, value) in construction.iter().enumerate() {
+            let vector_path = format!("{construction_path}[{vector_index}]");
+            let terms = array(value, &vector_path)?;
+            ensure_structural_limit(terms.len(), limits.max_channels, &vector_path)?;
+            charge_structural_metadata(
+                &mut construction_metadata_bytes,
+                terms.len(),
+                crate::limits::CHANNEL_BASIS_TERM_METADATA_BYTES,
+                limits.max_metadata_bytes,
+                &vector_path,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_structural_limit(actual: usize, maximum: usize, path: &str) -> ParseResult<()> {
+    if actual > maximum {
+        return Err(structural_limit_error(path));
+    }
+    Ok(())
+}
+
+fn charge_structural_metadata(
+    used: &mut usize,
+    count: usize,
+    item_bytes: usize,
+    maximum: usize,
+    path: &str,
+) -> ParseResult<()> {
+    let charged = count
+        .checked_mul(item_bytes)
+        .and_then(|bytes| used.checked_add(bytes))
+        .ok_or_else(|| structural_limit_error(path))?;
+    if charged > maximum {
+        return Err(structural_limit_error(path));
+    }
+    *used = charged;
+    Ok(())
+}
+
+fn structural_limit_error(path: &str) -> CanonicalParseError {
+    CanonicalParseError::Validation(ValidationReport::new(ValidationFailure::error(
+        crate::FailureCode::StructuralLimit,
+        path.trim_start_matches("$."),
+    )))
 }
 
 fn parse_relations(root: &Map<String, Value>, draft: &mut DatasetDraft) -> ParseResult<()> {

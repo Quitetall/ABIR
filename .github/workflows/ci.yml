@@ -58,7 +58,7 @@ jobs:
 
       - name: Build and install Python extension
         run: |
-          maturin build -m crates/abir-python/Cargo.toml --release --out dist
+          maturin build -m crates/abir-python/Cargo.toml --release --features test-fixtures --out dist
           python -m pip install dist/*.whl
 
       - name: Python parity and schema tests

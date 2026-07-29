@@ -1,5 +1,7 @@
 use abir::{canonical_debug_json, logical_content_id};
-use abir_conformance::{canonical_sample_dataset, semantic_matrix_dataset};
+use abir_conformance::{
+    canonical_sample_dataset, semantic_matrix_construction_free_dataset, semantic_matrix_dataset,
+};
 use std::fs;
 use std::path::Path;
 
@@ -9,6 +11,11 @@ fn main() {
     fs::create_dir_all(&valid).expect("create fixture directory");
     write_fixture(&valid, "canonical-tensor", &canonical_sample_dataset());
     write_fixture(&valid, "semantic-matrix", &semantic_matrix_dataset());
+    write_fixture(
+        &valid,
+        "semantic-matrix-construction-free-v1",
+        &semantic_matrix_construction_free_dataset(),
+    );
 }
 
 fn write_fixture(valid: &Path, name: &str, dataset: &abir::AbirDataset) {

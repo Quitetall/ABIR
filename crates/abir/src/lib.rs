@@ -42,8 +42,9 @@ pub use canonical_parse::{
 };
 #[cfg(feature = "alloc")]
 pub use catalog::{
-    Acquisition, Calibration, CalibrationError, CatalogRecord, Channel, ChannelBasis, ChannelSpec,
-    Clock, ClockRelation, ConceptDictionary, CoordinateFrame, DerivedArtifact, Device, Event,
+    Acquisition, Calibration, CalibrationError, CatalogRecord, Channel, ChannelBasis,
+    ChannelBasisConstructionError, ChannelBasisTerm, ChannelBasisVector, ChannelSpec, Clock,
+    ClockRelation, ConceptDictionary, CoordinateFrame, DerivedArtifact, Device, Event,
     FrameTransform, Patient, Recording, ReferenceKind, Sensor, Session, SourceRelationship, Stream,
     Subject,
 };

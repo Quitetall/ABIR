@@ -43,6 +43,28 @@ fn identity_transform() -> [ExactNumber; 16] {
 /// A deterministic dataset spanning every semantic-v1 catalog, atom, layout,
 /// presence, timing, governance, provenance, and fidelity family.
 pub fn semantic_matrix_dataset() -> AbirDataset {
+    semantic_matrix_dataset_for(SemanticMatrixProfile::WeightedBasis)
+}
+
+/// Pre-weighted-basis semantic matrix retained as an identity compatibility
+/// golden for construction-free semantic-v1 documents.
+pub fn semantic_matrix_construction_free_dataset() -> AbirDataset {
+    semantic_matrix_dataset_for(SemanticMatrixProfile::ConstructionFreeV1)
+}
+
+#[derive(Clone, Copy)]
+enum SemanticMatrixProfile {
+    ConstructionFreeV1,
+    WeightedBasis,
+}
+
+impl SemanticMatrixProfile {
+    const fn has_weighted_basis(self) -> bool {
+        matches!(self, Self::WeightedBasis)
+    }
+}
+
+fn semantic_matrix_dataset_for(profile: SemanticMatrixProfile) -> AbirDataset {
     let recording_id = id::<RecordingTag>(2);
     let stream_id = id::<StreamTag>(3);
     let clock_a = id::<ClockTag>(4);
@@ -82,6 +104,26 @@ pub fn semantic_matrix_dataset() -> AbirDataset {
         id::<ChannelTag>(36),
         concept("eeg:channel/fp1"),
     ));
+    if profile.has_weighted_basis() {
+        draft.add_channel(Channel::new(
+            id::<ChannelTag>(54),
+            concept("eeg:electrode/fp1"),
+        ));
+        draft.add_channel(Channel::new(
+            id::<ChannelTag>(55),
+            concept("eeg:electrode/fp2"),
+        ));
+        draft.add_channel(Channel::new(
+            id::<ChannelTag>(56),
+            concept("eeg:electrode/a1"),
+        ));
+        for channel_id in [54, 55, 56] {
+            draft.add_source_relationship(SourceRelationship::SensorChannel {
+                sensor_id: id::<SensorTag>(35),
+                channel_id: id::<ChannelTag>(channel_id),
+            });
+        }
+    }
     draft.add_concept_dictionary(ConceptDictionary::new(
         id::<ConceptDictionaryTag>(37),
         concept("abir:dictionary/semantic-v1"),
@@ -138,7 +180,7 @@ pub fn semantic_matrix_dataset() -> AbirDataset {
         rational(1, 1000),
         concept("abir:frame-transform/measured"),
     ));
-    draft.add_channel_basis(ChannelBasis::new(
+    let basis = ChannelBasis::new(
         basis_id,
         vec![
             ChannelSpec::new(concept("eeg:channel/fp1"))
@@ -147,7 +189,26 @@ pub fn semantic_matrix_dataset() -> AbirDataset {
             ChannelSpec::new(concept("eeg:channel/fp2")).with_coordinate_frame(frame_a),
         ],
         ReferenceKind::Differential,
-    ));
+    );
+    let basis = if profile.has_weighted_basis() {
+        basis
+            .with_construction(vec![
+                ChannelBasisVector::new(vec![
+                    ChannelBasisTerm::new(id::<ChannelTag>(54), rational(1, 1)).unwrap(),
+                    ChannelBasisTerm::new(id::<ChannelTag>(56), rational(-1, 1)).unwrap(),
+                ])
+                .unwrap(),
+                ChannelBasisVector::new(vec![
+                    ChannelBasisTerm::new(id::<ChannelTag>(55), rational(1, 1)).unwrap(),
+                    ChannelBasisTerm::new(id::<ChannelTag>(56), rational(-1, 1)).unwrap(),
+                ])
+                .unwrap(),
+            ])
+            .unwrap()
+    } else {
+        basis
+    };
+    draft.add_channel_basis(basis);
     draft.add_source_relationship(SourceRelationship::PatientSubject {
         patient_id: id::<PatientTag>(31),
         subject_id: id::<SubjectTag>(30),

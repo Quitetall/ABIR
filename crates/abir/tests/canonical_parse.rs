@@ -87,6 +87,62 @@ fn caller_limits_return_the_complete_structured_validation_report() {
 }
 
 #[test]
+fn caller_limits_preflight_weighted_basis_before_typed_construction() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(SEMANTIC_MATRIX).expect("semantic matrix JSON");
+    let vector = value
+        .pointer_mut("/channel_bases/0/construction/0")
+        .and_then(serde_json::Value::as_array_mut)
+        .expect("weighted basis vector");
+    let duplicate = vector[0].clone();
+    vector.extend([duplicate.clone(), duplicate]);
+    let document = serde_json::to_vec(&value).expect("mutated JSON");
+
+    let error = parse_canonical_dataset_with_limits(
+        &document,
+        ValidationLimits {
+            max_channels: 3,
+            ..ValidationLimits::default()
+        },
+    )
+    .expect_err("oversized basis vector must fail before sorting");
+    let report = error
+        .validation_report()
+        .expect("limit failure must stay structured");
+    assert_eq!(
+        report.failures()[0].failure_code(),
+        FailureCode::StructuralLimit
+    );
+    assert_eq!(
+        report.failures()[0].path(),
+        "channel_bases[0].construction[0]"
+    );
+}
+
+#[test]
+fn caller_metadata_limit_preflights_aggregate_weighted_basis_terms() {
+    let error = parse_canonical_dataset_with_limits(
+        SEMANTIC_MATRIX,
+        ValidationLimits {
+            max_metadata_bytes: 239,
+            ..ValidationLimits::default()
+        },
+    )
+    .expect_err("weighted-basis metadata budget must fail before allocation");
+    let report = error
+        .validation_report()
+        .expect("limit failure must stay structured");
+    assert_eq!(
+        report.failures()[0].failure_code(),
+        FailureCode::StructuralLimit
+    );
+    assert_eq!(
+        report.failures()[0].path(),
+        "channel_bases[0].construction[1]"
+    );
+}
+
+#[test]
 fn malformed_nested_values_report_the_exact_field_path() {
     let cases = [
         (
@@ -122,6 +178,15 @@ fn malformed_nested_values_report_the_exact_field_path() {
     let error = parse_canonical_dataset(&serde_json::to_vec(&value).expect("mutated JSON"))
         .expect_err("malformed semantic reference ID must fail");
     assert_eq!(error.path(), "$.proofs[0].subject.id");
+
+    let mut value: serde_json::Value =
+        serde_json::from_slice(SEMANTIC_MATRIX).expect("fixture JSON");
+    *value
+        .pointer_mut("/channel_bases/0/construction/0/0/source")
+        .expect("basis source ID") = serde_json::Value::String("not-an-object-id".into());
+    let error = parse_canonical_dataset(&serde_json::to_vec(&value).expect("mutated JSON"))
+        .expect_err("malformed basis source ID must fail");
+    assert_eq!(error.path(), "$.channel_bases[0].construction[0][0].source");
 }
 
 #[test]

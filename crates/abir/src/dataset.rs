@@ -810,6 +810,44 @@ impl DatasetDraft {
                     }
                 }
             }
+            if let Some(construction) = basis.construction() {
+                if construction.len() > limits.max_channels {
+                    push(
+                        &mut report,
+                        ValidationFailure::error(
+                            FailureCode::StructuralLimit,
+                            format!("channel_bases[{basis_index}].construction"),
+                        ),
+                    );
+                }
+                for (vector_index, vector) in construction.iter().enumerate() {
+                    if vector.terms().len() > limits.max_channels {
+                        push(
+                            &mut report,
+                            ValidationFailure::error(
+                                FailureCode::StructuralLimit,
+                                format!(
+                                    "channel_bases[{basis_index}].construction[{vector_index}]"
+                                ),
+                            ),
+                        );
+                    }
+                    for (term_index, term) in vector.terms().iter().enumerate() {
+                        if !channel_ids.contains(&term.source()) {
+                            push(
+                                &mut report,
+                                ValidationFailure::error(
+                                    FailureCode::DanglingReference,
+                                    format!(
+                                        "channel_bases[{basis_index}].construction[{vector_index}][{term_index}].source"
+                                    ),
+                                )
+                                .with_related_object(term.source().to_bytes()),
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         validate_policies(&mut report, &self.policies, limits);
@@ -1459,6 +1497,18 @@ macro_rules! metadata_bytes {
             retain(basis.channels().len(), 80)?;
             for channel in basis.channels() {
                 retain(channel.source_keys().len(), 48)?;
+            }
+            if let Some(construction) = basis.construction() {
+                retain(
+                    construction.len(),
+                    crate::limits::CHANNEL_BASIS_VECTOR_METADATA_BYTES,
+                )?;
+                for vector in construction {
+                    retain(
+                        vector.terms().len(),
+                        crate::limits::CHANNEL_BASIS_TERM_METADATA_BYTES,
+                    )?;
+                }
             }
         }
         for policy in &draft.policies {

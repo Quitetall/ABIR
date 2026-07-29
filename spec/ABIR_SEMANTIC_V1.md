@@ -117,8 +117,17 @@ empty payload.
 Calibration is an exact affine transform from stored values to declared units.
 Coordinate frames form an acyclic parent graph with explicit transforms and
 uncertainty. A channel basis declares the meaning of each channel, including
-reference or differential construction. Common-mode information may be placed
-in a separate channel or stream but must not be silently discarded.
+reference or differential construction. When exact construction is known, each
+output channel has one ordered canonical basis vector of non-zero rational
+coefficients over typed source-channel object identities. Every source identity
+must resolve to one catalog `Channel`; distinct observations remain distinct
+even when they share one concept. Vector terms are sorted by source identity and
+duplicate sources are invalid. Construction has exactly one vector per output
+channel and is invalid when reference kind is `Unknown`. Omitting construction
+preserves an explicitly incomplete legacy import; consumers that require exact
+montage or reference semantics must reject that omission.
+Common-mode information may be placed in a separate channel or stream but must
+not be silently discarded.
 
 ## 7. Provenance, fidelity, policy, and proofs
 
@@ -164,6 +173,11 @@ is therefore not a retained-memory ceiling. Host performance evidence records
 the budget, root inline size, and canonical debug size separately; a future
 storage/runtime profile may add allocator-specific memory ceilings without
 changing semantic-v1 identity.
+
+Canonical parsers preflight channel-basis row count, per-vector term count, and
+aggregate construction metadata against caller limits before allocating or
+sorting typed construction vectors. Structural-limit failure takes precedence
+over malformed ordering or duplicate-term diagnostics beyond that bound.
 
 ## 10. Structured failures
 
