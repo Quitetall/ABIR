@@ -87,6 +87,21 @@ fn dataset(
 }
 
 #[test]
+fn validated_dataset_can_be_moved_back_to_draft_and_revalidated() {
+    let original = dataset(false, Layout::DenseRowMajor, false, Some(9), 0);
+    let original_interchange = interchange_content_id(&original).unwrap();
+    let mut draft = original.into_draft();
+    draft.clear_source_capsules();
+    let rebound = draft.validate(ValidationLimits::default()).unwrap();
+
+    assert!(rebound.source_capsules().is_empty());
+    assert_eq!(
+        interchange_content_id(&rebound).unwrap(),
+        original_interchange
+    );
+}
+
+#[test]
 fn logical_identity_ignores_insertion_storage_layout_and_observed_execution() {
     let first = dataset(false, Layout::DenseRowMajor, false, None, 0);
     let second = dataset(true, Layout::DenseColumnMajor, true, None, 0);

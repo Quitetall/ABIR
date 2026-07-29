@@ -259,6 +259,12 @@ impl<A> OpenedDataset<A> {
         &self.access
     }
 
+    /// Consume the opened generation and return semantic authority plus its
+    /// payload resolver without cloning either component.
+    pub fn into_parts(self) -> (AbirDataset, A) {
+        (self.dataset, self.access)
+    }
+
     pub fn recording_view(&self, id: ObjectId<RecordingTag>) -> Option<RecordingView<'_>> {
         let recording = self
             .dataset

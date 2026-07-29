@@ -96,6 +96,23 @@ fn in_memory_adapter_moves_buffers_without_view_copy() {
 }
 
 #[test]
+fn opened_dataset_into_parts_preserves_payload_pointer_identity() {
+    let (dataset, content_id) = tensor_dataset();
+    let bytes = vec![8_u8; 8];
+    let pointer_before_move = bytes.as_ptr();
+    let mut access = InMemoryPayloadAccess::new();
+    access.insert(content_id, bytes);
+    let opened = OpenedDataset::new(dataset, access);
+
+    let (dataset, access) = opened.into_parts();
+    assert_eq!(dataset.id(), id::<DatasetTag>(1));
+    assert_eq!(
+        access.payload_bytes(content_id).unwrap().as_ptr(),
+        pointer_before_move
+    );
+}
+
+#[test]
 fn in_memory_adapter_resolves_content_addressed_capsules_without_copy() {
     let content_id = ContentId::from_bytes([9; 32]);
     let bytes = vec![1_u8, 3, 5, 7];
