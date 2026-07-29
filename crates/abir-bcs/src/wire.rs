@@ -14,12 +14,12 @@ pub const BCS2_HEADER_LEN: usize = 128;
 pub(crate) const INDEX_MAGIC: [u8; 8] = *b"BCS2IDX\0";
 pub(crate) const INDEX_LEN: usize = 48;
 pub(crate) const INDEX_ENTRY_LEN: usize = 128;
-const WIRE_MAJOR: u16 = 2;
-const WIRE_MINOR: u16 = 0;
-const SEMANTIC_GENERATION: u32 = 1;
+pub(crate) const WIRE_MAJOR: u16 = 2;
+pub(crate) const WIRE_MINOR: u16 = 0;
+pub(crate) const SEMANTIC_GENERATION: u32 = 1;
 const STORAGE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.storage\0";
-const RAW_CONTENT_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.raw-content\0";
-const RAW_STORAGE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.raw-storage\0";
+pub(crate) const RAW_CONTENT_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.raw-content\0";
+pub(crate) const RAW_STORAGE_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.raw-storage\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -231,6 +231,7 @@ pub enum Bcs2Error {
     CatalogDigestMismatch,
     FrameDigestMismatch,
     FrameIdentityMismatch,
+    FileFrameKindNotSupported(FrameKind),
     RootIdentityMismatch,
     GenerationRootMismatch,
     SemanticEncoding,
@@ -468,6 +469,19 @@ pub enum FrameKind {
     SemanticPayload = 3,
 }
 
+impl TryFrom<u8> for FrameKind {
+    type Error = Bcs2Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::EmbeddedBcs2),
+            2 => Ok(Self::RawBlob),
+            3 => Ok(Self::SemanticPayload),
+            _ => Err(Bcs2Error::CatalogCorrupt),
+        }
+    }
+}
+
 impl<'a> FrameView<'a> {
     pub const fn kind(&self) -> FrameKind {
         self.kind
@@ -686,12 +700,7 @@ impl<'a> Bcs2View<'a> {
         for entry_number in 0..frame_count {
             let entry_offset = INDEX_LEN + entry_number * INDEX_ENTRY_LEN;
             let entry = &index[entry_offset..entry_offset + INDEX_ENTRY_LEN];
-            let frame_kind = match entry[80] {
-                1 => FrameKind::EmbeddedBcs2,
-                2 => FrameKind::RawBlob,
-                3 => FrameKind::SemanticPayload,
-                _ => return Err(Bcs2Error::CatalogCorrupt),
-            };
+            let frame_kind = FrameKind::try_from(entry[80])?;
             let element = if frame_kind == FrameKind::SemanticPayload {
                 Some(element_from_wire_code(entry[81])?)
             } else {
@@ -789,43 +798,7 @@ impl<'a> Bcs2View<'a> {
         let mut root_bytes = [0_u8; 32];
         root_bytes.copy_from_slice(&bytes[96..128]);
         let root_content_id = ContentId::from_bytes(root_bytes);
-        let mut decoder = Decoder::new(catalog);
-        if decoder.map().map_err(|_| Bcs2Error::CatalogCorrupt)? != Some(3)
-            || decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 1
-        {
-            return Err(Bcs2Error::CatalogCorrupt);
-        }
-        let semantic_json = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
-        if decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 2 {
-            return Err(Bcs2Error::CatalogCorrupt);
-        }
-        let embedded_root = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
-        if embedded_root != root_content_id.as_bytes() {
-            return Err(Bcs2Error::RootIdentityMismatch);
-        }
-        if decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 3 {
-            return Err(Bcs2Error::CatalogCorrupt);
-        }
-        let reference_count = decoder
-            .array()
-            .map_err(|_| Bcs2Error::CatalogCorrupt)?
-            .ok_or(Bcs2Error::CatalogCorrupt)?;
-        if reference_count > bounds.max_index_entries as u64 {
-            return Err(Bcs2Error::BoundsExceeded);
-        }
-        let mut references = Vec::with_capacity(reference_count as usize);
-        for _ in 0..reference_count {
-            let encoded = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
-            let bytes: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::CatalogCorrupt)?;
-            let reference = ContentId::from_bytes(bytes);
-            if references.last().is_some_and(|prior| prior >= &reference) {
-                return Err(Bcs2Error::CatalogCorrupt);
-            }
-            references.push(reference);
-        }
-        if decoder.position() != catalog.len() {
-            return Err(Bcs2Error::CatalogCorrupt);
-        }
+        let parsed_catalog = parse_catalog(catalog, root_content_id, bounds.max_index_entries)?;
         Ok(Self {
             bytes,
             profile,
@@ -834,8 +807,8 @@ impl<'a> Bcs2View<'a> {
             privacy_mode,
             bounds,
             root_content_id,
-            semantic_json,
-            references,
+            semantic_json: parsed_catalog.semantic_json,
+            references: parsed_catalog.references,
             frames,
             generation_chain,
         })
@@ -879,6 +852,61 @@ impl<'a> Bcs2View<'a> {
     }
 }
 
+pub(crate) struct ParsedCatalog<'a> {
+    pub(crate) semantic_json: &'a [u8],
+    pub(crate) references: Vec<ContentId>,
+}
+
+pub(crate) fn parse_catalog(
+    catalog: &[u8],
+    root_content_id: ContentId,
+    max_index_entries: u32,
+) -> Result<ParsedCatalog<'_>, Bcs2Error> {
+    let mut decoder = Decoder::new(catalog);
+    if decoder.map().map_err(|_| Bcs2Error::CatalogCorrupt)? != Some(3)
+        || decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 1
+    {
+        return Err(Bcs2Error::CatalogCorrupt);
+    }
+    let semantic_json = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+    if decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 2 {
+        return Err(Bcs2Error::CatalogCorrupt);
+    }
+    let embedded_root = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+    if embedded_root != root_content_id.as_bytes() {
+        return Err(Bcs2Error::RootIdentityMismatch);
+    }
+    if decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)? != 3 {
+        return Err(Bcs2Error::CatalogCorrupt);
+    }
+    let reference_count = decoder
+        .array()
+        .map_err(|_| Bcs2Error::CatalogCorrupt)?
+        .ok_or(Bcs2Error::CatalogCorrupt)?;
+    if reference_count > u64::from(max_index_entries) {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
+    let mut references = Vec::with_capacity(
+        usize::try_from(reference_count).map_err(|_| Bcs2Error::BoundsExceeded)?,
+    );
+    for _ in 0..reference_count {
+        let encoded = decoder.bytes().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+        let bytes: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+        let reference = ContentId::from_bytes(bytes);
+        if references.last().is_some_and(|prior| prior >= &reference) {
+            return Err(Bcs2Error::CatalogCorrupt);
+        }
+        references.push(reference);
+    }
+    if decoder.position() != catalog.len() {
+        return Err(Bcs2Error::CatalogCorrupt);
+    }
+    Ok(ParsedCatalog {
+        semantic_json,
+        references,
+    })
+}
+
 pub(crate) const fn element_wire_code(element: ElementType) -> u8 {
     match element {
         ElementType::I8 => 1,
@@ -899,7 +927,7 @@ pub(crate) const fn element_wire_code(element: ElementType) -> u8 {
     }
 }
 
-fn element_from_wire_code(value: u8) -> Result<ElementType, Bcs2Error> {
+pub(crate) fn element_from_wire_code(value: u8) -> Result<ElementType, Bcs2Error> {
     match value {
         1 => Ok(ElementType::I8),
         2 => Ok(ElementType::I16),
@@ -920,13 +948,13 @@ fn element_from_wire_code(value: u8) -> Result<ElementType, Bcs2Error> {
     }
 }
 
-fn content_id_at(bytes: &[u8], offset: usize) -> Result<ContentId, Bcs2Error> {
+pub(crate) fn content_id_at(bytes: &[u8], offset: usize) -> Result<ContentId, Bcs2Error> {
     let encoded = bytes.get(offset..offset + 32).ok_or(Bcs2Error::TooShort)?;
     let value: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::TooShort)?;
     Ok(ContentId::from_bytes(value))
 }
 
-fn storage_id_at(bytes: &[u8], offset: usize) -> Result<StorageId, Bcs2Error> {
+pub(crate) fn storage_id_at(bytes: &[u8], offset: usize) -> Result<StorageId, Bcs2Error> {
     let encoded = bytes.get(offset..offset + 32).ok_or(Bcs2Error::TooShort)?;
     let value: [u8; 32] = encoded.try_into().map_err(|_| Bcs2Error::TooShort)?;
     Ok(StorageId::from_bytes(value))
@@ -1130,12 +1158,12 @@ fn encode_raw_root_inner<'a>(
     Ok(bytes)
 }
 
-fn get_u16(bytes: &[u8], offset: usize) -> Result<u16, Bcs2Error> {
+pub(crate) fn get_u16(bytes: &[u8], offset: usize) -> Result<u16, Bcs2Error> {
     let value = bytes.get(offset..offset + 2).ok_or(Bcs2Error::TooShort)?;
     Ok(u16::from_le_bytes([value[0], value[1]]))
 }
 
-fn get_u32(bytes: &[u8], offset: usize) -> Result<u32, Bcs2Error> {
+pub(crate) fn get_u32(bytes: &[u8], offset: usize) -> Result<u32, Bcs2Error> {
     let value = bytes.get(offset..offset + 4).ok_or(Bcs2Error::TooShort)?;
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }

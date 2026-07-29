@@ -7,6 +7,8 @@ extern crate alloc;
 mod blob;
 #[cfg(feature = "alloc")]
 mod codec;
+#[cfg(feature = "std")]
+mod file;
 #[cfg(feature = "alloc")]
 mod forensic;
 #[cfg(feature = "alloc")]
@@ -57,6 +59,8 @@ pub use privacy::{
     CAP_XCHACHA20_POLY1305, KDF_ALGORITHM_ARGON2ID,
 };
 
+#[cfg(feature = "std")]
+pub use file::{Bcs2FileError, Bcs2FileIndex, FileFrame};
 #[cfg(feature = "std")]
 pub use restore::{
     restore_forensic_tree_sandboxed, RestoreError, RestoreMode, RestoreOmission, RestoreReport,

@@ -5,8 +5,9 @@ use abir_training::{
     DecisionLogReplayState, DecisionRecord, DecisionReplayReceipt, MicroSnapshot,
     SourceEquivalenceReceipt, SubscriptionCorrection, TrainingAssociatedPayload, TrainingError,
     TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingSnapshot, TrainingSpec,
-    TrainingWindowStore,
+    TrainingWindowFileIndex, TrainingWindowStore,
 };
+use std::io::Cursor;
 
 fn key(seed: u8) -> ContentKey {
     ContentKey::new(ContentId::from_bytes([seed; 32]))
@@ -87,6 +88,60 @@ fn typed_label_payload_is_leased_with_exact_presence_and_bytes() {
     assert_eq!(lease.bytes(), Some(mask.as_slice()));
     assert_eq!(lease.element(), Some(ElementType::U8));
     assert_eq!(lease.shape(), Some([2].as_slice()));
+}
+
+#[test]
+fn file_index_matches_borrowed_store_without_retaining_payload_bytes() {
+    let signal = [1_u8, 0, 2, 0];
+    let mask = [0_u8, 1];
+    let row = row(10, 20, &signal);
+    let snapshot = TrainingSnapshot::seal_with_label_payloads(
+        vec![key(1)],
+        key(3),
+        TrainingProfile::Balanced,
+        vec![row.clone()],
+        vec![seizure_mask_association(row.logical_id, &mask)],
+        key(4),
+    )
+    .unwrap();
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[
+            SemanticPayloadFrame::new(ElementType::I16, &signal),
+            SemanticPayloadFrame::new(ElementType::U8, &mask),
+        ],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let borrowed = TrainingWindowStore::open(&encoded, ResourceBounds::default()).unwrap();
+    let mut cursor = Cursor::new(&encoded);
+    let indexed = TrainingWindowFileIndex::open(&mut cursor, ResourceBounds::default()).unwrap();
+
+    assert_eq!(
+        indexed.snapshot_id().unwrap(),
+        borrowed.snapshot_id().unwrap()
+    );
+    assert_eq!(indexed.artifact_len(), encoded.len() as u64);
+    let indexed_row = indexed.row(row.logical_id).unwrap();
+    assert_eq!(
+        indexed_row.payload_id(),
+        borrowed.row(row.logical_id).unwrap().payload_id()
+    );
+    assert_eq!(indexed_row.frame_payload_id(), indexed_row.payload_id());
+    assert_eq!(indexed_row.stored_bytes(), signal.len() as u64);
+    assert!(indexed_row.offset() < indexed.artifact_len());
+    let indexed_label = indexed.label_payload(row.logical_id, SEIZURE_MASK).unwrap();
+    assert_eq!(indexed_label.presence(), abir::Presence::Present);
+    assert_eq!(
+        indexed_label.payload_id(),
+        Some(key_from_payload(ElementType::U8, &mask))
+    );
+    assert_eq!(indexed_label.logical_bytes(), Some(mask.len() as u64));
+    assert!(indexed_label.offset().unwrap() < indexed.artifact_len());
+}
+
+fn key_from_payload(element: ElementType, bytes: &[u8]) -> ContentKey {
+    ContentKey::new(payload_content_id(element, bytes))
 }
 
 #[test]

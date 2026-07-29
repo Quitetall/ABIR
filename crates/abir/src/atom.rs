@@ -73,12 +73,32 @@ impl ElementType {
 /// descriptor's byte order and encoding therefore remain part of the dataset
 /// semantics rather than being normalized by this function.
 pub fn payload_content_id(element: ElementType, logical_bytes: &[u8]) -> ContentId {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"abir.semantic-v1.payload\0");
-    hasher.update(element.semantic_tag());
-    hasher.update(&[0]);
+    let mut hasher = PayloadContentHasher::new(element);
     hasher.update(logical_bytes);
-    ContentId::from_bytes(*hasher.finalize().as_bytes())
+    hasher.finalize()
+}
+
+/// Incremental semantic-v1 payload identity for bounded streaming readers.
+pub struct PayloadContentHasher {
+    hasher: blake3::Hasher,
+}
+
+impl PayloadContentHasher {
+    pub fn new(element: ElementType) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"abir.semantic-v1.payload\0");
+        hasher.update(element.semantic_tag());
+        hasher.update(&[0]);
+        Self { hasher }
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.hasher.update(bytes);
+    }
+
+    pub fn finalize(self) -> ContentId {
+        ContentId::from_bytes(*self.hasher.finalize().as_bytes())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,8 +1,8 @@
 use abir::{
     payload_content_id, verify_payload_content, Atom, AtomTag, ByteOrder, ConceptId, ContentId,
-    DatasetDraft, DatasetTag, ElementType, Layout, ObjectId, PayloadDescriptor,
-    PayloadVerificationError, Presence, SemanticAxis, SignalBlock, Tensor, TimeAxis,
-    ValidationLimits,
+    DatasetDraft, DatasetTag, ElementType, Layout, ObjectId, PayloadContentHasher,
+    PayloadDescriptor, PayloadVerificationError, Presence, SemanticAxis, SignalBlock, Tensor,
+    TimeAxis, ValidationLimits,
 };
 
 fn id<T>(value: u8) -> ObjectId<T> {
@@ -55,6 +55,20 @@ fn payload_identity_is_stable_and_element_separated() {
     );
     assert_ne!(first, payload_content_id(ElementType::U16, &bytes));
     assert_ne!(first, payload_content_id(ElementType::I16, &[0x34, 0x12]));
+}
+
+#[test]
+fn incremental_payload_identity_matches_one_shot_identity() {
+    let bytes = [0x34, 0x12, 0x78, 0x56];
+    let mut hasher = PayloadContentHasher::new(ElementType::I16);
+    hasher.update(&bytes[..1]);
+    hasher.update(&bytes[1..3]);
+    hasher.update(&bytes[3..]);
+
+    assert_eq!(
+        hasher.finalize(),
+        payload_content_id(ElementType::I16, &bytes)
+    );
 }
 
 #[test]

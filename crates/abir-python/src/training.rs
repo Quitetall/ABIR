@@ -7,7 +7,9 @@ use abir_training::{
     TrainingAssociatedPayload, TrainingLabelPayloadAssociation, TrainingRow, TrainingSnapshot,
     TrainingSpec,
 };
-use abir_training::{DecisionLogReplayState, TrainingProfile, TrainingWindowStore};
+use abir_training::{
+    DecisionLogReplayState, TrainingProfile, TrainingWindowFileIndex, TrainingWindowStore,
+};
 use memmap2::MmapOptions;
 use pyo3::exceptions::{PyKeyError, PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -16,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 enum ArtifactOwner {
@@ -25,6 +27,9 @@ enum ArtifactOwner {
         file: Mutex<File>,
         mmap: memmap2::Mmap,
     },
+    VerifiedPathFile {
+        file: Mutex<File>,
+    },
 }
 
 impl ArtifactOwner {
@@ -32,11 +37,12 @@ impl ArtifactOwner {
         match self {
             Self::Bytes(_) => "bytes-zero-copy",
             Self::PathFile { .. } => "path-private-validation",
+            Self::VerifiedPathFile { .. } => "path-verified-read",
         }
     }
 
     const fn materializes_rows(&self) -> bool {
-        matches!(self, Self::PathFile { .. })
+        matches!(self, Self::PathFile { .. } | Self::VerifiedPathFile { .. })
     }
 }
 
@@ -135,12 +141,7 @@ impl PyTrainingWindowStore {
     fn open_path(path: PathBuf) -> PyResult<Self> {
         let file = File::open(&path)
             .map_err(|error| PyOSError::new_err(format!("open {}: {error}", path.display())))?;
-        fs2::FileExt::lock_shared(&file).map_err(|error| {
-            PyOSError::new_err(format!(
-                "lock training artifact {} for shared reading: {error}",
-                path.display()
-            ))
-        })?;
+        try_lock_artifact_shared(&file, &path)?;
         let metadata = file
             .metadata()
             .map_err(|error| PyOSError::new_err(format!("inspect {}: {error}", path.display())))?;
@@ -187,6 +188,69 @@ impl PyTrainingWindowStore {
         })
     }
 
+    /// Open a large BCS2 training artifact without an artifact-sized copy.
+    ///
+    /// This mode requires the resolver's exact lowercase SHA-256. It retains a
+    /// read-only file descriptor, owns only bounded catalog/index metadata, and
+    /// materializes each requested row after verifying its semantic ContentId.
+    /// It hashes the complete file before and after parsing. This optimizes
+    /// temporary disk and RSS, not startup I/O; callers must provide an
+    /// immutable file or a writer that honors the retained advisory lock.
+    #[staticmethod]
+    fn open_verified_path(path: PathBuf, expected_artifact_sha256: &str) -> PyResult<Self> {
+        validate_sha256(expected_artifact_sha256)?;
+        let mut file = File::open(&path)
+            .map_err(|error| PyOSError::new_err(format!("open {}: {error}", path.display())))?;
+        try_lock_artifact_shared(&file, &path)?;
+        let file_metadata = file
+            .metadata()
+            .map_err(|error| PyOSError::new_err(format!("inspect {}: {error}", path.display())))?;
+        if !file_metadata.is_file() {
+            return Err(PyValueError::new_err(
+                "training artifact must be a regular file",
+            ));
+        }
+        if file_metadata.len() == 0 {
+            return Err(PyValueError::new_err("training artifact is empty"));
+        }
+        let initial_artifact_sha256 = hash_artifact(&mut file, file_metadata.len())?;
+        if initial_artifact_sha256 != expected_artifact_sha256 {
+            return Err(PyValueError::new_err(format!(
+                "training artifact SHA-256 mismatch: expected {expected_artifact_sha256}, got {initial_artifact_sha256}"
+            )));
+        }
+        let index = TrainingWindowFileIndex::open(&mut file, ResourceBounds::default())
+            .map_err(training_error)?;
+        if index.artifact_len() != file_metadata.len() {
+            return Err(PyValueError::new_err(
+                "training artifact changed size during validation",
+            ));
+        }
+        // Fence parsing between two complete physical-identity checks.
+        // Cooperative writers are excluded by the retained shared lock.
+        let actual_artifact_sha256 = hash_artifact(&mut file, file_metadata.len())?;
+        if actual_artifact_sha256 != initial_artifact_sha256 {
+            return Err(PyValueError::new_err(format!(
+                "training artifact changed during validation: expected {initial_artifact_sha256}, got {actual_artifact_sha256}"
+            )));
+        }
+        let metadata = inspect_file_index(&index)?;
+
+        Ok(Self {
+            artifact: ArtifactOwner::VerifiedPathFile {
+                file: Mutex::new(file),
+            },
+            dataset_roots: metadata.dataset_roots,
+            decision_log_id: metadata.decision_log_id,
+            profile: metadata.profile,
+            rows: metadata.rows,
+            label_payloads: metadata.label_payloads,
+            physical_artifact_sha256: actual_artifact_sha256,
+            snapshot_id: metadata.snapshot_id,
+            spec_id: metadata.spec_id,
+        })
+    }
+
     #[getter]
     fn snapshot_id(&self) -> &str {
         &self.snapshot_id
@@ -207,11 +271,12 @@ impl PyTrainingWindowStore {
         &self.decision_log_id
     }
 
-    /// SHA-256 of the exact immutable bytes retained by this native store.
+    /// SHA-256 of the exact bytes verified when this native store opened.
     ///
     /// This is physical evidence only and never participates in ABIR semantic
-    /// identity. Path-backed stores hash and retain their anonymous validation
-    /// file, so replacing or unlinking the source pathname cannot change it.
+    /// identity. `open_path` retains immutable anonymous bytes.
+    /// `open_verified_path` retains bounded semantic metadata and checks every
+    /// materialized payload against its ContentId if the source inode changes.
     #[getter]
     fn physical_artifact_sha256(&self) -> &str {
         &self.physical_artifact_sha256
@@ -260,73 +325,91 @@ impl PyTrainingWindowStore {
         let cache_budget = usize::try_from(plan.cache_budget().bytes())
             .map_err(|_| PyValueError::new_err("training cache budget exceeds this host"))?;
 
-        let (payload_access, implementation, metrics) =
-            match (plan.payload_access(), &self.artifact) {
+        let (payload_access, implementation, metrics) = match (
+            plan.payload_access(),
+            &self.artifact,
+        ) {
+            (
+                PayloadAccessPolicy::RequireMmap | PayloadAccessPolicy::PreferMmap,
+                ArtifactOwner::PathFile { mmap, .. },
+            ) => (
+                "mmap-direct",
+                "bounded-mmap-lookahead-v1",
+                execute_borrowed_rows(&self.rows, mmap, plan.row_grouping(), plan.prefetch(), 0)?,
+            ),
+            (PayloadAccessPolicy::RequireMmap, ArtifactOwner::VerifiedPathFile { .. }) => {
+                return Err(PyValueError::new_err(
+                    "canonical training plan requires immutable mmap backing; verified-read backing is disk-optimized",
+                ));
+            }
+            (PayloadAccessPolicy::RequireMmap, ArtifactOwner::Bytes(_)) => {
+                return Err(PyValueError::new_err(
+                    "canonical training plan requires mmap backing",
+                ));
+            }
+            (PayloadAccessPolicy::PreferMmap, ArtifactOwner::Bytes(_)) => {
+                return Err(PyValueError::new_err(
+                    "canonical acceptance execution requires preferred mmap backing",
+                ));
+            }
+            (PayloadAccessPolicy::PreferMmap, ArtifactOwner::VerifiedPathFile { file }) => (
+                "file-stream",
+                "bounded-preferred-mmap-fallback-v1",
+                execute_streamed_rows(
+                    &self.rows,
+                    file,
+                    plan.row_grouping(),
+                    plan.prefetch(),
+                    cache_budget,
+                )?,
+            ),
+            (PayloadAccessPolicy::Materialize, ArtifactOwner::Bytes(artifact)) => {
+                let bytes = artifact.bind(py).as_bytes();
+                if bytes.len() > cache_budget {
+                    return Err(PyValueError::new_err(
+                        "materialized training artifact exceeds canonical cache budget",
+                    ));
+                }
                 (
-                    PayloadAccessPolicy::RequireMmap | PayloadAccessPolicy::PreferMmap,
-                    ArtifactOwner::PathFile { mmap, .. },
-                ) => (
-                    "mmap-direct",
-                    "bounded-mmap-lookahead-v1",
+                    "materialized-bytes",
+                    "bounded-materialized-groups-v1",
                     execute_borrowed_rows(
                         &self.rows,
-                        mmap,
+                        bytes,
                         plan.row_grouping(),
                         plan.prefetch(),
-                        0,
+                        bytes.len(),
                     )?,
-                ),
-                (PayloadAccessPolicy::RequireMmap, ArtifactOwner::Bytes(_)) => {
-                    return Err(PyValueError::new_err(
-                        "canonical training plan requires mmap backing",
-                    ));
-                }
-                (PayloadAccessPolicy::PreferMmap, ArtifactOwner::Bytes(_)) => {
-                    return Err(PyValueError::new_err(
-                        "canonical acceptance execution requires preferred mmap backing",
-                    ));
-                }
-                (PayloadAccessPolicy::Materialize, ArtifactOwner::Bytes(artifact)) => {
-                    let bytes = artifact.bind(py).as_bytes();
-                    if bytes.len() > cache_budget {
-                        return Err(PyValueError::new_err(
-                            "materialized training artifact exceeds canonical cache budget",
-                        ));
-                    }
-                    (
-                        "materialized-bytes",
-                        "bounded-materialized-groups-v1",
-                        execute_borrowed_rows(
-                            &self.rows,
-                            bytes,
-                            plan.row_grouping(),
-                            plan.prefetch(),
-                            bytes.len(),
-                        )?,
-                    )
-                }
-                (PayloadAccessPolicy::Materialize, ArtifactOwner::PathFile { .. }) => {
-                    return Err(PyValueError::new_err(
-                        "canonical training plan requires materialized bytes backing",
-                    ));
-                }
-                (PayloadAccessPolicy::Stream, ArtifactOwner::PathFile { file, .. }) => (
-                    "file-stream",
-                    "bounded-file-stream-lookahead-v1",
-                    execute_streamed_rows(
-                        &self.rows,
-                        file,
-                        plan.row_grouping(),
-                        plan.prefetch(),
-                        cache_budget,
-                    )?,
-                ),
-                (PayloadAccessPolicy::Stream, ArtifactOwner::Bytes(_)) => {
-                    return Err(PyValueError::new_err(
-                        "canonical training plan requires file-stream backing",
-                    ));
-                }
-            };
+                )
+            }
+            (
+                PayloadAccessPolicy::Materialize,
+                ArtifactOwner::PathFile { .. } | ArtifactOwner::VerifiedPathFile { .. },
+            ) => {
+                return Err(PyValueError::new_err(
+                    "canonical training plan requires materialized bytes backing",
+                ));
+            }
+            (
+                PayloadAccessPolicy::Stream,
+                ArtifactOwner::PathFile { file, .. } | ArtifactOwner::VerifiedPathFile { file },
+            ) => (
+                "file-stream",
+                "bounded-file-stream-lookahead-v1",
+                execute_streamed_rows(
+                    &self.rows,
+                    file,
+                    plan.row_grouping(),
+                    plan.prefetch(),
+                    cache_budget,
+                )?,
+            ),
+            (PayloadAccessPolicy::Stream, ArtifactOwner::Bytes(_)) => {
+                return Err(PyValueError::new_err(
+                    "canonical training plan requires file-stream backing",
+                ));
+            }
+        };
 
         let implementation_descriptor = serde_json::json!({
             "executor": implementation,
@@ -761,6 +844,59 @@ fn copy_and_hash_artifact(
     Ok(format!("{:x}", digest.finalize()))
 }
 
+fn try_lock_artifact_shared(file: &File, path: &Path) -> PyResult<()> {
+    fs2::FileExt::try_lock_shared(file).map_err(|error| {
+        PyOSError::new_err(format!(
+            "acquire nonblocking shared lock for training artifact {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn validate_sha256(value: &str) -> PyResult<()> {
+    if value.len() != 64
+        || value
+            .as_bytes()
+            .iter()
+            .any(|byte| !matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(PyValueError::new_err(
+            "expected_artifact_sha256 must be a lowercase 64-digit SHA-256",
+        ));
+    }
+    Ok(())
+}
+
+fn hash_artifact(file: &mut File, expected_bytes: u64) -> PyResult<String> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| PyOSError::new_err(format!("rewind training artifact: {error}")))?;
+    let limit = expected_bytes
+        .checked_add(1)
+        .ok_or_else(|| PyValueError::new_err("training artifact size exceeds u64"))?;
+    let mut source = file.take(limit);
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut read_bytes = 0_u64;
+    let mut digest = Sha256::new();
+    loop {
+        let count = source
+            .read(&mut buffer)
+            .map_err(|error| PyOSError::new_err(format!("read training artifact: {error}")))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+        read_bytes = read_bytes
+            .checked_add(u64::try_from(count).expect("buffer length fits in u64"))
+            .ok_or_else(|| PyValueError::new_err("training artifact size exceeds u64"))?;
+    }
+    if read_bytes != expected_bytes {
+        return Err(PyValueError::new_err(
+            "training artifact changed size during validation",
+        ));
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 struct SnapshotMetadata {
     dataset_roots: Vec<String>,
     decision_log_id: String,
@@ -769,6 +905,105 @@ struct SnapshotMetadata {
     label_payloads: Vec<Vec<LabelPayloadLocation>>,
     snapshot_id: String,
     spec_id: String,
+}
+
+fn inspect_file_index(index: &TrainingWindowFileIndex) -> PyResult<SnapshotMetadata> {
+    let rows = index
+        .rows()
+        .map(|row| {
+            let logical_bytes = usize::try_from(row.stored_bytes())
+                .map_err(|_| PyValueError::new_err("training row length exceeds this host"))?;
+            let offset = usize::try_from(row.offset())
+                .map_err(|_| PyValueError::new_err("training row offset exceeds this host"))?;
+            Ok(RowLocation {
+                byte_order: row.byte_order(),
+                element: row.element(),
+                group: row.group().to_string(),
+                label: row.label().to_string(),
+                logical_id: row.logical_id().to_string(),
+                logical_bytes,
+                offset,
+                payload_id: row.frame_payload_id().content_id(),
+                shape: row.shape().to_vec(),
+                split: row.split().to_string(),
+            })
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let mut associations = index.snapshot().label_payloads().iter().peekable();
+    let label_payloads = index
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| {
+            let mut row_payloads = Vec::new();
+            while associations
+                .peek()
+                .is_some_and(|association| association.logical_id == row.logical_id)
+            {
+                let association = associations
+                    .next()
+                    .expect("peeked validated label association");
+                let location = index
+                    .label_payload(association.logical_id, &association.concept)
+                    .expect("validated label association");
+                let location = match (
+                    location.payload_id(),
+                    location.element(),
+                    location.byte_order(),
+                    location.logical_bytes(),
+                    location.offset(),
+                    location.shape(),
+                ) {
+                    (
+                        Some(payload_id),
+                        Some(element),
+                        Some(byte_order),
+                        Some(logical_bytes),
+                        Some(offset),
+                        Some(shape),
+                    ) => LabelPayloadLocation::Present {
+                        byte_order,
+                        concept: location.concept().to_owned(),
+                        element,
+                        logical_bytes: usize::try_from(logical_bytes).map_err(|_| {
+                            PyValueError::new_err("training label payload length exceeds this host")
+                        })?,
+                        offset: usize::try_from(offset).map_err(|_| {
+                            PyValueError::new_err("training label payload offset exceeds this host")
+                        })?,
+                        payload_id: payload_id.content_id(),
+                        shape: shape.to_vec(),
+                    },
+                    (None, None, None, None, None, None) => LabelPayloadLocation::Unavailable {
+                        concept: location.concept().to_owned(),
+                        presence: location.presence(),
+                    },
+                    _ => {
+                        return Err(PyValueError::new_err(
+                            "validated label presence conflicts with its payload",
+                        ));
+                    }
+                };
+                row_payloads.push(location);
+            }
+            Ok(row_payloads)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let snapshot_id = index.snapshot_id().map_err(training_error)?.to_string();
+    Ok(SnapshotMetadata {
+        dataset_roots: index
+            .dataset_roots()
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        decision_log_id: index.decision_log_id().to_string(),
+        profile: profile_name(index.snapshot().profile()),
+        rows,
+        label_payloads,
+        snapshot_id,
+        spec_id: index.spec_id().to_string(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -799,7 +1034,7 @@ fn numpy_from_location(
     let numpy = PyModule::import_bound(py, "numpy")?;
     let (buffer, offset) = match artifact {
         ArtifactOwner::Bytes(artifact) => (artifact.clone_ref(py).into_any(), row_offset),
-        ArtifactOwner::PathFile { file, .. } => {
+        ArtifactOwner::PathFile { file, .. } | ArtifactOwner::VerifiedPathFile { file } => {
             let offset = u64::try_from(row_offset).map_err(|_| {
                 PyValueError::new_err(format!("training {kind} offset exceeds u64"))
             })?;

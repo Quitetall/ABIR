@@ -23,8 +23,9 @@ use abir::{payload_content_id, ByteOrder, ContentId, ElementType};
 use abir_bcs::{ResourceBounds, CAP_LAMQUANT_BFP_V1};
 use abir_training::{
     encode_snapshot, ContentKey, TrainingProfile, TrainingRow, TrainingRowEncoding,
-    TrainingSnapshot, TrainingWindowStore,
+    TrainingSnapshot, TrainingWindowFileIndex, TrainingWindowStore,
 };
+use std::io::Cursor;
 
 fn key(seed: u8) -> ContentKey {
     ContentKey::new(ContentId::from_bytes([seed; 32]))
@@ -147,6 +148,32 @@ fn an_encoded_row_closes_against_its_stored_extent() {
     let encoding = row.encoding().expect("encoding recorded");
     assert_eq!(encoding.capabilities, CAP_LAMQUANT_BFP_V1);
     assert_eq!(encoding.stored_bytes, stored.len() as u64);
+}
+
+#[test]
+fn file_index_distinguishes_logical_and_stored_payload_identities() {
+    let stored = stored_record();
+    let expected = encoded_row(&stored);
+    let snapshot = seal(expected.clone());
+    let frame =
+        abir_bcs::SemanticPayloadFrame::encoded(ElementType::U8, &stored, CAP_LAMQUANT_BFP_V1);
+    let artifact = encode_snapshot(&snapshot, &[frame], ResourceBounds::default())
+        .expect("encoded snapshot encodes");
+    let mut cursor = Cursor::new(artifact);
+    let index = TrainingWindowFileIndex::open_with_capabilities(
+        &mut cursor,
+        CAP_LAMQUANT_BFP_V1,
+        ResourceBounds::default(),
+    )
+    .expect("capable file reader opens it");
+    let row = index.rows().next().expect("one row");
+
+    assert_eq!(row.payload_id(), expected.payload);
+    assert_eq!(
+        row.frame_payload_id(),
+        expected.encoding.expect("encoded").stored_payload
+    );
+    assert_ne!(row.payload_id(), row.frame_payload_id());
 }
 
 #[test]

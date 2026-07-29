@@ -32,5 +32,6 @@ pub use model::{
     TrainingSnapshot, TrainingSpec,
 };
 pub use store::{
-    DecisionLogReplayState, TrainingLabelPayloadLease, TrainingRowLease, TrainingWindowStore,
+    DecisionLogReplayState, TrainingFileLabelPayload, TrainingFileRow, TrainingLabelPayloadLease,
+    TrainingRowLease, TrainingWindowFileIndex, TrainingWindowStore,
 };

@@ -117,6 +117,112 @@ def test_training_window_store_opens_path_without_materializing_artifact(tmp_pat
     assert first.__array_interface__["data"][0] != second.__array_interface__["data"][0]
 
 
+def test_training_window_store_opens_verified_path_without_private_artifact_copy(
+    tmp_path,
+):
+    artifact = abir._training_fixture_bytes()
+    path = tmp_path / "snapshot.bcs2"
+    path.write_bytes(artifact)
+
+    store = abir.TrainingWindowStore.open_verified_path(
+        path,
+        hashlib.sha256(artifact).hexdigest(),
+    )
+
+    assert store.backing == "path-verified-read"
+    assert store.materializes_rows is True
+    assert store.physical_artifact_sha256 == hashlib.sha256(artifact).hexdigest()
+    assert store.row_numpy(store.row_ids[0]).tolist() == [[1, 2], [3, 4]]
+
+
+def test_verified_path_requires_exact_lowercase_artifact_sha256(tmp_path):
+    artifact = abir._training_fixture_bytes()
+    path = tmp_path / "snapshot.bcs2"
+    path.write_bytes(artifact)
+
+    with pytest.raises(ValueError, match="lowercase 64-digit SHA-256"):
+        abir.TrainingWindowStore.open_verified_path(path, "ABC")
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        abir.TrainingWindowStore.open_verified_path(path, "0" * 64)
+
+
+@pytest.mark.parametrize("method", ["open_path", "open_verified_path"])
+def test_path_open_refuses_contended_lock_without_blocking(method, tmp_path):
+    fcntl = pytest.importorskip("fcntl")
+    artifact = abir._training_fixture_bytes()
+    path = tmp_path / "snapshot.bcs2"
+    path.write_bytes(artifact)
+
+    with path.open("rb") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(OSError, match="nonblocking shared lock"):
+            if method == "open_verified_path":
+                abir.TrainingWindowStore.open_verified_path(
+                    path,
+                    hashlib.sha256(artifact).hexdigest(),
+                )
+            else:
+                abir.TrainingWindowStore.open_path(path)
+
+
+def test_verified_path_rejects_payload_changed_after_open(tmp_path):
+    artifact = abir._training_fixture_bytes()
+    path = tmp_path / "snapshot.bcs2"
+    path.write_bytes(artifact)
+    store = abir.TrainingWindowStore.open_verified_path(
+        path,
+        hashlib.sha256(artifact).hexdigest(),
+    )
+
+    payload = bytes([1, 0, 2, 0, 3, 0, 4, 0])
+    payload_offset = artifact.find(payload)
+    assert payload_offset >= 0
+    with path.open("r+b") as changed:
+        changed.seek(payload_offset)
+        changed.write(bytes([9, 0, 2, 0, 3, 0, 4, 0]))
+
+    with pytest.raises(ValueError, match="payload changed after validation"):
+        store.row_numpy(store.row_ids[0])
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="Linux RSS evidence")
+def test_verified_path_open_does_not_map_or_copy_complete_artifact(tmp_path):
+    artifact = abir._training_fixture_bytes(32 * 1024 * 1024)
+    path = tmp_path / "large-snapshot.bcs2"
+    path.write_bytes(artifact)
+    expected = hashlib.sha256(artifact).hexdigest()
+    artifact_bytes = path.stat().st_size
+    del artifact
+    gc.collect()
+
+    probe = """
+import gc, json, pathlib, sys
+import abir
+
+def rss_bytes():
+    for line in pathlib.Path('/proc/self/status').read_text().splitlines():
+        if line.startswith('VmRSS:'):
+            return int(line.split()[1]) * 1024
+    raise RuntimeError('VmRSS is unavailable')
+
+gc.collect()
+before = rss_bytes()
+store = abir.TrainingWindowStore.open_verified_path(sys.argv[1], sys.argv[2])
+after = rss_bytes()
+print(json.dumps({'before': before, 'after': after, 'rows': store.row_count}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe, os.fspath(path), expected],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    measurement = json.loads(completed.stdout)
+
+    assert measurement["rows"] == 1
+    assert measurement["after"] - measurement["before"] < artifact_bytes // 4
+
+
 def test_path_row_outlives_store_and_unlinked_artifact(tmp_path):
     path = tmp_path / "snapshot.bcs2"
     path.write_bytes(abir._training_fixture_bytes())

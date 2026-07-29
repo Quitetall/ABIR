@@ -4,8 +4,12 @@ use crate::{
     TrainingRowEncoding, TrainingSnapshot, TrainingSpec, VerifiedTrainingSnapshot,
 };
 use abir::{ByteOrder, ElementType, Presence};
-use abir_bcs::{Bcs2View, FrameKind, ResourceBounds, RootKind, StorageContract};
+use abir_bcs::{
+    Bcs2FileIndex, Bcs2View, FileFrame, FrameKind, FrameView, ProfileId, ResourceBounds, RootKind,
+    StorageContract,
+};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Seek};
 
 /// The replay assurance available from an opened training snapshot.
 ///
@@ -38,6 +42,32 @@ pub struct TrainingRowLease<'a> {
 pub struct TrainingLabelPayloadLease<'a> {
     association: &'a TrainingLabelPayloadAssociation,
     bytes: Option<&'a [u8]>,
+}
+
+/// Owned semantic metadata plus validated file locations for one BCS2 training snapshot.
+///
+/// This type owns no file and lends no payload bytes. Callers keep the same
+/// `Read + Seek` object open, read only the requested extent, and verify that
+/// extent against [`TrainingFileRow::frame_payload_id`] before exposure.
+#[derive(Debug)]
+pub struct TrainingWindowFileIndex {
+    frame_index: BTreeMap<ContentKey, usize>,
+    snapshot: TrainingSnapshot,
+    view: Bcs2FileIndex,
+}
+
+/// Validated location and semantic metadata for one file-backed training row.
+#[derive(Clone, Copy, Debug)]
+pub struct TrainingFileRow<'a> {
+    frame: &'a FileFrame,
+    row: &'a TrainingRow,
+}
+
+/// Validated file location for typed label data associated with one row.
+#[derive(Clone, Copy, Debug)]
+pub struct TrainingFileLabelPayload<'a> {
+    association: &'a TrainingLabelPayloadAssociation,
+    frame: Option<&'a FileFrame>,
 }
 
 impl<'a> TrainingLabelPayloadLease<'a> {
@@ -144,6 +174,239 @@ impl<'a> TrainingRowLease<'a> {
     }
 }
 
+impl<'a> TrainingFileRow<'a> {
+    pub const fn element(self) -> ElementType {
+        self.row.element
+    }
+
+    pub const fn byte_order(self) -> ByteOrder {
+        self.row.byte_order
+    }
+
+    pub const fn metadata(self) -> &'a TrainingRow {
+        self.row
+    }
+
+    pub fn shape(self) -> &'a [u64] {
+        &self.row.shape
+    }
+
+    pub const fn logical_id(self) -> ContentKey {
+        self.row.logical_id
+    }
+
+    pub const fn group(self) -> ContentKey {
+        self.row.group
+    }
+
+    pub const fn label(self) -> ContentKey {
+        self.row.label
+    }
+
+    pub const fn split(self) -> ContentKey {
+        self.row.split
+    }
+
+    pub const fn payload_id(self) -> ContentKey {
+        self.row.payload
+    }
+
+    /// Content identity of bytes stored at [`Self::offset`].
+    ///
+    /// Differs from [`Self::payload_id`] when the frame holds an encoded form
+    /// of the logical training row.
+    pub fn frame_payload_id(self) -> ContentKey {
+        self.row.frame_payload()
+    }
+
+    pub const fn offset(self) -> u64 {
+        self.frame.offset()
+    }
+
+    pub const fn stored_bytes(self) -> u64 {
+        self.frame.len()
+    }
+}
+
+impl<'a> TrainingFileLabelPayload<'a> {
+    pub fn concept(self) -> &'a str {
+        &self.association.concept
+    }
+
+    pub const fn presence(self) -> Presence {
+        self.association.presence
+    }
+
+    pub fn element(self) -> Option<ElementType> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.element)
+    }
+
+    pub fn byte_order(self) -> Option<ByteOrder> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.byte_order)
+    }
+
+    pub fn shape(self) -> Option<&'a [u64]> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.shape.as_slice())
+    }
+
+    pub fn payload_id(self) -> Option<ContentKey> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.payload)
+    }
+
+    pub fn logical_bytes(self) -> Option<u64> {
+        self.association
+            .payload
+            .as_ref()
+            .map(|payload| payload.logical_bytes)
+    }
+
+    pub fn offset(self) -> Option<u64> {
+        self.frame.map(FileFrame::offset)
+    }
+}
+
+trait IndexedFrame {
+    fn kind(&self) -> FrameKind;
+    fn element(&self) -> Option<ElementType>;
+    fn content_id(&self) -> abir::ContentId;
+    fn required_capabilities(&self) -> u64;
+    fn stored_bytes(&self) -> Option<u64>;
+}
+
+impl IndexedFrame for FrameView<'_> {
+    fn kind(&self) -> FrameKind {
+        FrameView::kind(self)
+    }
+
+    fn element(&self) -> Option<ElementType> {
+        FrameView::element(self)
+    }
+
+    fn content_id(&self) -> abir::ContentId {
+        FrameView::content_id(self)
+    }
+
+    fn required_capabilities(&self) -> u64 {
+        FrameView::required_capabilities(self)
+    }
+
+    fn stored_bytes(&self) -> Option<u64> {
+        u64::try_from(self.bytes().len()).ok()
+    }
+}
+
+impl IndexedFrame for FileFrame {
+    fn kind(&self) -> FrameKind {
+        FileFrame::kind(self)
+    }
+
+    fn element(&self) -> Option<ElementType> {
+        FileFrame::element(self)
+    }
+
+    fn content_id(&self) -> abir::ContentId {
+        FileFrame::content_id(self)
+    }
+
+    fn required_capabilities(&self) -> u64 {
+        FileFrame::required_capabilities(self)
+    }
+
+    fn stored_bytes(&self) -> Option<u64> {
+        Some(self.len())
+    }
+}
+
+fn parse_snapshot(
+    profile: ProfileId,
+    root_kind: RootKind,
+    storage_contract: StorageContract,
+    root_content_id: abir::ContentId,
+    references: &[abir::ContentId],
+    semantic_json: &[u8],
+) -> Result<TrainingSnapshot, TrainingError> {
+    if root_kind != RootKind::Bundle {
+        return Err(TrainingError::NotBundle);
+    }
+    if storage_contract != StorageContract::SealedImmutable {
+        return Err(TrainingError::NotSealed);
+    }
+    let wire_profile = crate::TrainingProfile::from_bcs2(profile)?;
+    let snapshot = TrainingSnapshot::from_catalog(semantic_json)?;
+    if snapshot.profile() != wire_profile {
+        return Err(TrainingError::ProfileMismatch);
+    }
+    if snapshot.content_id()? != root_content_id {
+        return Err(TrainingError::ContentIdMismatch);
+    }
+    if let Some(reference) = references.first() {
+        return Err(TrainingError::ExternalReference(*reference));
+    }
+    Ok(snapshot)
+}
+
+fn validate_frame_closure<F: IndexedFrame>(
+    snapshot: &TrainingSnapshot,
+    frames: &[F],
+) -> Result<BTreeMap<ContentKey, usize>, TrainingError> {
+    let expected: BTreeSet<_> = expected_payloads(snapshot);
+    let mut frame_index = BTreeMap::new();
+    for (index, frame) in frames.iter().enumerate() {
+        if frame.kind() != FrameKind::SemanticPayload {
+            return Err(TrainingError::ExtraPayload(frame.content_id()));
+        }
+        let key = ContentKey::from(frame.content_id());
+        if frame_index.insert(key, index).is_some() {
+            return Err(TrainingError::DuplicatePayload(frame.content_id()));
+        }
+        if !expected.contains(&key) {
+            return Err(TrainingError::ExtraPayload(frame.content_id()));
+        }
+    }
+    if let Some(missing) = expected.iter().find(|key| !frame_index.contains_key(key)) {
+        return Err(TrainingError::MissingPayload(missing.content_id()));
+    }
+    for row in snapshot.rows() {
+        let frame = &frames[frame_index[&row.frame_payload()]];
+        let (element, bytes) = match &row.encoding {
+            Some(encoding) => (encoding.stored_element, encoding.stored_bytes),
+            None => (row.element, row.logical_bytes),
+        };
+        if frame.element() != Some(element)
+            || frame.stored_bytes() != Some(bytes)
+            || frame.required_capabilities() != row.required_capabilities()
+        {
+            return Err(TrainingError::InvalidRowExtent(row.logical_id.content_id()));
+        }
+    }
+    for association in snapshot.label_payloads() {
+        let Some(payload) = &association.payload else {
+            continue;
+        };
+        let frame = &frames[frame_index[&payload.payload]];
+        if frame.element() != Some(payload.element)
+            || frame.stored_bytes() != Some(payload.logical_bytes)
+        {
+            return Err(TrainingError::InvalidRowExtent(
+                association.logical_id.content_id(),
+            ));
+        }
+    }
+    Ok(frame_index)
+}
+
 /// A validated host-side view of an immutable BCS2 training bundle.
 #[derive(Debug)]
 pub struct TrainingWindowStore<'a> {
@@ -175,74 +438,15 @@ impl<'a> TrainingWindowStore<'a> {
         bounds: ResourceBounds,
     ) -> Result<Self, TrainingError> {
         let view = Bcs2View::parse(bytes, supported_capabilities, bounds)?;
-        if view.root_kind() != RootKind::Bundle {
-            return Err(TrainingError::NotBundle);
-        }
-        if view.storage_contract() != StorageContract::SealedImmutable {
-            return Err(TrainingError::NotSealed);
-        }
-        let wire_profile = crate::TrainingProfile::from_bcs2(view.profile())?;
-        let snapshot = TrainingSnapshot::from_catalog(view.semantic_json())?;
-        if snapshot.profile() != wire_profile {
-            return Err(TrainingError::ProfileMismatch);
-        }
-        if snapshot.content_id()? != view.root_content_id() {
-            return Err(TrainingError::ContentIdMismatch);
-        }
-        if let Some(reference) = view.references().first() {
-            return Err(TrainingError::ExternalReference(*reference));
-        }
-
-        let expected: BTreeSet<_> = expected_payloads(&snapshot);
-        let mut frame_index = BTreeMap::new();
-        for (index, frame) in view.frames().iter().enumerate() {
-            if frame.kind() != FrameKind::SemanticPayload {
-                return Err(TrainingError::ExtraPayload(frame.content_id()));
-            }
-            let key = ContentKey::from(frame.content_id());
-            if frame_index.insert(key, index).is_some() {
-                return Err(TrainingError::DuplicatePayload(frame.content_id()));
-            }
-            if !expected.contains(&key) {
-                return Err(TrainingError::ExtraPayload(frame.content_id()));
-            }
-        }
-        if let Some(missing) = expected.iter().find(|key| !frame_index.contains_key(key)) {
-            return Err(TrainingError::MissingPayload(missing.content_id()));
-        }
-        for row in snapshot.rows() {
-            // Locate and check the frame against the STORED extent: for an
-            // encoded row the frame holds the encoding, not the logical array.
-            let frame = &view.frames()[frame_index[&row.frame_payload()]];
-            let (element, bytes) = match &row.encoding {
-                Some(encoding) => (encoding.stored_element, encoding.stored_bytes),
-                None => (row.element, row.logical_bytes),
-            };
-            if frame.element() != Some(element)
-                || u64::try_from(frame.bytes().len()).ok() != Some(bytes)
-            {
-                return Err(TrainingError::InvalidRowExtent(row.logical_id.content_id()));
-            }
-            // The catalog is bound into the snapshot's content id; the index is
-            // not. Requiring them to agree is what makes an index-only edit of a
-            // capability mask detectable rather than merely wrong.
-            if frame.required_capabilities() != row.required_capabilities() {
-                return Err(TrainingError::InvalidRowExtent(row.logical_id.content_id()));
-            }
-        }
-        for association in snapshot.label_payloads() {
-            let Some(payload) = &association.payload else {
-                continue;
-            };
-            let frame = &view.frames()[frame_index[&payload.payload]];
-            if frame.element() != Some(payload.element)
-                || u64::try_from(frame.bytes().len()).ok() != Some(payload.logical_bytes)
-            {
-                return Err(TrainingError::InvalidRowExtent(
-                    association.logical_id.content_id(),
-                ));
-            }
-        }
+        let snapshot = parse_snapshot(
+            view.profile(),
+            view.root_kind(),
+            view.storage_contract(),
+            view.root_content_id(),
+            view.references(),
+            view.semantic_json(),
+        )?;
+        let frame_index = validate_frame_closure(&snapshot, view.frames())?;
 
         Ok(Self {
             frame_index,
@@ -338,5 +542,100 @@ impl<'a> TrainingWindowStore<'a> {
             .as_ref()
             .map(|payload| self.view.frames()[self.frame_index[&payload.payload]].bytes());
         Some(TrainingLabelPayloadLease { association, bytes })
+    }
+}
+
+impl TrainingWindowFileIndex {
+    /// Validate a file-backed snapshot whose rows are stored as logical arrays.
+    pub fn open<R: Read + Seek>(
+        reader: &mut R,
+        bounds: ResourceBounds,
+    ) -> Result<Self, TrainingError> {
+        Self::open_with_capabilities(reader, 0, bounds)
+    }
+
+    /// Validate a file-backed snapshot with explicitly supported row encodings.
+    pub fn open_with_capabilities<R: Read + Seek>(
+        reader: &mut R,
+        supported_capabilities: u64,
+        bounds: ResourceBounds,
+    ) -> Result<Self, TrainingError> {
+        let view = Bcs2FileIndex::open(reader, supported_capabilities, bounds)?;
+        let snapshot = parse_snapshot(
+            view.profile(),
+            view.root_kind(),
+            view.storage_contract(),
+            view.root_content_id(),
+            view.references(),
+            view.semantic_json(),
+        )?;
+        let frame_index = validate_frame_closure(&snapshot, view.frames())?;
+        Ok(Self {
+            frame_index,
+            snapshot,
+            view,
+        })
+    }
+
+    pub fn snapshot(&self) -> &TrainingSnapshot {
+        &self.snapshot
+    }
+
+    pub fn snapshot_id(&self) -> Result<abir::ContentId, TrainingError> {
+        self.snapshot.content_id()
+    }
+
+    pub const fn spec_id(&self) -> ContentKey {
+        self.snapshot.spec_id()
+    }
+
+    pub fn dataset_roots(&self) -> &[ContentKey] {
+        self.snapshot.dataset_roots()
+    }
+
+    pub const fn decision_log_id(&self) -> ContentKey {
+        self.snapshot.decision_log_id()
+    }
+
+    pub const fn artifact_len(&self) -> u64 {
+        self.view.artifact_len()
+    }
+
+    pub fn row(&self, logical_id: ContentKey) -> Option<TrainingFileRow<'_>> {
+        let row = self
+            .snapshot
+            .rows()
+            .binary_search_by_key(&logical_id, |row| row.logical_id)
+            .ok()
+            .map(|index| &self.snapshot.rows()[index])?;
+        let frame = &self.view.frames()[self.frame_index[&row.frame_payload()]];
+        Some(TrainingFileRow { frame, row })
+    }
+
+    pub fn rows(&self) -> impl ExactSizeIterator<Item = TrainingFileRow<'_>> {
+        self.snapshot.rows().iter().map(|row| {
+            let frame = &self.view.frames()[self.frame_index[&row.frame_payload()]];
+            TrainingFileRow { frame, row }
+        })
+    }
+
+    pub fn label_payload(
+        &self,
+        logical_id: ContentKey,
+        concept: &str,
+    ) -> Option<TrainingFileLabelPayload<'_>> {
+        let association = self
+            .snapshot
+            .label_payloads()
+            .binary_search_by(|association| {
+                (association.logical_id, association.concept.as_str()).cmp(&(logical_id, concept))
+            })
+            .ok()
+            .map(|index| &self.snapshot.label_payloads()[index])?;
+        let frame = association
+            .payload
+            .as_ref()
+            .map(|payload| &self.view.frames()[self.frame_index[&payload.payload]]);
+        Some(TrainingFileLabelPayload { association, frame })
     }
 }

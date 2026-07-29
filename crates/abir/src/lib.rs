@@ -30,7 +30,7 @@ mod view;
 #[cfg(feature = "alloc")]
 pub use atom::{
     payload_content_id, verify_payload_content, Atom, BlobIntegrity, BlobRef, ByteOrder,
-    DecodedSemantics, ElementType, EncodedBlock, Layout, PayloadDescriptor,
+    DecodedSemantics, ElementType, EncodedBlock, Layout, PayloadContentHasher, PayloadDescriptor,
     PayloadVerificationError, Presence, SemanticAxis, SignalBlock, Table, TableColumn,
     TemporalTable, Tensor,
 };

@@ -209,3 +209,9 @@ impl From<abir_bcs::Bcs2Error> for TrainingError {
         Self::Bcs2(format!("{value:?}"))
     }
 }
+
+impl From<abir_bcs::Bcs2FileError> for TrainingError {
+    fn from(value: abir_bcs::Bcs2FileError) -> Self {
+        Self::Bcs2(value.to_string())
+    }
+}
