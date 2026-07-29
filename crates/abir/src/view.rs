@@ -110,6 +110,15 @@ impl InMemoryPayloadAccess {
     pub fn insert(&mut self, content_id: ContentId, bytes: Vec<u8>) -> Option<Vec<u8>> {
         self.payloads.insert(content_id, bytes)
     }
+
+    /// Resolve content-addressed bytes that are not attached to an atom
+    /// descriptor, such as source capsules.
+    ///
+    /// Returned storage is borrowed directly from this adapter. Semantic code
+    /// must still obtain the `ContentId` from a validated dataset object.
+    pub fn payload_bytes(&self, content_id: ContentId) -> Option<&[u8]> {
+        self.payloads.get(&content_id).map(Vec::as_slice)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

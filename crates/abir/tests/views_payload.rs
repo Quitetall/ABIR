@@ -96,6 +96,24 @@ fn in_memory_adapter_moves_buffers_without_view_copy() {
 }
 
 #[test]
+fn in_memory_adapter_resolves_content_addressed_capsules_without_copy() {
+    let content_id = ContentId::from_bytes([9; 32]);
+    let bytes = vec![1_u8, 3, 5, 7];
+    let pointer_before_move = bytes.as_ptr();
+    let mut access = InMemoryPayloadAccess::new();
+    access.insert(content_id, bytes);
+
+    let resolved = access
+        .payload_bytes(content_id)
+        .expect("inserted content must resolve");
+    assert_eq!(resolved, [1, 3, 5, 7]);
+    assert_eq!(resolved.as_ptr(), pointer_before_move);
+    assert!(access
+        .payload_bytes(ContentId::from_bytes([8; 32]))
+        .is_none());
+}
+
+#[test]
 fn payload_length_mismatch_is_reported_without_copying() {
     let (dataset, content_id) = tensor_dataset();
     let bytes = [0_u8; 7];
