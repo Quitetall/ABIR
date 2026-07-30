@@ -141,32 +141,37 @@ fn track_git_metadata(repository: &Path) -> Result<(), String> {
 }
 
 fn track_worktree_sources(repository: &Path) -> Result<(), String> {
-    let output = git(repository, &["ls-files", "-z", "--full-name"])?;
-    if !output.status.success() {
-        return Err(format!(
-            "`git ls-files -z --full-name` failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    for path in tracked_worktree_source_paths(repository)? {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
-    let workspace_root = repository
+    Ok(())
+}
+
+pub(crate) fn tracked_worktree_source_paths(manifest_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let workspace_root = manifest_dir
         .ancestors()
         .nth(2)
         .ok_or_else(|| "CARGO_MANIFEST_DIR has no ABIR workspace root".to_owned())?;
+    let output = git(workspace_root, &["ls-files", "-z"])?;
+    if !output.status.success() {
+        return Err(format!(
+            "`git ls-files -z` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let mut tracked = Vec::new();
     for path in output.stdout.split(|byte| *byte == 0) {
         if path.is_empty() {
             continue;
         }
         let path = std::str::from_utf8(path)
-            .map_err(|_| "`git ls-files -z --full-name` returned a non-UTF-8 path".to_owned())?;
+            .map_err(|_| "`git ls-files -z` returned a non-UTF-8 path".to_owned())?;
         if path.contains(['\r', '\n']) {
             return Err("Git-tracked source path contains a line break".to_owned());
         }
-        println!(
-            "cargo:rerun-if-changed={}",
-            workspace_root.join(path).display()
-        );
+        tracked.push(workspace_root.join(path));
     }
-    Ok(())
+    Ok(tracked)
 }
 
 fn track_git_path(repository: &Path, name: &str) -> Result<(), String> {

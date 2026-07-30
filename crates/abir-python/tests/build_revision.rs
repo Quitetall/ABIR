@@ -74,6 +74,24 @@ fn accepts_current_abir_repository_authority() {
 }
 
 #[test]
+fn revision_tracking_covers_the_complete_abir_workspace() {
+    let paths =
+        build_script::tracked_worktree_source_paths(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+
+    assert!(paths.contains(&workspace_root.join("Cargo.toml")));
+    assert!(paths.contains(&workspace_root.join("crates/abir/src/lib.rs")));
+    assert!(paths.contains(&workspace_root.join("crates/abir-python/src/lib.rs")));
+    assert!(
+        paths.len() > 5,
+        "workspace tracking regressed to the abir-python crate only"
+    );
+}
+
+#[test]
 fn rejects_source_archive_nested_in_unrelated_git_checkout() {
     let temporary = tempfile::tempdir().unwrap();
     let outer = temporary.path().join("outer");
