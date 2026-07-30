@@ -110,6 +110,7 @@ pub(crate) struct PyTrainingWindowStore {
     physical_artifact_sha256: String,
     snapshot_id: String,
     spec_id: String,
+    training_spec: Option<TrainingSpec>,
     view_id: Option<String>,
 }
 
@@ -133,6 +134,7 @@ impl PyTrainingWindowStore {
             physical_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
+            training_spec: metadata.training_spec,
             view_id: metadata.view_id,
         })
     }
@@ -193,6 +195,7 @@ impl PyTrainingWindowStore {
             physical_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
+            training_spec: metadata.training_spec,
             view_id: metadata.view_id,
         })
     }
@@ -259,6 +262,7 @@ impl PyTrainingWindowStore {
             physical_artifact_sha256: actual_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
+            training_spec: metadata.training_spec,
             view_id: metadata.view_id,
         })
     }
@@ -286,6 +290,19 @@ impl PyTrainingWindowStore {
     #[getter]
     fn view_id(&self) -> Option<&str> {
         self.view_id.as_deref()
+    }
+
+    /// Complete immutable TrainingSpec embedded by snapshot-v3.
+    ///
+    /// Legacy snapshot-v1/v2 artifacts return `None`; callers requiring
+    /// resolved preprocessing, fitted-state, policy, or view semantics must
+    /// reject that state rather than accept independently asserted metadata.
+    #[getter]
+    fn training_spec<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        self.training_spec
+            .as_ref()
+            .map(|spec| training_spec_dictionary(py, spec))
+            .transpose()
     }
 
     #[getter]
@@ -934,6 +951,7 @@ struct SnapshotMetadata {
     label_payloads: Vec<Vec<LabelPayloadLocation>>,
     snapshot_id: String,
     spec_id: String,
+    training_spec: Option<TrainingSpec>,
     view_id: Option<String>,
 }
 
@@ -1036,6 +1054,7 @@ fn inspect_file_index(index: &TrainingWindowFileIndex) -> PyResult<SnapshotMetad
         label_payloads,
         snapshot_id,
         spec_id: index.spec_id().to_string(),
+        training_spec: embedded_spec.cloned(),
         view_id: embedded_spec.map(|spec| spec.view.to_string()),
     })
 }
@@ -1211,6 +1230,7 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
         label_payloads,
         snapshot_id,
         spec_id: store.spec_id().to_string(),
+        training_spec: embedded_spec.cloned(),
         view_id: embedded_spec.map(|spec| spec.view.to_string()),
     })
 }
@@ -1607,6 +1627,7 @@ fn parse_training_spec(dictionary: &Bound<'_, PyDict>) -> PyResult<TrainingSpec>
             "allowed_adaptive_knobs",
         ],
     )?;
+    preflight_training_spec(dictionary, ResourceBounds::default())?;
     let key = |name: &str| -> PyResult<ContentKey> {
         Ok(ContentKey::new(super::parse_content_id(&required_string(
             dictionary, name,
@@ -1633,6 +1654,75 @@ fn parse_training_spec(dictionary: &Bound<'_, PyDict>) -> PyResult<TrainingSpec>
         window: key("window")?,
         allowed_adaptive_knobs,
     })
+}
+
+fn preflight_training_spec(dictionary: &Bound<'_, PyDict>, bounds: ResourceBounds) -> PyResult<()> {
+    let mut metadata_string_bytes = 0_usize;
+    for key in [
+        "augmentation",
+        "authorized_purpose",
+        "cohort",
+        "feature",
+        "fitted_state",
+        "grouping",
+        "label",
+        "policy",
+        "preprocessing",
+        "sampler",
+        "split",
+        "view",
+        "window",
+    ] {
+        metadata_string_bytes = metadata_string_bytes
+            .checked_add(required_string_length(dictionary, key)?)
+            .ok_or_else(|| PyValueError::new_err("training spec metadata size overflow"))?;
+    }
+    let knobs_value = required_item(dictionary, "allowed_adaptive_knobs")?;
+    let knobs = knobs_value
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("allowed_adaptive_knobs must be a list"))?;
+    if knobs.len() > bounds.max_index_entries as usize {
+        return Err(PyValueError::new_err(
+            "training spec adaptive knobs exceed the ABIR BCS2 index resource bound",
+        ));
+    }
+    for value in knobs.iter() {
+        let knob = value.downcast::<PyString>().map_err(|_| {
+            PyValueError::new_err("allowed_adaptive_knobs must contain only strings")
+        })?;
+        metadata_string_bytes = metadata_string_bytes
+            .checked_add(knob.to_str()?.len())
+            .ok_or_else(|| PyValueError::new_err("training spec metadata size overflow"))?;
+    }
+    if metadata_string_bytes > bounds.max_catalog_bytes as usize {
+        return Err(PyValueError::new_err(
+            "training spec metadata exceeds the ABIR BCS2 catalog resource bound",
+        ));
+    }
+    Ok(())
+}
+
+fn training_spec_dictionary<'py>(
+    py: Python<'py>,
+    spec: &TrainingSpec,
+) -> PyResult<Bound<'py, PyDict>> {
+    let result = PyDict::new_bound(py);
+    result.set_item("augmentation", spec.augmentation.to_string())?;
+    result.set_item("authorized_purpose", &spec.authorized_purpose)?;
+    result.set_item("cohort", spec.cohort.to_string())?;
+    result.set_item("feature", spec.feature.to_string())?;
+    result.set_item("fitted_state", spec.fitted_state.to_string())?;
+    result.set_item("grouping", spec.grouping.to_string())?;
+    result.set_item("label", spec.label.to_string())?;
+    result.set_item("policy", spec.policy.to_string())?;
+    result.set_item("preprocessing", spec.preprocessing.to_string())?;
+    result.set_item("sampler", spec.sampler.to_string())?;
+    result.set_item("seed", spec.seed)?;
+    result.set_item("split", spec.split.to_string())?;
+    result.set_item("view", spec.view.to_string())?;
+    result.set_item("window", spec.window.to_string())?;
+    result.set_item("allowed_adaptive_knobs", &spec.allowed_adaptive_knobs)?;
+    Ok(result)
 }
 
 fn preflight_acceptance_count(count: usize, kind: &str) -> PyResult<()> {
@@ -1946,9 +2036,10 @@ pub(crate) fn seal_training_continual_promotion<'py>(
 }
 
 /// Seal exact primary rows and typed label associations into a validated BCS2
-/// Training Window Store artifact. The caller supplies semantic identities;
-/// ABIR exclusively owns payload identities, canonical catalog identity, and
-/// physical frame closure.
+/// Training Window Store artifact. Snapshot-v3 embeds complete TrainingSpec
+/// authority; legacy compatibility sealing accepts only its precomputed ID.
+/// ABIR owns payload identities, canonical catalog identity, and physical frame
+/// closure.
 #[pyfunction]
 #[pyo3(signature = (*, dataset_roots, profile, rows, label_payloads, decision_log_id, spec_id=None, spec=None))]
 #[allow(clippy::too_many_arguments)]

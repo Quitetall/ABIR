@@ -5,7 +5,7 @@
   "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
   "artifacts": [
     {"path": "spec/TRAINING_WINDOW_STORE_V3.md", "sha256": "ab26c2a10387a9070ce928d0d4733b56fb51590cfc15d8ba0142da0933bc9cac"},
-    {"path": "schema/training-snapshot-v3.schema.json", "sha256": "0850c458476fe07be75e7c1eba89e7fadc31a782519f56cf7487ace6129fb607"},
+    {"path": "schema/training-snapshot-v3.schema.json", "sha256": "8f85754fbfcdad21e0b06f09de3370de63d5c97f0120172f5352d9c9dcf18629"},
     {"path": "registries/bcs2-profiles-v1.json", "sha256": "300b0890de8ed536c96cc94427339463ed10334c63f575c1efe797a07f5611e1"}
   ]
 }

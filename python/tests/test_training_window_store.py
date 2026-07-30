@@ -66,6 +66,7 @@ def test_training_window_store_exposes_snapshot_bound_semantics_without_source_f
 
     assert store.dataset_roots == ("01" * 32,)
     assert store.spec_id == "02" * 32
+    assert store.training_spec is None
     assert store.decision_log_id == "03" * 32
     assert store.decision_log_replay_state == "identity-bound"
 
@@ -491,6 +492,7 @@ def test_public_training_sealer_embeds_and_exposes_complete_spec_semantics():
 
     store = abir.TrainingWindowStore.open_bytes(sealed["artifact"])
     assert store.spec_id == sealed["spec_id"]
+    assert store.training_spec == spec
     assert store.preprocessing_graph_id == spec["preprocessing"]
     assert store.fitted_state_id == spec["fitted_state"]
     assert store.view_id == spec["view"]
@@ -701,6 +703,14 @@ def test_training_v3_schema_and_manifest_bind_embedded_spec_authority():
     oversized_seed = json.loads(json.dumps(catalog))
     oversized_seed["spec"]["seed"] = 2**64
     assert list(jsonschema.Draft202012Validator(schema).iter_errors(oversized_seed))
+
+    invalid_knob = json.loads(json.dumps(catalog))
+    invalid_knob["spec"]["allowed_adaptive_knobs"] = ["Worker Count"]
+    assert list(jsonschema.Draft202012Validator(schema).iter_errors(invalid_knob))
+
+    oversized_extent = json.loads(json.dumps(catalog))
+    oversized_extent["rows"][0]["logical_bytes"] = 2**64
+    assert list(jsonschema.Draft202012Validator(schema).iter_errors(oversized_extent))
 
     manifest = json.loads((root / "spec/training-v3.manifest.json").read_text())
     for artifact in manifest["artifacts"]:
