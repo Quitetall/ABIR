@@ -106,6 +106,34 @@ fn in_memory_adapter_moves_buffers_without_view_copy() {
 }
 
 #[test]
+fn opened_dataset_can_be_consumed_and_revalidated_without_identity_change() {
+    let (dataset, content_id) = tensor_dataset();
+    let before = abir::logical_content_id(&dataset).expect("logical identity");
+    let mut access = InMemoryPayloadAccess::new();
+    access.insert(content_id, vec![8_u8; 8]);
+    let opened = OpenedDataset::new(dataset, access);
+
+    let (dataset, access) = opened.into_parts();
+    let reopened = dataset
+        .into_draft()
+        .validate(ValidationLimits::default())
+        .expect("revalidated dataset");
+
+    assert_eq!(
+        before,
+        abir::logical_content_id(&reopened).expect("logical identity after reopen")
+    );
+    let opened = OpenedDataset::new(reopened, access);
+    assert_eq!(
+        opened
+            .block_view(id::<AtomTag>(4))
+            .expect("block view")
+            .bytes(),
+        &[8_u8; 8]
+    );
+}
+
+#[test]
 fn payload_length_mismatch_is_reported_without_copying() {
     let (dataset, content_id) = tensor_dataset();
     let bytes = [0_u8; 7];

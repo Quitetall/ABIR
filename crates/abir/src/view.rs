@@ -259,6 +259,11 @@ impl<A> OpenedDataset<A> {
         &self.access
     }
 
+    /// Consume the opened root without copying semantic catalogs or payloads.
+    pub fn into_parts(self) -> (AbirDataset, A) {
+        (self.dataset, self.access)
+    }
+
     pub fn recording_view(&self, id: ObjectId<RecordingTag>) -> Option<RecordingView<'_>> {
         let recording = self
             .dataset

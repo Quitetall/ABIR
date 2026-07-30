@@ -1048,6 +1048,42 @@ pub struct AbirDataset {
 }
 
 impl AbirDataset {
+    /// Reopen this validated dataset as a mutable construction draft.
+    ///
+    /// This consumes the validated root instead of cloning its catalogs. Host
+    /// adapters use it to attach source capsules or execution evidence, then
+    /// cross the normal [`DatasetDraft::validate`] boundary again.
+    pub fn into_draft(self) -> DatasetDraft {
+        DatasetDraft {
+            id: self.id,
+            recordings: self.recordings,
+            streams: self.streams,
+            atoms: self.atoms,
+            clocks: self.clocks,
+            coordinate_frames: self.coordinate_frames,
+            channel_bases: self.channel_bases,
+            policies: self.policies,
+            proofs: self.proofs,
+            derivations: self.derivations,
+            fidelity: self.fidelity,
+            source_capsules: self.source_capsules,
+            observed_execution: self.observed_execution,
+            subjects: self.subjects,
+            patients: self.patients,
+            sessions: self.sessions,
+            acquisitions: self.acquisitions,
+            devices: self.devices,
+            sensors: self.sensors,
+            channels: self.channels,
+            clock_relations: self.clock_relations,
+            frame_transforms: self.frame_transforms,
+            events: self.events,
+            concept_dictionaries: self.concept_dictionaries,
+            derived_artifacts: self.derived_artifacts,
+            source_relationships: self.source_relationships,
+        }
+    }
+
     pub const fn id(&self) -> ObjectId<DatasetTag> {
         self.id
     }
