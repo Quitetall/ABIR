@@ -1,0 +1,33 @@
+{
+  "base": "valid-snapshot.json",
+  "vectors": [
+    {
+      "name": "missing-program",
+      "operation": "remove",
+      "path": "/program"
+    },
+    {
+      "name": "missing-execution-decisions",
+      "operation": "remove",
+      "path": "/program/execution_decisions"
+    },
+    {
+      "name": "cross-role-schema",
+      "operation": "replace",
+      "path": "/program/descriptors/0/value/schema",
+      "value": "org.quitetall.abir.training.semantic.view-v1"
+    },
+    {
+      "name": "floating-semantic-definition",
+      "operation": "replace",
+      "path": "/program/descriptors/0/value/definition",
+      "value": 0.5
+    },
+    {
+      "name": "unknown-sampler-strategy",
+      "operation": "replace",
+      "path": "/program/sampler/strategy/kind",
+      "value": "external-randomness"
+    }
+  ]
+}

@@ -1,0 +1,582 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quitetall.org/abir/schema/training-snapshot-v4.schema.json",
+  "title": "ABIR sealed training snapshot v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dataset_roots",
+    "decision_log",
+    "decision_log_id",
+    "profile",
+    "rows",
+    "schema",
+    "sealed",
+    "spec",
+    "spec_id",
+    "program"
+  ],
+  "properties": {
+    "dataset_roots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/contentId" }
+    },
+    "decision_log_id": { "$ref": "#/$defs/contentId" },
+    "decision_log": { "$ref": "#/$defs/decisionLog" },
+    "label_payloads": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/labelPayloadAssociation" }
+    },
+    "profile": {
+      "enum": ["speed", "balanced", "memory", "compact", "ultra-compact", "stream"]
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/row" }
+    },
+    "schema": { "const": "org.quitetall.abir.training.snapshot-v4" },
+    "sealed": { "const": true },
+    "spec": { "$ref": "#/$defs/trainingSpec" },
+    "spec_id": { "$ref": "#/$defs/contentId" },
+    "program": { "$ref": "#/$defs/trainingProgram" }
+  },
+  "$defs": {
+    "contentId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "trainingSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed_adaptive_knobs",
+        "augmentation",
+        "authorized_purpose",
+        "cohort",
+        "feature",
+        "fitted_state",
+        "grouping",
+        "label",
+        "policy",
+        "preprocessing",
+        "sampler",
+        "seed",
+        "split",
+        "view",
+        "window"
+      ],
+      "properties": {
+        "allowed_adaptive_knobs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9._-]*$"
+          }
+        },
+        "augmentation": { "$ref": "#/$defs/contentId" },
+        "authorized_purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "cohort": { "$ref": "#/$defs/contentId" },
+        "feature": { "$ref": "#/$defs/contentId" },
+        "fitted_state": { "$ref": "#/$defs/contentId" },
+        "grouping": { "$ref": "#/$defs/contentId" },
+        "label": { "$ref": "#/$defs/contentId" },
+        "policy": { "$ref": "#/$defs/contentId" },
+        "preprocessing": { "$ref": "#/$defs/contentId" },
+        "sampler": { "$ref": "#/$defs/contentId" },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "split": { "$ref": "#/$defs/contentId" },
+        "view": { "$ref": "#/$defs/contentId" },
+        "window": { "$ref": "#/$defs/contentId" }
+      }
+    },
+    "decisionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activation_barrier", "decision", "durable_before_activation", "knob", "rank", "sequence"],
+      "properties": {
+        "activation_barrier": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "decision": { "$ref": "#/$defs/contentId" },
+        "durable_before_activation": { "const": true },
+        "knob": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "rank": { "const": 0 },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "decisionLog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["records", "schema", "sealed", "spec_id"],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/decisionRecord" }
+        },
+        "schema": { "const": "org.quitetall.abir.training.decision-log-v1" },
+        "sealed": { "const": true },
+        "spec_id": { "$ref": "#/$defs/contentId" }
+      }
+    },
+    "semanticDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "value"],
+      "properties": {
+        "role": {
+          "enum": [
+            "augmentation",
+            "cohort",
+            "feature",
+            "fitted-state",
+            "grouping",
+            "label",
+            "policy",
+            "preprocessing",
+            "split",
+            "view",
+            "window"
+          ]
+        },
+        "value": { "$ref": "#/$defs/semanticValue" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "role": { "const": "augmentation" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.augmentation-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "cohort" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.cohort-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "feature" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.feature-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "fitted-state" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.fitted-state-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "grouping" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.grouping-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "label" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.label-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "policy" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.policy-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "preprocessing" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.preprocessing-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "split" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.split-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "view" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.view-v1" } } } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "window" } }, "required": ["role"] },
+          "then": { "properties": { "value": { "properties": { "schema": { "const": "org.quitetall.abir.training.semantic.window-v1" } } } } }
+        }
+      ]
+    },
+    "semanticValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definition", "schema"],
+      "properties": {
+        "definition": { "$ref": "#/$defs/restrictedJson" },
+        "schema": { "type": "string" }
+      }
+    },
+    "restrictedJson": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "string" },
+        {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 18446744073709551615
+        },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/restrictedJson" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/restrictedJson" }
+        }
+      ]
+    },
+    "sampler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "sealed", "strategy"],
+      "properties": {
+        "schema": { "const": "org.quitetall.abir.training.sampler-v1" },
+        "sealed": { "const": true },
+        "strategy": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "properties": {"kind": {"const": "sequential"}}, "required": ["kind"] },
+            { "type": "object", "additionalProperties": false, "properties": {"kind": {"const": "shuffle"}}, "required": ["kind"] },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["key", "kind", "strata"],
+              "properties": {
+                "key": { "enum": ["group", "label", "split"] },
+                "kind": { "const": "stratified" },
+                "strata": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["draws", "value"],
+                    "properties": {
+                      "draws": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 18446744073709551615
+                      },
+                      "value": { "$ref": "#/$defs/contentId" }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "executionDecision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["knob", "value"],
+          "properties": {
+            "knob": { "const": "row-grouping" },
+            "value": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "rows"],
+                  "properties": {
+                    "kind": { "const": "fixed-rows" },
+                    "rows": { "type": "integer", "minimum": 1, "maximum": 65536 }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["bytes", "kind"],
+                  "properties": {
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 4096,
+                      "maximum": 1073741824
+                    },
+                    "kind": { "const": "target-bytes" }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["knob", "value"],
+          "properties": {
+            "knob": { "const": "prefetch-depth" },
+            "value": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind"],
+                  "properties": { "kind": { "const": "disabled" } }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "rows"],
+                  "properties": {
+                    "kind": { "const": "rows" },
+                    "rows": { "type": "integer", "minimum": 1, "maximum": 4096 }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["knob", "value"],
+          "properties": {
+            "knob": { "const": "payload-access" },
+            "value": {
+              "enum": ["prefer-mmap", "require-mmap", "materialize", "stream"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["knob", "value"],
+          "properties": {
+            "knob": { "const": "cache-budget" },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["bytes"],
+              "properties": {
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 17179869184
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["knob", "value"],
+          "properties": {
+            "knob": { "const": "closure" },
+            "value": {
+              "enum": ["portable", "allow-verified-external-references"]
+            }
+          }
+        }
+      ]
+    },
+    "trainingProgram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["descriptors", "execution_decisions", "schema", "sealed", "sampler"],
+      "properties": {
+        "descriptors": {
+          "type": "array",
+          "minItems": 11,
+          "maxItems": 11,
+          "items": { "$ref": "#/$defs/semanticDescriptor" },
+          "uniqueItems": true,
+          "allOf": [
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "augmentation"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "cohort"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "feature"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "fitted-state"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "grouping"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "label"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "policy"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "preprocessing"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "split"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "view"}} },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["role"], "properties": {"role": {"const": "window"}} },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        },
+        "execution_decisions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/executionDecision" }
+        },
+        "schema": { "const": "org.quitetall.abir.training.program-v1" },
+        "sealed": { "const": true },
+        "sampler": { "$ref": "#/$defs/sampler" }
+      }
+    },
+    "associatedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byte_order", "element", "logical_bytes", "payload", "shape"],
+      "properties": {
+        "byte_order": { "enum": ["little", "big", "not-applicable"] },
+        "element": {
+          "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"]
+        },
+        "logical_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "payload": { "$ref": "#/$defs/contentId" },
+        "shape": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18446744073709551615
+          }
+        }
+      }
+    },
+    "labelPayloadAssociation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["concept", "logical_id", "payload", "presence"],
+      "properties": {
+        "concept": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 256,
+          "pattern": "^[a-z0-9][a-z0-9._-]*\\.[a-z0-9._-]*[a-z0-9_-]$"
+        },
+        "logical_id": { "$ref": "#/$defs/contentId" },
+        "payload": {
+          "oneOf": [
+            { "$ref": "#/$defs/associatedPayload" },
+            { "type": "null" }
+          ]
+        },
+        "presence": {
+          "enum": ["present", "absent-at-source", "unknown-at-source", "withheld", "redacted", "not-applicable"]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "presence": { "const": "present" } } },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/associatedPayload" } } },
+          "else": { "properties": { "payload": { "type": "null" } } }
+        }
+      ]
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byte_order", "group", "label", "logical_bytes", "logical_id", "payload", "element", "shape", "split"],
+      "properties": {
+        "byte_order": { "enum": ["little", "big", "not-applicable"] },
+        "encoding": { "$ref": "#/$defs/rowEncoding" },
+        "group": { "$ref": "#/$defs/contentId" },
+        "label": { "$ref": "#/$defs/contentId" },
+        "logical_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "logical_id": { "$ref": "#/$defs/contentId" },
+        "payload": { "$ref": "#/$defs/contentId" },
+        "element": {
+          "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"]
+        },
+        "shape": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18446744073709551615
+          }
+        },
+        "split": { "$ref": "#/$defs/contentId" }
+      }
+    },
+    "rowEncoding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capabilities",
+        "stored_bytes",
+        "stored_element",
+        "stored_payload"
+      ],
+      "properties": {
+        "capabilities": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "stored_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "stored_element": {
+          "enum": ["i8", "i16", "i24", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "utf8", "bytes"]
+        },
+        "stored_payload": { "$ref": "#/$defs/contentId" }
+      }
+    }
+  }
+}

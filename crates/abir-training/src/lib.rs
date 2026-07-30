@@ -6,11 +6,14 @@
 //! copy.
 
 mod acceptance;
+mod canonical;
 mod compiler;
 mod continual;
 mod decision;
 mod error;
+mod identity;
 mod model;
+mod program;
 mod store;
 
 pub use acceptance::{
@@ -19,7 +22,7 @@ pub use acceptance::{
 };
 pub use compiler::{
     compile_execution_plan, CacheBudget, ClosurePolicy, CompiledExecutionPlan, PayloadAccessPolicy,
-    PlanCompileError, PlanOverrides, PrefetchPolicy, RowGrouping,
+    PlanCompileError, PlanOverrides, PrefetchPolicy, RowGrouping, TrainingExecutionDecision,
 };
 pub use continual::{
     ClosedSubscription, DatasetSubscription, MicroSnapshot, SubscriptionCorrection,
@@ -30,6 +33,10 @@ pub use model::{
     encode_snapshot, ContentKey, TrainingAssociatedPayload, TrainingInput,
     TrainingLabelPayloadAssociation, TrainingProfile, TrainingRow, TrainingRowEncoding,
     TrainingSnapshot, TrainingSpec,
+};
+pub use program::{
+    CompiledTrainingEpoch, CompiledTrainingRow, SamplerStrategy, SamplerStratum, SamplerStratumKey,
+    TrainingProgram, TrainingSampler, TrainingSemanticDescriptor, TrainingSemanticRole,
 };
 pub use store::{
     DecisionLogReplayState, TrainingFileLabelPayload, TrainingFileRow, TrainingLabelPayloadLease,

@@ -404,6 +404,18 @@ fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        training::training_sampler_content_id,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        training::training_execution_decision_content_id,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        training::training_semantic_content_id,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         training::seal_training_continual_promotion,
         module
     )?)?;
@@ -422,6 +434,11 @@ fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     #[cfg(feature = "test-fixtures")]
     module.add_function(wrap_pyfunction!(training::training_fixture_bytes, module)?)?;
+    #[cfg(feature = "test-fixtures")]
+    module.add_function(wrap_pyfunction!(
+        training::training_v4_fixture_bytes,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(implementation_revision, module)?)?;
     module.add_function(wrap_pyfunction!(version, module)?)?;
     Ok(())

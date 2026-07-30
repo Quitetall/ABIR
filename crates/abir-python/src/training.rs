@@ -3,8 +3,10 @@ use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType, Presence}
 use abir_training::{
     compile_execution_plan, encode_snapshot, ContentKey, ContinualPromotion, DatasetSubscription,
     DecisionLog, DecisionRecord, DecisionReplayReceipt, MicroSnapshot, PayloadAccessPolicy,
-    PlanOverrides, PrefetchPolicy, RowGrouping, SourceEquivalenceReceipt, SubscriptionCorrection,
-    TrainingAssociatedPayload, TrainingLabelPayloadAssociation, TrainingRow, TrainingSnapshot,
+    PlanOverrides, PrefetchPolicy, RowGrouping, SamplerStrategy, SamplerStratum, SamplerStratumKey,
+    SourceEquivalenceReceipt, SubscriptionCorrection, TrainingAssociatedPayload,
+    TrainingExecutionDecision, TrainingLabelPayloadAssociation, TrainingProgram, TrainingRow,
+    TrainingSampler, TrainingSemanticDescriptor, TrainingSemanticRole, TrainingSnapshot,
     TrainingSpec,
 };
 use abir_training::{
@@ -20,6 +22,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+const MAX_NATIVE_BATCH_ROWS: usize = 65_536;
+const MAX_NATIVE_BATCH_MATERIALIZED_BYTES: usize = 256 * 1024 * 1024;
 
 enum ArtifactOwner {
     Bytes(Py<PyBytes>),
@@ -111,6 +116,9 @@ pub(crate) struct PyTrainingWindowStore {
     snapshot_id: String,
     spec_id: String,
     training_spec: Option<TrainingSpec>,
+    training_program: Option<TrainingProgram>,
+    decision_log: Option<DecisionLog>,
+    semantic_rows: Vec<TrainingRow>,
     view_id: Option<String>,
 }
 
@@ -135,6 +143,9 @@ impl PyTrainingWindowStore {
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
             training_spec: metadata.training_spec,
+            training_program: metadata.training_program,
+            decision_log: metadata.decision_log,
+            semantic_rows: metadata.semantic_rows,
             view_id: metadata.view_id,
         })
     }
@@ -196,6 +207,9 @@ impl PyTrainingWindowStore {
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
             training_spec: metadata.training_spec,
+            training_program: metadata.training_program,
+            decision_log: metadata.decision_log,
+            semantic_rows: metadata.semantic_rows,
             view_id: metadata.view_id,
         })
     }
@@ -263,6 +277,9 @@ impl PyTrainingWindowStore {
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
             training_spec: metadata.training_spec,
+            training_program: metadata.training_program,
+            decision_log: metadata.decision_log,
+            semantic_rows: metadata.semantic_rows,
             view_id: metadata.view_id,
         })
     }
@@ -326,11 +343,82 @@ impl PyTrainingWindowStore {
         &self.physical_artifact_sha256
     }
 
-    /// The snapshot binds the decision-log identity, but carries no records
-    /// from which the decision log could be replayed.
     #[getter]
     fn decision_log_replay_state(&self) -> &'static str {
-        DecisionLogReplayState::IdentityBound.as_str()
+        if self.training_program.is_some() && self.decision_log.is_some() {
+            DecisionLogReplayState::ReplayReady.as_str()
+        } else {
+            DecisionLogReplayState::IdentityBound.as_str()
+        }
+    }
+
+    #[getter]
+    fn training_program_id(&self) -> PyResult<Option<String>> {
+        self.training_program
+            .as_ref()
+            .map(|program| {
+                program
+                    .content_id()
+                    .map(|content_id| content_id.to_string())
+                    .map_err(training_error)
+            })
+            .transpose()
+    }
+
+    /// Compile one exact scientific epoch before physical worker delivery.
+    #[pyo3(signature = (epoch_index, rank=0, world_size=1))]
+    fn compile_epoch<'py>(
+        &self,
+        py: Python<'py>,
+        epoch_index: u64,
+        rank: u32,
+        world_size: u32,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let spec = self.training_spec.as_ref().ok_or_else(|| {
+            PyValueError::new_err("snapshot lacks embedded TrainingSpec authority")
+        })?;
+        let program = self.training_program.as_ref().ok_or_else(|| {
+            PyValueError::new_err("snapshot lacks executable TrainingProgram authority")
+        })?;
+        let decision_log = self.decision_log.as_ref().ok_or_else(|| {
+            PyValueError::new_err("snapshot lacks embedded decision-log replay authority")
+        })?;
+        let decision_log_id = ContentKey::from(decision_log.content_id().map_err(training_error)?);
+        let compiled = program
+            .compile_epoch(
+                spec,
+                &self.semantic_rows,
+                decision_log_id,
+                epoch_index,
+                rank,
+                world_size,
+            )
+            .map_err(training_error)?;
+        let rows = PyList::empty_bound(py);
+        for row in compiled.rows() {
+            let value = PyDict::new_bound(py);
+            value.set_item("global_index", row.global_index)?;
+            value.set_item("logical_id", row.logical_id.to_string())?;
+            value.set_item("occurrence", row.occurrence)?;
+            value.set_item("stochastic_seed", row.stochastic_seed)?;
+            rows.append(value)?;
+        }
+        let result = PyDict::new_bound(py);
+        result.set_item("epoch", compiled.epoch())?;
+        result.set_item("decision_log_id", compiled.decision_log_id().to_string())?;
+        result.set_item(
+            "epoch_id",
+            compiled.content_id().map_err(training_error)?.to_string(),
+        )?;
+        result.set_item("global_rows", compiled.global_rows())?;
+        result.set_item(
+            "global_schedule_id",
+            compiled.global_schedule_id().to_string(),
+        )?;
+        result.set_item("rank", compiled.rank())?;
+        result.set_item("rows", rows)?;
+        result.set_item("world_size", compiled.world_size())?;
+        Ok(result)
     }
 
     #[getter]
@@ -358,10 +446,46 @@ impl PyTrainingWindowStore {
     /// This method measures CPU-side payload access only. It never claims OS
     /// readahead, GPU transfer, or device-cache behavior. A backing that cannot
     /// honor the compiled access policy is rejected rather than substituted.
-    fn execute_training_plan<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+    #[pyo3(signature = (activation_barrier=None))]
+    fn execute_training_plan<'py>(
+        &self,
+        py: Python<'py>,
+        activation_barrier: Option<u64>,
+    ) -> PyResult<Bound<'py, PyDict>> {
         let profile = parse_profile(self.profile)?;
-        let plan = compile_execution_plan(profile, PlanOverrides::default())
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let (plan, applied_decision_count) = match (
+            &self.training_program,
+            &self.training_spec,
+            &self.decision_log,
+        ) {
+            (Some(program), Some(spec), Some(log)) => {
+                if !log.records().is_empty() && activation_barrier.is_none() {
+                    return Err(PyValueError::new_err(
+                        "activation_barrier is required to replay a non-empty decision log",
+                    ));
+                }
+                let barrier = activation_barrier.unwrap_or(0);
+                let plan = program
+                    .compile_execution_plan_at_barrier(spec, log, profile, barrier)
+                    .map_err(training_error)?;
+                let applied = log
+                    .records()
+                    .iter()
+                    .take_while(|record| record.activation_barrier <= barrier)
+                    .count();
+                (plan, applied)
+            }
+            _ if activation_barrier.is_some() => {
+                return Err(PyValueError::new_err(
+                    "activation_barrier requires a replay-ready snapshot",
+                ));
+            }
+            _ => (
+                compile_execution_plan(profile, PlanOverrides::default())
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                0,
+            ),
+        };
         let plan_id = plan
             .content_id()
             .map_err(|error| PyValueError::new_err(error.to_string()))?
@@ -483,6 +607,9 @@ impl PyTrainingWindowStore {
         let observed_trace_id = format!("{:x}", Sha256::digest(observed_trace_json.as_bytes()));
 
         let result = PyDict::new_bound(py);
+        result.set_item("activation_barrier", activation_barrier)?;
+        result.set_item("applied_decision_count", applied_decision_count)?;
+        result.set_item("decision_log_id", &self.decision_log_id)?;
         result.set_item("implementation_id", implementation_id)?;
         result.set_item("logical_bytes", metrics.logical_bytes)?;
         result.set_item("logical_payload_sha256", metrics.logical_payload_sha256)?;
@@ -601,6 +728,55 @@ impl PyTrainingWindowStore {
                 )))
             }
         }
+    }
+
+    /// Resolve several immutable NumPy row views through one native call.
+    fn batch_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        logical_ids: &Bound<'py, PyList>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        if logical_ids.len() > MAX_NATIVE_BATCH_ROWS {
+            return Err(PyValueError::new_err(
+                "training batch exceeds the ABIR native batch row bound",
+            ));
+        }
+        let mut rows = Vec::with_capacity(logical_ids.len());
+        let mut materialized_bytes = 0_usize;
+        for value in logical_ids.iter() {
+            let logical_id = value
+                .downcast::<PyString>()
+                .map_err(|_| PyValueError::new_err("batch logical IDs must be strings"))?;
+            let row = self.row(logical_id.to_str()?)?;
+            if self.artifact.materializes_rows() {
+                materialized_bytes = materialized_bytes
+                    .checked_add(row.logical_bytes)
+                    .ok_or_else(|| {
+                        PyValueError::new_err("training batch materialized-byte count overflow")
+                    })?;
+                if materialized_bytes > MAX_NATIVE_BATCH_MATERIALIZED_BYTES {
+                    return Err(PyValueError::new_err(
+                        "training batch exceeds the ABIR native materialization bound",
+                    ));
+                }
+            }
+            rows.push(row);
+        }
+        let mut arrays = Vec::with_capacity(rows.len());
+        for row in rows {
+            arrays.push(numpy_from_location(
+                &self.artifact,
+                py,
+                "row",
+                row.element,
+                row.byte_order,
+                row.logical_bytes,
+                row.payload_id,
+                row.offset,
+                &row.shape,
+            )?);
+        }
+        Ok(PyTuple::new_bound(py, arrays))
     }
 }
 
@@ -951,7 +1127,10 @@ struct SnapshotMetadata {
     label_payloads: Vec<Vec<LabelPayloadLocation>>,
     snapshot_id: String,
     spec_id: String,
+    decision_log: Option<DecisionLog>,
+    semantic_rows: Vec<TrainingRow>,
     training_spec: Option<TrainingSpec>,
+    training_program: Option<TrainingProgram>,
     view_id: Option<String>,
 }
 
@@ -1040,6 +1219,7 @@ fn inspect_file_index(index: &TrainingWindowFileIndex) -> PyResult<SnapshotMetad
         .collect::<PyResult<Vec<_>>>()?;
     let snapshot_id = index.snapshot_id().map_err(training_error)?.to_string();
     let embedded_spec = index.snapshot().spec();
+    let semantic_rows = index.snapshot().rows().to_vec();
     Ok(SnapshotMetadata {
         dataset_roots: index
             .dataset_roots()
@@ -1054,7 +1234,10 @@ fn inspect_file_index(index: &TrainingWindowFileIndex) -> PyResult<SnapshotMetad
         label_payloads,
         snapshot_id,
         spec_id: index.spec_id().to_string(),
+        decision_log: index.snapshot().decision_log().cloned(),
+        semantic_rows,
         training_spec: embedded_spec.cloned(),
+        training_program: index.snapshot().program().cloned(),
         view_id: embedded_spec.map(|spec| spec.view.to_string()),
     })
 }
@@ -1216,6 +1399,7 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
         .map_err(training_error)?
         .to_string();
     let embedded_spec = store.snapshot().spec();
+    let semantic_rows = store.snapshot().rows().to_vec();
     Ok(SnapshotMetadata {
         dataset_roots: store
             .dataset_roots()
@@ -1230,7 +1414,10 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
         label_payloads,
         snapshot_id,
         spec_id: store.spec_id().to_string(),
+        decision_log: store.snapshot().decision_log().cloned(),
+        semantic_rows,
         training_spec: embedded_spec.cloned(),
+        training_program: store.snapshot().program().cloned(),
         view_id: embedded_spec.map(|spec| spec.view.to_string()),
     })
 }
@@ -1408,6 +1595,36 @@ pub(crate) fn compile_training_execution_plan<'py>(
     result.set_item("canonical_json", canonical_json)?;
     result.set_item("plan_id", plan_id.to_string())?;
     Ok(result)
+}
+
+/// Derive executable sampler identity from the same typed parser used by
+/// snapshot-v4 sealing.
+#[pyfunction]
+pub(crate) fn training_sampler_content_id(sampler: &Bound<'_, PyDict>) -> PyResult<String> {
+    parse_sampler(sampler)?
+        .content_id()
+        .map(|content_id| content_id.to_string())
+        .map_err(training_error)
+}
+
+/// Derive one closed execution-decision identity from its typed value.
+#[pyfunction]
+pub(crate) fn training_execution_decision_content_id(
+    decision: &Bound<'_, PyDict>,
+) -> PyResult<String> {
+    parse_execution_decision(decision)?
+        .content_id()
+        .map(|content_id| content_id.to_string())
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// Derive one TrainingSpec semantic identity under its fixed role domain.
+#[pyfunction]
+pub(crate) fn training_semantic_content_id(role: &str, canonical_json: &[u8]) -> PyResult<String> {
+    TrainingSemanticDescriptor::from_canonical_json(parse_semantic_role(role)?, canonical_json)
+        .and_then(|descriptor| descriptor.content_id())
+        .map(|content_id| content_id.to_string())
+        .map_err(training_error)
 }
 
 fn parse_presence(value: &str) -> PyResult<Presence> {
@@ -1725,6 +1942,254 @@ fn training_spec_dictionary<'py>(
     Ok(result)
 }
 
+fn parse_semantic_role(value: &str) -> PyResult<TrainingSemanticRole> {
+    match value {
+        "augmentation" => Ok(TrainingSemanticRole::Augmentation),
+        "cohort" => Ok(TrainingSemanticRole::Cohort),
+        "feature" => Ok(TrainingSemanticRole::Feature),
+        "fitted-state" => Ok(TrainingSemanticRole::FittedState),
+        "grouping" => Ok(TrainingSemanticRole::Grouping),
+        "label" => Ok(TrainingSemanticRole::Label),
+        "policy" => Ok(TrainingSemanticRole::Policy),
+        "preprocessing" => Ok(TrainingSemanticRole::Preprocessing),
+        "split" => Ok(TrainingSemanticRole::Split),
+        "view" => Ok(TrainingSemanticRole::View),
+        "window" => Ok(TrainingSemanticRole::Window),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown training semantic role {value:?}"
+        ))),
+    }
+}
+
+fn parse_semantic_descriptors(
+    descriptors: &Bound<'_, PyList>,
+) -> PyResult<Vec<TrainingSemanticDescriptor>> {
+    if descriptors.len() != TrainingSemanticRole::ALL.len() {
+        return Err(PyValueError::new_err(
+            "snapshot-v4 semantic authority requires exactly one descriptor per role",
+        ));
+    }
+    let aggregate_bytes = descriptors.iter().try_fold(0_usize, |total, value| {
+        let descriptor = value
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("each semantic descriptor must be a dictionary"))?;
+        let canonical_json_value = required_item(descriptor, "canonical_json")?;
+        let canonical_json = canonical_json_value.downcast::<PyBytes>().map_err(|_| {
+            PyValueError::new_err("semantic descriptor canonical_json must be bytes")
+        })?;
+        total
+            .checked_add(canonical_json.as_bytes().len())
+            .ok_or_else(|| PyValueError::new_err("semantic descriptor byte count overflow"))
+    })?;
+    if aggregate_bytes > ResourceBounds::default().max_catalog_bytes as usize {
+        return Err(PyValueError::new_err(
+            "semantic descriptor closure exceeds the ABIR catalog resource bound",
+        ));
+    }
+    descriptors
+        .iter()
+        .map(|value| {
+            let descriptor = value.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("each semantic descriptor must be a dictionary")
+            })?;
+            require_exact_keys(descriptor, &["canonical_json", "role"])?;
+            let canonical_json_value = required_item(descriptor, "canonical_json")?;
+            let canonical_json = canonical_json_value.downcast::<PyBytes>().map_err(|_| {
+                PyValueError::new_err("semantic descriptor canonical_json must be bytes")
+            })?;
+            if canonical_json.as_bytes().len()
+                > ResourceBounds::default().max_catalog_bytes as usize
+            {
+                return Err(PyValueError::new_err(
+                    "semantic descriptor exceeds the ABIR catalog resource bound",
+                ));
+            }
+            TrainingSemanticDescriptor::from_canonical_json(
+                parse_semantic_role(&required_string(descriptor, "role")?)?,
+                canonical_json.as_bytes(),
+            )
+            .map_err(training_error)
+        })
+        .collect()
+}
+
+fn parse_sampler(dictionary: &Bound<'_, PyDict>) -> PyResult<TrainingSampler> {
+    let kind = required_string(dictionary, "kind")?;
+    let strategy = match kind.as_str() {
+        "sequential" => {
+            require_exact_keys(dictionary, &["kind"])?;
+            SamplerStrategy::Sequential
+        }
+        "shuffle" => {
+            require_exact_keys(dictionary, &["kind"])?;
+            SamplerStrategy::Shuffle
+        }
+        "stratified" => {
+            require_exact_keys(dictionary, &["key", "kind", "strata"])?;
+            let key = match required_string(dictionary, "key")?.as_str() {
+                "group" => SamplerStratumKey::Group,
+                "label" => SamplerStratumKey::Label,
+                "split" => SamplerStratumKey::Split,
+                value => {
+                    return Err(PyValueError::new_err(format!(
+                        "unknown sampler stratum key {value:?}"
+                    )));
+                }
+            };
+            let strata_value = required_item(dictionary, "strata")?;
+            let values = strata_value
+                .downcast::<PyList>()
+                .map_err(|_| PyValueError::new_err("sampler strata must be a list"))?;
+            preflight_acceptance_count(values.len(), "sampler stratum count")?;
+            let strata = values
+                .iter()
+                .map(|value| {
+                    let stratum = value.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err("each sampler stratum must be a dictionary")
+                    })?;
+                    require_exact_keys(stratum, &["draws", "value"])?;
+                    Ok(SamplerStratum {
+                        draws: required_item(stratum, "draws")?.extract()?,
+                        value: ContentKey::new(super::parse_content_id(&required_string(
+                            stratum, "value",
+                        )?)?),
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            SamplerStrategy::Stratified { key, strata }
+        }
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "unknown training sampler kind {kind:?}"
+            )));
+        }
+    };
+    TrainingSampler::seal(strategy).map_err(training_error)
+}
+
+fn parse_execution_decisions(
+    decisions: &Bound<'_, PyList>,
+) -> PyResult<Vec<TrainingExecutionDecision>> {
+    preflight_acceptance_count(decisions.len(), "execution decision count")?;
+    decisions
+        .iter()
+        .map(|value| {
+            let decision = value.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("each execution decision must be a dictionary")
+            })?;
+            parse_execution_decision(decision)
+        })
+        .collect()
+}
+
+fn parse_execution_decision(dictionary: &Bound<'_, PyDict>) -> PyResult<TrainingExecutionDecision> {
+    require_exact_keys(dictionary, &["knob", "value"])?;
+    let knob = required_string(dictionary, "knob")?;
+    let value = required_item(dictionary, "value")?;
+    match knob.as_str() {
+        "row-grouping" => {
+            let value = value
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("row-grouping value must be a dictionary"))?;
+            let kind = required_string(value, "kind")?;
+            match kind.as_str() {
+                "fixed-rows" => {
+                    require_exact_keys(value, &["kind", "rows"])?;
+                    Ok(TrainingExecutionDecision::RowGrouping(
+                        RowGrouping::FixedRows {
+                            rows: required_item(value, "rows")?.extract()?,
+                        },
+                    ))
+                }
+                "target-bytes" => {
+                    require_exact_keys(value, &["bytes", "kind"])?;
+                    Ok(TrainingExecutionDecision::RowGrouping(
+                        RowGrouping::TargetBytes {
+                            bytes: required_item(value, "bytes")?.extract()?,
+                        },
+                    ))
+                }
+                _ => Err(PyValueError::new_err(format!(
+                    "unknown row-grouping kind {kind:?}"
+                ))),
+            }
+        }
+        "prefetch-depth" => {
+            let value = value
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("prefetch value must be a dictionary"))?;
+            let kind = required_string(value, "kind")?;
+            match kind.as_str() {
+                "disabled" => {
+                    require_exact_keys(value, &["kind"])?;
+                    Ok(TrainingExecutionDecision::PrefetchDepth(
+                        PrefetchPolicy::Disabled,
+                    ))
+                }
+                "rows" => {
+                    require_exact_keys(value, &["kind", "rows"])?;
+                    Ok(TrainingExecutionDecision::PrefetchDepth(
+                        PrefetchPolicy::Rows {
+                            rows: required_item(value, "rows")?.extract()?,
+                        },
+                    ))
+                }
+                _ => Err(PyValueError::new_err(format!(
+                    "unknown prefetch kind {kind:?}"
+                ))),
+            }
+        }
+        "payload-access" => {
+            let value = value
+                .downcast::<PyString>()
+                .map_err(|_| PyValueError::new_err("payload-access value must be a string"))?
+                .to_str()?;
+            let policy = match value {
+                "prefer-mmap" => PayloadAccessPolicy::PreferMmap,
+                "require-mmap" => PayloadAccessPolicy::RequireMmap,
+                "materialize" => PayloadAccessPolicy::Materialize,
+                "stream" => PayloadAccessPolicy::Stream,
+                _ => {
+                    return Err(PyValueError::new_err(format!(
+                        "unknown payload-access value {value:?}"
+                    )));
+                }
+            };
+            Ok(TrainingExecutionDecision::PayloadAccess(policy))
+        }
+        "cache-budget" => {
+            let value = value
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("cache-budget value must be a dictionary"))?;
+            require_exact_keys(value, &["bytes"])?;
+            Ok(TrainingExecutionDecision::CacheBudget {
+                bytes: required_item(value, "bytes")?.extract()?,
+            })
+        }
+        "closure" => {
+            let value = value
+                .downcast::<PyString>()
+                .map_err(|_| PyValueError::new_err("closure value must be a string"))?
+                .to_str()?;
+            let policy = match value {
+                "portable" => abir_training::ClosurePolicy::Portable,
+                "allow-verified-external-references" => {
+                    abir_training::ClosurePolicy::AllowVerifiedExternalReferences
+                }
+                _ => {
+                    return Err(PyValueError::new_err(format!(
+                        "unknown closure value {value:?}"
+                    )));
+                }
+            };
+            Ok(TrainingExecutionDecision::Closure(policy))
+        }
+        _ => Err(PyValueError::new_err(format!(
+            "unknown execution decision knob {knob:?}"
+        ))),
+    }
+}
+
 fn preflight_acceptance_count(count: usize, kind: &str) -> PyResult<()> {
     if count > ResourceBounds::default().max_index_entries as usize {
         return Err(PyValueError::new_err(format!(
@@ -2036,12 +2501,13 @@ pub(crate) fn seal_training_continual_promotion<'py>(
 }
 
 /// Seal exact primary rows and typed label associations into a validated BCS2
-/// Training Window Store artifact. Snapshot-v3 embeds complete TrainingSpec
-/// authority; legacy compatibility sealing accepts only its precomputed ID.
+/// Training Window Store artifact. Snapshot-v4 additionally embeds canonical
+/// semantic descriptors, an executable sampler, and the complete decision log.
+/// Snapshot-v3 and legacy compatibility sealing remain readable.
 /// ABIR owns payload identities, canonical catalog identity, and physical frame
 /// closure.
 #[pyfunction]
-#[pyo3(signature = (*, dataset_roots, profile, rows, label_payloads, decision_log_id, spec_id=None, spec=None))]
+#[pyo3(signature = (*, dataset_roots, profile, rows, label_payloads, decision_log_id=None, spec_id=None, spec=None, semantic_descriptors=None, sampler=None, execution_decisions=None, decision_records=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_training_snapshot<'py>(
     py: Python<'py>,
@@ -2049,9 +2515,13 @@ pub(crate) fn seal_training_snapshot<'py>(
     profile: &str,
     rows: &Bound<'py, PyList>,
     label_payloads: &Bound<'py, PyList>,
-    decision_log_id: &str,
+    decision_log_id: Option<&str>,
     spec_id: Option<&str>,
     spec: Option<&Bound<'py, PyDict>>,
+    semantic_descriptors: Option<&Bound<'py, PyList>>,
+    sampler: Option<&Bound<'py, PyDict>>,
+    execution_decisions: Option<&Bound<'py, PyList>>,
+    decision_records: Option<&Bound<'py, PyList>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let bounds = ResourceBounds::default();
     if dataset_roots.len() > bounds.max_index_entries as usize {
@@ -2111,6 +2581,21 @@ pub(crate) fn seal_training_snapshot<'py>(
         .iter()
         .map(|association| association.metadata.clone())
         .collect();
+    let replay_arguments = (
+        semantic_descriptors.is_some(),
+        sampler.is_some(),
+        decision_records.is_some(),
+    );
+    if !matches!(replay_arguments, (false, false, false) | (true, true, true)) {
+        return Err(PyValueError::new_err(
+            "snapshot-v4 requires semantic_descriptors, sampler, and decision_records together",
+        ));
+    }
+    if execution_decisions.is_some() && replay_arguments != (true, true, true) {
+        return Err(PyValueError::new_err(
+            "execution decisions require complete snapshot-v4 replay authority",
+        ));
+    }
     let snapshot = if let Some(spec) = spec {
         let spec = parse_training_spec(spec)?;
         let embedded_spec_id = ContentKey::from(spec.content_id().map_err(training_error)?);
@@ -2119,15 +2604,58 @@ pub(crate) fn seal_training_snapshot<'py>(
                 "training spec_id does not match embedded TrainingSpec",
             ));
         }
-        TrainingSnapshot::seal_with_spec_and_label_payloads(
-            dataset_roots,
-            spec,
-            parse_profile(profile)?,
-            rows,
-            labels,
-            ContentKey::new(super::parse_content_id(decision_log_id)?),
-        )
+        if let (Some(descriptors), Some(sampler), Some(records)) =
+            (semantic_descriptors, sampler, decision_records)
+        {
+            let program = TrainingProgram::seal_with_execution_decisions(
+                &spec,
+                parse_semantic_descriptors(descriptors)?,
+                parse_sampler(sampler)?,
+                execution_decisions
+                    .map(parse_execution_decisions)
+                    .transpose()?
+                    .unwrap_or_default(),
+            )
+            .map_err(training_error)?;
+            let decision_log = DecisionLog::seal(&spec, parse_decision_records(records)?)
+                .map_err(training_error)?;
+            if let Some(declared) = decision_log_id {
+                let declared = super::parse_content_id(declared)?;
+                if decision_log.content_id().map_err(training_error)? != declared {
+                    return Err(PyValueError::new_err(
+                        "decision_log_id does not match embedded decision records",
+                    ));
+                }
+            }
+            TrainingSnapshot::seal_with_program_and_label_payloads(
+                dataset_roots,
+                spec,
+                program,
+                parse_profile(profile)?,
+                rows,
+                labels,
+                decision_log,
+            )
+        } else {
+            let decision_log_id = decision_log_id
+                .ok_or_else(|| PyValueError::new_err("snapshot-v3 requires decision_log_id"))?;
+            TrainingSnapshot::seal_with_spec_and_label_payloads(
+                dataset_roots,
+                spec,
+                parse_profile(profile)?,
+                rows,
+                labels,
+                ContentKey::new(super::parse_content_id(decision_log_id)?),
+            )
+        }
     } else {
+        if replay_arguments != (false, false, false) {
+            return Err(PyValueError::new_err(
+                "snapshot-v4 semantic authority requires embedded TrainingSpec",
+            ));
+        }
+        let decision_log_id = decision_log_id
+            .ok_or_else(|| PyValueError::new_err("legacy snapshot requires decision_log_id"))?;
         let declared_spec_id = declared_spec_id.ok_or_else(|| {
             PyValueError::new_err(
                 "legacy training snapshot sealing requires spec_id or embedded spec",
@@ -2176,6 +2704,21 @@ pub(crate) fn seal_training_snapshot<'py>(
         result.set_item("preprocessing_graph_id", spec.preprocessing.to_string())?;
         result.set_item("fitted_state_id", spec.fitted_state.to_string())?;
         result.set_item("view_id", spec.view.to_string())?;
+    }
+    result.set_item("decision_log_id", snapshot.decision_log_id().to_string())?;
+    result.set_item(
+        "decision_log_replay_state",
+        if snapshot.program().is_some() && snapshot.decision_log().is_some() {
+            DecisionLogReplayState::ReplayReady.as_str()
+        } else {
+            DecisionLogReplayState::IdentityBound.as_str()
+        },
+    )?;
+    if let Some(program) = snapshot.program() {
+        result.set_item(
+            "training_program_id",
+            program.content_id().map_err(training_error)?.to_string(),
+        )?;
     }
     result.set_item("artifact", PyBytes::new_bound(py, &artifact))?;
     Ok(result)
@@ -2265,5 +2808,83 @@ pub(crate) fn training_fixture_bytes<'py>(
     frames.extend(mask_frame);
     let encoded =
         encode_snapshot(&snapshot, &frames, ResourceBounds::default()).map_err(training_error)?;
+    Ok(PyBytes::new_bound(py, &encoded))
+}
+
+/// Deterministic replay-ready fixture for TrainingProgram integration tests.
+#[pyfunction(name = "_training_v4_fixture_bytes")]
+#[cfg(feature = "test-fixtures")]
+pub(crate) fn training_v4_fixture_bytes<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+    let payload = [1_u8, 0, 2, 0, 3, 0, 4, 0];
+    let row = TrainingRow {
+        encoding: None,
+        byte_order: ByteOrder::Little,
+        group: key(5),
+        label: key(6),
+        logical_bytes: payload.len() as u64,
+        logical_id: key(7),
+        payload: ContentKey::new(payload_content_id(ElementType::I16, &payload)),
+        element: ElementType::I16,
+        shape: vec![2, 2],
+        split: key(8),
+    };
+    let descriptors = TrainingSemanticRole::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, role)| {
+            TrainingSemanticDescriptor::new(
+                role,
+                serde_json::json!({
+                    "definition": {"version": index + 1},
+                    "schema": role.domain(),
+                }),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(training_error)?;
+    let ids = descriptors
+        .iter()
+        .map(|descriptor| {
+            descriptor
+                .content_id()
+                .map(|content_id| (descriptor.role(), ContentKey::from(content_id)))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(training_error)?;
+    let sampler = TrainingSampler::seal(SamplerStrategy::Sequential).map_err(training_error)?;
+    let spec = TrainingSpec {
+        augmentation: ids[&TrainingSemanticRole::Augmentation],
+        authorized_purpose: "representation-learning".to_owned(),
+        cohort: ids[&TrainingSemanticRole::Cohort],
+        feature: ids[&TrainingSemanticRole::Feature],
+        fitted_state: ids[&TrainingSemanticRole::FittedState],
+        grouping: ids[&TrainingSemanticRole::Grouping],
+        label: ids[&TrainingSemanticRole::Label],
+        policy: ids[&TrainingSemanticRole::Policy],
+        preprocessing: ids[&TrainingSemanticRole::Preprocessing],
+        sampler: ContentKey::from(sampler.content_id().map_err(training_error)?),
+        seed: 42,
+        split: ids[&TrainingSemanticRole::Split],
+        view: ids[&TrainingSemanticRole::View],
+        window: ids[&TrainingSemanticRole::Window],
+        allowed_adaptive_knobs: Vec::new(),
+    };
+    let program = TrainingProgram::seal(&spec, descriptors, sampler).map_err(training_error)?;
+    let decision_log = DecisionLog::seal(&spec, Vec::new()).map_err(training_error)?;
+    let snapshot = TrainingSnapshot::seal_with_program(
+        vec![key(1)],
+        spec,
+        program,
+        TrainingProfile::Balanced,
+        vec![row],
+        decision_log,
+    )
+    .map_err(training_error)?;
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &payload)],
+        ResourceBounds::default(),
+    )
+    .map_err(training_error)?;
     Ok(PyBytes::new_bound(py, &encoded))
 }

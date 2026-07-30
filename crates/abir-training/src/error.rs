@@ -38,14 +38,19 @@ pub enum TrainingError {
     },
     InvalidDecisionReplayReceipt,
     InvalidElement(String),
+    InvalidExecutionDecision,
     InvalidLabelConcept(String),
     InvalidLabelPresence(ContentId),
     InvalidLabelPresenceName(String),
     InvalidProfile,
+    InvalidEpoch,
     InvalidContinualPromotion,
     InvalidRowExtent(ContentId),
+    InvalidSampler,
     InvalidSnapshot,
     InvalidSourceEquivalenceReceipt,
+    InvalidTrainingProgram,
+    IncompleteSemanticClosure,
     InvalidSubscriptionSequence {
         expected: u64,
         actual: u64,
@@ -70,6 +75,10 @@ pub enum TrainingError {
     RankNotZero(u32),
     Serialization(String),
     SourceSnapshotMismatch,
+    UnevenDistributedEpoch {
+        rows: usize,
+        world_size: u32,
+    },
     UnknownCorrection(ContentId),
     UnknownLabelRow(ContentId),
 }
@@ -130,6 +139,9 @@ impl fmt::Display for TrainingError {
                 f.write_str("invalid decision replay receipt")
             }
             Self::InvalidElement(element) => write!(f, "unknown element type {element}"),
+            Self::InvalidExecutionDecision => {
+                f.write_str("invalid or unresolved training execution decision")
+            }
             Self::InvalidLabelConcept(concept) => {
                 write!(f, "invalid label payload concept {concept:?}")
             }
@@ -143,11 +155,19 @@ impl fmt::Display for TrainingError {
                 write!(f, "invalid label payload presence {presence:?}")
             }
             Self::InvalidProfile => f.write_str("not a registered training profile"),
+            Self::InvalidEpoch => f.write_str("invalid compiled training epoch"),
             Self::InvalidContinualPromotion => f.write_str("invalid continual promotion"),
             Self::InvalidRowExtent(id) => write!(f, "invalid logical extent for row {id}"),
+            Self::InvalidSampler => f.write_str("invalid executable training sampler"),
             Self::InvalidSnapshot => f.write_str("invalid sealed training snapshot"),
             Self::InvalidSourceEquivalenceReceipt => {
                 f.write_str("invalid source equivalence receipt")
+            }
+            Self::InvalidTrainingProgram => {
+                f.write_str("training program does not match its semantic authority")
+            }
+            Self::IncompleteSemanticClosure => {
+                f.write_str("training program omits required semantic descriptor authority")
             }
             Self::InvalidSubscriptionSequence { expected, actual } => write!(
                 f,
@@ -188,6 +208,10 @@ impl fmt::Display for TrainingError {
             Self::SourceSnapshotMismatch => {
                 f.write_str("training stores do not expose source-equivalent windows")
             }
+            Self::UnevenDistributedEpoch { rows, world_size } => write!(
+                f,
+                "global training epoch with {rows} rows cannot be divided across {world_size} ranks without changing selected examples"
+            ),
             Self::UnknownCorrection(id) => write!(f, "correction has no prior generation for {id}"),
             Self::UnknownLabelRow(id) => {
                 write!(f, "label payload association references unknown row {id}")

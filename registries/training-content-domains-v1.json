@@ -1,0 +1,24 @@
+{
+  "registry": "org.quitetall.abir.training.content-domains",
+  "version": 1,
+  "entries": [
+    {"domain": "org.quitetall.abir.training.semantic.augmentation-v1", "role": "augmentation", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.cohort-v1", "role": "cohort", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.epoch-v1", "role": "epoch", "purpose": "epoch-scheduling", "generation": 1},
+    {"domain": "org.quitetall.abir.training.execution-decision-v1", "role": "execution-decision", "purpose": "typed-replay-value", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.feature-v1", "role": "feature", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.fitted-state-v1", "role": "fitted-state", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.grouping-v1", "role": "grouping", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.label-v1", "role": "label", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.order-v1", "role": "order", "purpose": "distributed-ordering", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.policy-v1", "role": "policy", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.preprocessing-v1", "role": "preprocessing", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.program-v1", "role": "program", "purpose": "executable-program", "generation": 1},
+    {"domain": "org.quitetall.abir.training.sampler-v1", "role": "sampler", "purpose": "executable-sampler", "generation": 1},
+    {"domain": "org.quitetall.abir.training.schedule-v1", "role": "schedule", "purpose": "global-row-schedule", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.split-v1", "role": "split", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.stochastic-seed-v1", "role": "stochastic-seed", "purpose": "row-stochastic-seed", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.view-v1", "role": "view", "purpose": "semantic-identity", "generation": 1},
+    {"domain": "org.quitetall.abir.training.semantic.window-v1", "role": "window", "purpose": "semantic-identity", "generation": 1}
+  ]
+}

@@ -370,5 +370,5 @@ fn logical_windows_id(snapshot: &TrainingSnapshot) -> Result<ContentKey, Trainin
 }
 
 fn canonical_json<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, TrainingError> {
-    Ok(serde_json::to_vec(&serde_json::to_value(value)?)?)
+    crate::canonical::canonical_json(value)
 }

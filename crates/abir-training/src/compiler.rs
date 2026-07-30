@@ -1,4 +1,8 @@
-use crate::TrainingProfile;
+use crate::{
+    canonical::canonical_json,
+    identity::{training_content_id, TrainingContentDomain},
+    TrainingProfile,
+};
 use abir::ContentId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -83,6 +87,67 @@ pub struct PlanOverrides {
     pub closure: Option<ClosurePolicy>,
 }
 
+/// One closed, execution-only decision value referenced by a durable decision log.
+///
+/// These values may alter physical delivery, never logical row selection,
+/// stochastic seeds, preprocessing, augmentation, or model semantics.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "knob", content = "value", rename_all = "kebab-case")]
+pub enum TrainingExecutionDecision {
+    RowGrouping(RowGrouping),
+    PrefetchDepth(PrefetchPolicy),
+    PayloadAccess(PayloadAccessPolicy),
+    CacheBudget { bytes: u64 },
+    Closure(ClosurePolicy),
+}
+
+impl TrainingExecutionDecision {
+    pub const fn knob(self) -> &'static str {
+        match self {
+            Self::RowGrouping(_) => "row-grouping",
+            Self::PrefetchDepth(_) => "prefetch-depth",
+            Self::PayloadAccess(_) => "payload-access",
+            Self::CacheBudget { .. } => "cache-budget",
+            Self::Closure(_) => "closure",
+        }
+    }
+
+    pub fn canonical_json(&self) -> Result<Vec<u8>, PlanCompileError> {
+        self.validate()?;
+        canonical_json(self).map_err(|error| PlanCompileError::Serialization(error.to_string()))
+    }
+
+    pub fn content_id(&self) -> Result<ContentId, PlanCompileError> {
+        Ok(training_content_id(
+            TrainingContentDomain::ExecutionDecisionV1,
+            &self.canonical_json()?,
+        ))
+    }
+
+    pub(crate) fn apply(self, overrides: &mut PlanOverrides) -> Result<(), PlanCompileError> {
+        self.validate()?;
+        match self {
+            Self::RowGrouping(value) => overrides.row_grouping = Some(value),
+            Self::PrefetchDepth(value) => overrides.prefetch = Some(value),
+            Self::PayloadAccess(value) => overrides.payload_access = Some(value),
+            Self::CacheBudget { bytes } => {
+                overrides.cache_budget = Some(CacheBudget::new(bytes)?);
+            }
+            Self::Closure(value) => overrides.closure = Some(value),
+        }
+        Ok(())
+    }
+
+    fn validate(self) -> Result<(), PlanCompileError> {
+        match self {
+            Self::RowGrouping(value) => validate_row_grouping(value),
+            Self::PrefetchDepth(value) => validate_prefetch(value),
+            Self::PayloadAccess(_) | Self::Closure(_) => Ok(()),
+            Self::CacheBudget { bytes } => CacheBudget::new(bytes).map(|_| ()),
+        }
+    }
+}
+
 /// A sealed physical execution plan. It changes execution, never snapshot
 /// semantics or the BCS2 wire representation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -127,9 +192,7 @@ impl CompiledExecutionPlan {
 
     pub fn canonical_json(&self) -> Result<Vec<u8>, PlanCompileError> {
         self.validate()?;
-        let value = serde_json::to_value(self)
-            .map_err(|error| PlanCompileError::Serialization(error.to_string()))?;
-        serde_json::to_vec(&value)
+        crate::canonical::canonical_json(self)
             .map_err(|error| PlanCompileError::Serialization(error.to_string()))
     }
 

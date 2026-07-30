@@ -1,0 +1,40 @@
+{
+  "manifest_version": 1,
+  "training_version": "4",
+  "hash_algorithm": "sha256",
+  "self_hash_excluded_reason": "The manifest is the trust anchor and cannot recursively hash itself.",
+  "artifacts": [
+    {
+      "path": "spec/TRAINING_WINDOW_STORE_V4.md",
+      "sha256": "cf34611fd9434e8939d1bbcce370245f41ab695db4186bd37b95e4dc9148ba0b"
+    },
+    {
+      "path": "schema/training-snapshot-v4.schema.json",
+      "sha256": "9ac6caeb0c2fb26a81045278f17b1c6ad197c4122000bd083bd19221973f92b8"
+    },
+    {
+      "path": "registries/training-content-domains-v1.json",
+      "sha256": "31566d6bb0f7028c52afa3dd99317ac0cfd2bcbb53d99a0a41cce27d2c02ea2c"
+    },
+    {
+      "path": "registries/bcs2-profiles-v1.json",
+      "sha256": "300b0890de8ed536c96cc94427339463ed10334c63f575c1efe797a07f5611e1"
+    },
+    {
+      "path": "fixtures/training/v4/valid-snapshot.json",
+      "sha256": "ac5e7f854dd9a422fe169d44b1b315c73a82ff109806334c3a04b723790b3840"
+    },
+    {
+      "path": "fixtures/training/v4/valid-snapshot.content-id",
+      "sha256": "5c0697879c2164ce84045df9acbaa2ba2f29c7ca2c99d03ac8923e687dd7c2db"
+    },
+    {
+      "path": "fixtures/training/v4/invalid-vectors.json",
+      "sha256": "4c3bffa9761fc99193293a545631393d370599bc4c1c3529570e3eb72ad65500"
+    },
+    {
+      "path": "crates/abir-training/examples/generate_training_v4_fixture.rs",
+      "sha256": "24bda3379ae185b53953e90bf07c78054cfdff0e58a9bc0176da21305f71c4c9"
+    }
+  ]
+}

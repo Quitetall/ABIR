@@ -1129,3 +1129,255 @@ def test_public_continual_promotion_binds_closed_snapshot_and_log_sequence():
             decision_logs=[],
             decision_replays=[],
         )
+
+
+def _replay_ready_program_inputs(sampler=None):
+    sampler = {"kind": "shuffle"} if sampler is None else sampler
+    descriptors = []
+    ids = {}
+    for index, role in enumerate(
+        (
+            "augmentation",
+            "cohort",
+            "feature",
+            "fitted-state",
+            "grouping",
+            "label",
+            "policy",
+            "preprocessing",
+            "split",
+            "view",
+            "window",
+        )
+    ):
+        schema_role = role
+        canonical = json.dumps(
+            {
+                "definition": {"version": index + 1},
+                "schema": (
+                    "org.quitetall.abir.training.semantic."
+                    f"{schema_role}-v1"
+                ),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        descriptors.append({"canonical_json": canonical, "role": role})
+        ids[role.replace("-", "_")] = abir.training_semantic_content_id(
+            role, canonical
+        )
+    spec = {
+        "augmentation": ids["augmentation"],
+        "authorized_purpose": "representation-learning",
+        "cohort": ids["cohort"],
+        "feature": ids["feature"],
+        "fitted_state": ids["fitted_state"],
+        "grouping": ids["grouping"],
+        "label": ids["label"],
+        "policy": ids["policy"],
+        "preprocessing": ids["preprocessing"],
+        "sampler": abir.training_sampler_content_id(sampler),
+        "seed": 42,
+        "split": ids["split"],
+        "view": ids["view"],
+        "window": ids["window"],
+        "allowed_adaptive_knobs": [],
+    }
+    return spec, descriptors, sampler
+
+
+def test_training_v4_schema_and_manifest_bind_replay_authority():
+    root = Path(__file__).parents[2]
+    schema = json.loads((root / "schema/training-snapshot-v4.schema.json").read_text())
+    jsonschema.Draft202012Validator.check_schema(schema)
+    fixture_root = root / "fixtures/training/v4"
+    catalog = json.loads((fixture_root / "valid-snapshot.json").read_text())
+    jsonschema.validate(catalog, schema)
+
+    invalid = json.loads((fixture_root / "invalid-vectors.json").read_text())
+    assert invalid["base"] == "valid-snapshot.json"
+    validator = jsonschema.Draft202012Validator(schema)
+    for vector in invalid["vectors"]:
+        candidate = json.loads(json.dumps(catalog))
+        tokens = [
+            token.replace("~1", "/").replace("~0", "~")
+            for token in vector["path"].split("/")[1:]
+        ]
+        parent = candidate
+        for token in tokens[:-1]:
+            parent = parent[int(token)] if isinstance(parent, list) else parent[token]
+        final = int(tokens[-1]) if isinstance(parent, list) else tokens[-1]
+        if vector["operation"] == "remove":
+            del parent[final]
+        else:
+            assert vector["operation"] == "replace"
+            parent[final] = vector["value"]
+        assert list(validator.iter_errors(candidate)), vector["name"]
+
+    manifest = json.loads((root / "spec/training-v4.manifest.json").read_text())
+    for artifact in manifest["artifacts"]:
+        assert hashlib.sha256((root / artifact["path"]).read_bytes()).hexdigest() == (
+            artifact["sha256"]
+        )
+
+
+def test_snapshot_v4_compiles_replay_ready_epoch_and_native_batch():
+    spec, descriptors, sampler = _replay_ready_program_inputs()
+    rows = [
+        {
+            "logical_id": f"{0x70 + index:02x}" * 32,
+            "group": "80" * 32,
+            "label": "81" * 32,
+            "split": "82" * 32,
+            "element": "i16",
+            "byte_order": "little",
+            "shape": [2],
+            "payload": bytes([index + 1, 0, index + 2, 0]),
+        }
+        for index in range(4)
+    ]
+    sealed = abir.seal_training_snapshot(
+        dataset_roots=["83" * 32],
+        profile="balanced",
+        rows=rows,
+        label_payloads=[],
+        spec=spec,
+        semantic_descriptors=descriptors,
+        sampler=sampler,
+        decision_records=[],
+    )
+    store = abir.TrainingWindowStore.open_bytes(sealed["artifact"])
+
+    assert sealed["decision_log_replay_state"] == "replay-ready"
+    assert store.decision_log_replay_state == "replay-ready"
+    assert store.training_program_id == sealed["training_program_id"]
+    single = dict(store.compile_epoch(3))
+    rank_zero = dict(store.compile_epoch(3, rank=0, world_size=2))
+    rank_one = dict(store.compile_epoch(3, rank=1, world_size=2))
+    assert single["global_schedule_id"] == rank_zero["global_schedule_id"]
+    assert single["global_schedule_id"] == rank_one["global_schedule_id"]
+    combined = sorted(
+        [*rank_zero["rows"], *rank_one["rows"]],
+        key=lambda row: row["global_index"],
+    )
+    assert combined == single["rows"]
+    assert dict(store.compile_epoch(3)) == single
+
+    arrays = store.batch_numpy(
+        [single["rows"][0]["logical_id"], single["rows"][1]["logical_id"]]
+    )
+    assert len(arrays) == 2
+    assert arrays[0].flags.writeable is False
+    assert arrays[0].tolist() in ([1, 2], [2, 3], [3, 4], [4, 5])
+    with pytest.raises(ValueError, match="native batch row bound"):
+        store.batch_numpy([single["rows"][0]["logical_id"]] * 65_537)
+
+
+def test_snapshot_v4_replays_typed_execution_decision_at_explicit_barrier(tmp_path):
+    spec, descriptors, sampler = _replay_ready_program_inputs()
+    spec["allowed_adaptive_knobs"] = ["prefetch-depth"]
+    decision = {
+        "knob": "prefetch-depth",
+        "value": {"kind": "rows", "rows": 1},
+    }
+    decision_id = abir.training_execution_decision_content_id(decision)
+    sealed = abir.seal_training_snapshot(
+        dataset_roots=["84" * 32],
+        profile="balanced",
+        rows=[
+            {
+                "logical_id": "85" * 32,
+                "group": "86" * 32,
+                "label": "87" * 32,
+                "split": "88" * 32,
+                "element": "i16",
+                "byte_order": "little",
+                "shape": [2],
+                "payload": b"\x01\x00\x02\x00",
+            }
+        ],
+        label_payloads=[],
+        spec=spec,
+        semantic_descriptors=descriptors,
+        sampler=sampler,
+        execution_decisions=[decision],
+        decision_records=[
+            {
+                "activation_barrier": 4,
+                "decision": decision_id,
+                "durable_before_activation": True,
+                "knob": "prefetch-depth",
+                "rank": 0,
+                "sequence": 0,
+            }
+        ],
+    )
+    path = tmp_path / "replay.bcs2"
+    path.write_bytes(sealed["artifact"])
+    store = abir.TrainingWindowStore.open_path(path)
+
+    with pytest.raises(ValueError, match="activation_barrier"):
+        store.execute_training_plan()
+    before = dict(store.execute_training_plan(activation_barrier=3))
+    after = dict(store.execute_training_plan(activation_barrier=4))
+    assert before["applied_decision_count"] == 0
+    assert after["applied_decision_count"] == 1
+    assert before["plan_id"] != after["plan_id"]
+    assert after["decision_log_id"] == sealed["decision_log_id"]
+
+
+def test_training_semantic_roles_own_fixed_distinct_domains():
+    augmentation = abir.training_semantic_content_id(
+        "augmentation",
+        b'{"definition":{"version":1},"schema":"org.quitetall.abir.training.semantic.augmentation-v1"}',
+    )
+    preprocessing = abir.training_semantic_content_id(
+        "preprocessing",
+        b'{"definition":{"version":1},"schema":"org.quitetall.abir.training.semantic.preprocessing-v1"}',
+    )
+
+    assert augmentation != preprocessing
+    assert not hasattr(abir, "domain_content_id")
+    with pytest.raises(ValueError, match="semantic authority"):
+        abir.training_semantic_content_id(
+            "preprocessing",
+            b'{"definition":{},"schema":"org.quitetall.abir.training.semantic.view-v1"}',
+        )
+
+
+def test_snapshot_v4_rejects_unresolved_descriptor_and_sampler_authority():
+    spec, descriptors, sampler = _replay_ready_program_inputs()
+    row = {
+        "logical_id": "90" * 32,
+        "group": "91" * 32,
+        "label": "92" * 32,
+        "split": "93" * 32,
+        "element": "i16",
+        "byte_order": "little",
+        "shape": [1],
+        "payload": bytes([1, 0]),
+    }
+    with pytest.raises(ValueError, match="semantic authority"):
+        abir.seal_training_snapshot(
+            dataset_roots=["94" * 32],
+            profile="balanced",
+            rows=[row],
+            label_payloads=[],
+            spec=spec,
+            semantic_descriptors=descriptors[:-1],
+            sampler=sampler,
+            decision_records=[],
+        )
+
+    mismatched = dict(spec, sampler="95" * 32)
+    with pytest.raises(ValueError, match="semantic authority"):
+        abir.seal_training_snapshot(
+            dataset_roots=["94" * 32],
+            profile="balanced",
+            rows=[row],
+            label_payloads=[],
+            spec=mismatched,
+            semantic_descriptors=descriptors,
+            sampler=sampler,
+            decision_records=[],
+        )

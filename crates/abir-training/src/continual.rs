@@ -150,8 +150,7 @@ impl ClosedSubscription {
 
     pub fn canonical_json(&self) -> Result<Vec<u8>, TrainingError> {
         self.validate()?;
-        let value = serde_json::to_value(self)?;
-        let catalog = serde_json::to_vec(&value)?;
+        let catalog = crate::canonical::canonical_json(self)?;
         ensure_catalog_bound(&catalog)?;
         Ok(catalog)
     }

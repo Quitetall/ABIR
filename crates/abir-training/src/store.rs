@@ -1,7 +1,7 @@
 use crate::{
-    model::expected_payloads, ContentKey, DecisionRecord, DecisionReplayReceipt,
-    ReopenedDecisionLog, TrainingError, TrainingLabelPayloadAssociation, TrainingRow,
-    TrainingRowEncoding, TrainingSnapshot, TrainingSpec, VerifiedTrainingSnapshot,
+    model::expected_payloads, CompiledTrainingEpoch, ContentKey, DecisionRecord,
+    DecisionReplayReceipt, ReopenedDecisionLog, TrainingError, TrainingLabelPayloadAssociation,
+    TrainingRow, TrainingRowEncoding, TrainingSnapshot, TrainingSpec, VerifiedTrainingSnapshot,
 };
 use abir::{ByteOrder, ElementType, Presence};
 use abir_bcs::{
@@ -20,12 +20,15 @@ use std::io::{Read, Seek};
 pub enum DecisionLogReplayState {
     /// The snapshot binds a decision-log ContentId, but carries no replayable records.
     IdentityBound,
+    /// The snapshot embeds canonical records and executable scientific semantics.
+    ReplayReady,
 }
 
 impl DecisionLogReplayState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::IdentityBound => "identity-bound",
+            Self::ReplayReady => "replay-ready",
         }
     }
 }
@@ -476,7 +479,40 @@ impl<'a> TrainingWindowStore<'a> {
     }
 
     pub const fn decision_log_replay_state(&self) -> DecisionLogReplayState {
-        DecisionLogReplayState::IdentityBound
+        if self.snapshot.decision_log().is_some() && self.snapshot.program().is_some() {
+            DecisionLogReplayState::ReplayReady
+        } else {
+            DecisionLogReplayState::IdentityBound
+        }
+    }
+
+    /// Compile exact logical examples and stochastic seeds for one rank.
+    ///
+    /// Global selection is compiled before rank projection. A world size that
+    /// would require dropping examples is rejected, so worker count cannot
+    /// silently change scientific sampling.
+    pub fn compile_epoch(
+        &self,
+        epoch: u64,
+        rank: u32,
+        world_size: u32,
+    ) -> Result<CompiledTrainingEpoch, TrainingError> {
+        let spec = self.snapshot.spec().ok_or(TrainingError::InvalidSnapshot)?;
+        let program = self
+            .snapshot
+            .program()
+            .ok_or(TrainingError::InvalidTrainingProgram)?;
+        if self.snapshot.decision_log().is_none() {
+            return Err(TrainingError::DecisionReplayMismatch);
+        }
+        program.compile_epoch(
+            spec,
+            self.snapshot.rows(),
+            self.snapshot.decision_log_id(),
+            epoch,
+            rank,
+            world_size,
+        )
     }
 
     /// Verifies replay against the exact decision-log identity bound by this snapshot.
@@ -595,6 +631,38 @@ impl TrainingWindowFileIndex {
 
     pub const fn decision_log_id(&self) -> ContentKey {
         self.snapshot.decision_log_id()
+    }
+
+    pub const fn decision_log_replay_state(&self) -> DecisionLogReplayState {
+        if self.snapshot.decision_log().is_some() && self.snapshot.program().is_some() {
+            DecisionLogReplayState::ReplayReady
+        } else {
+            DecisionLogReplayState::IdentityBound
+        }
+    }
+
+    pub fn compile_epoch(
+        &self,
+        epoch: u64,
+        rank: u32,
+        world_size: u32,
+    ) -> Result<CompiledTrainingEpoch, TrainingError> {
+        let spec = self.snapshot.spec().ok_or(TrainingError::InvalidSnapshot)?;
+        let program = self
+            .snapshot
+            .program()
+            .ok_or(TrainingError::InvalidTrainingProgram)?;
+        if self.snapshot.decision_log().is_none() {
+            return Err(TrainingError::DecisionReplayMismatch);
+        }
+        program.compile_epoch(
+            spec,
+            self.snapshot.rows(),
+            self.snapshot.decision_log_id(),
+            epoch,
+            rank,
+            world_size,
+        )
     }
 
     pub const fn artifact_len(&self) -> u64 {
