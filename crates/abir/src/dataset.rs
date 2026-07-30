@@ -1053,6 +1053,7 @@ impl AbirDataset {
     /// This consumes the validated root instead of cloning its catalogs. Host
     /// adapters use it to attach source capsules or execution evidence, then
     /// cross the normal [`DatasetDraft::validate`] boundary again.
+    #[must_use = "a reopened draft must be modified or revalidated"]
     pub fn into_draft(self) -> DatasetDraft {
         DatasetDraft {
             id: self.id,

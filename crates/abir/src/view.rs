@@ -259,7 +259,9 @@ impl<A> OpenedDataset<A> {
         &self.access
     }
 
-    /// Consume the opened root without copying semantic catalogs or payloads.
+    /// Consume the opened root as `(dataset, payload_access)` without copying
+    /// semantic catalogs or payloads.
+    #[must_use = "dataset and payload access ownership must be handled"]
     pub fn into_parts(self) -> (AbirDataset, A) {
         (self.dataset, self.access)
     }

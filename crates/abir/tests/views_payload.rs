@@ -1,8 +1,8 @@
 use abir::{
     Atom, AtomTag, BorrowedPayload, BorrowedPayloadAccess, ByteOrder, ConceptId, ContentId,
     DatasetDraft, DatasetTag, ElementType, InMemoryPayloadAccess, Layout, ObjectId, OpenedDataset,
-    PayloadDescriptor, Presence, Recording, RecordingTag, SemanticAxis, Stream, StreamTag, Tensor,
-    ValidationLimits,
+    PayloadDescriptor, Presence, Recording, RecordingTag, SemanticAxis, SourceCapsule, SourceKey,
+    Stream, StreamTag, Tensor, ValidationLimits,
 };
 
 #[test]
@@ -130,6 +130,31 @@ fn opened_dataset_can_be_consumed_and_revalidated_without_identity_change() {
             .expect("block view")
             .bytes(),
         &[8_u8; 8]
+    );
+}
+
+#[test]
+fn reopened_dataset_can_bind_source_evidence_without_changing_interchange_identity() {
+    let (dataset, content_id) = tensor_dataset();
+    let logical_before = abir::logical_content_id(&dataset).expect("logical identity");
+    let interchange_before = abir::interchange_content_id(&dataset).expect("interchange identity");
+    let mut draft = dataset.into_draft();
+    draft.add_source_capsule(SourceCapsule::new(
+        SourceKey::new("test.source", "fixture.bin").expect("source key"),
+        content_id,
+        Some("application/octet-stream"),
+    ));
+    let rebound = draft
+        .validate(ValidationLimits::default())
+        .expect("rebound dataset");
+
+    assert_ne!(
+        logical_before,
+        abir::logical_content_id(&rebound).expect("rebound logical identity")
+    );
+    assert_eq!(
+        interchange_before,
+        abir::interchange_content_id(&rebound).expect("rebound interchange identity")
     );
 }
 
