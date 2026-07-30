@@ -28,6 +28,11 @@ Normative material is split across `spec/`, `schema/`, `registries/`, and
 - `cargo test --workspace`
 - `cargo check -p abir --no-default-features`
 
+`abir-biosignal` embeds its exact 40-character implementation revision. Clean
+Git checkouts derive it from `HEAD`; dirty checkouts fail closed. Audited
+source-archive builders must set `ABIR_IMPLEMENTATION_REVISION` to the source
+commit recorded by their release provenance.
+
 ## Contributing
 
 See `CONTRIBUTING.md`.

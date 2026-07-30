@@ -1,0 +1,159 @@
+#[allow(dead_code)]
+#[path = "../build.rs"]
+mod build_script;
+
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+const TEST_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+const TEST_MANIFEST: &str = "[package]\nname = \"abir-python\"\nversion = \"0.0.0\"\n";
+
+#[test]
+fn accepts_exact_lowercase_git_revision() {
+    assert!(build_script::validate_revision(TEST_REVISION).is_ok());
+    assert_eq!(
+        build_script::parse_git_revision_output(b"0123456789abcdef0123456789abcdef01234567\n")
+            .unwrap(),
+        "0123456789abcdef0123456789abcdef01234567"
+    );
+    assert_eq!(
+        build_script::parse_git_revision_output(b"0123456789abcdef0123456789abcdef01234567\r\n")
+            .unwrap(),
+        "0123456789abcdef0123456789abcdef01234567"
+    );
+}
+
+#[test]
+fn accepts_explicit_revision_override_without_git_authority() {
+    assert_eq!(
+        build_script::implementation_revision_from_override(TEST_REVISION).unwrap(),
+        TEST_REVISION
+    );
+}
+
+#[test]
+fn rejects_noncanonical_git_revisions() {
+    for revision in [
+        "",
+        "0123456789abcdef0123456789abcdef0123456",
+        "0123456789abcdef0123456789abcdef012345678",
+        "0123456789ABCDEF0123456789ABCDEF01234567",
+        "g123456789abcdef0123456789abcdef01234567",
+        " 123456789abcdef0123456789abcdef01234567",
+        "0123456789abcdef0123456789abcdef0123456\n",
+    ] {
+        assert!(
+            build_script::validate_revision(revision).is_err(),
+            "accepted malformed revision {revision:?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_malformed_git_command_output() {
+    for output in [
+        &b""[..],
+        &b"\n"[..],
+        &b"0123456789abcdef0123456789abcdef01234567\n\n"[..],
+        &b"0123456789abcdef0123456789abcdef01234567 extra\n"[..],
+        &b"\xff\xfe\n"[..],
+    ] {
+        assert!(
+            build_script::parse_git_revision_output(output).is_err(),
+            "accepted malformed git output {output:?}"
+        );
+    }
+}
+
+#[test]
+fn accepts_current_abir_repository_authority() {
+    assert!(
+        build_script::validate_repository_authority(Path::new(env!("CARGO_MANIFEST_DIR"))).is_ok()
+    );
+}
+
+#[test]
+fn rejects_source_archive_nested_in_unrelated_git_checkout() {
+    let temporary = tempfile::tempdir().unwrap();
+    let outer = temporary.path().join("outer");
+    let manifest_dir = outer.join("vendor/ABIR/crates/abir-python");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    let status = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(&outer)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let error = build_script::validate_repository_authority(&manifest_dir).unwrap_err();
+    assert!(
+        error.contains("does not match ABIR workspace root"),
+        "{error}"
+    );
+}
+
+#[test]
+fn clean_git_fallback_resolves_head_and_rejects_dirty_checkout() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("ABIR");
+    let manifest_dir = repository.join("crates/abir-python");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::write(repository.join("Cargo.toml"), "[workspace]\n").unwrap();
+    fs::write(manifest_dir.join("Cargo.toml"), TEST_MANIFEST).unwrap();
+    run_git(&repository, &["init", "--quiet"]);
+    run_git(&repository, &["add", "."]);
+    run_git(
+        &repository,
+        &[
+            "-c",
+            "user.name=ABIR Test",
+            "-c",
+            "user.email=abir-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ],
+    );
+    let expected = git_stdout(&repository, &["rev-parse", "HEAD"]);
+
+    assert_eq!(
+        build_script::implementation_revision_from_git_at(&manifest_dir).unwrap(),
+        expected
+    );
+
+    fs::write(
+        manifest_dir.join("Cargo.toml"),
+        format!("{TEST_MANIFEST}# dirty\n"),
+    )
+    .unwrap();
+    let error = build_script::implementation_revision_from_git_at(&manifest_dir).unwrap_err();
+    assert!(error.contains("checkout is dirty"), "{error}");
+
+    fs::write(manifest_dir.join("Cargo.toml"), TEST_MANIFEST).unwrap();
+    fs::write(repository.join("untracked"), "new\n").unwrap();
+    let error = build_script::implementation_revision_from_git_at(&manifest_dir).unwrap_err();
+    assert!(error.contains("checkout is dirty"), "{error}");
+}
+
+fn run_git(repository: &Path, arguments: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(arguments)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {arguments:?} failed");
+}
+
+fn git_stdout(repository: &Path, arguments: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {arguments:?} failed");
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}

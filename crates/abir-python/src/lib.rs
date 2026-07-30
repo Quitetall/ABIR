@@ -10,6 +10,8 @@ use pyo3::types::{PyBytes, PyModule, PyTuple};
 
 mod training;
 
+const IMPLEMENTATION_REVISION: &str = env!("ABIR_EMBEDDED_IMPLEMENTATION_REVISION");
+
 #[pyclass(name = "Dataset", frozen)]
 struct PyDataset {
     inner: abir_core::AbirDataset,
@@ -384,6 +386,16 @@ fn version() -> &'static str {
     abir_core::VERSION
 }
 
+/// Return the exact Git revision from which this Python extension was built.
+///
+/// Local Git authority requires a clean ABIR worktree. Controlled development
+/// and source-archive builds must declare `ABIR_IMPLEMENTATION_REVISION`
+/// explicitly.
+#[pyfunction]
+fn implementation_revision() -> &'static str {
+    IMPLEMENTATION_REVISION
+}
+
 #[pymodule]
 fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDataset>()?;
@@ -411,6 +423,43 @@ fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     #[cfg(feature = "test-fixtures")]
     module.add_function(wrap_pyfunction!(training::training_fixture_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(implementation_revision, module)?)?;
     module.add_function(wrap_pyfunction!(version, module)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IMPLEMENTATION_REVISION;
+    use std::process::Command;
+
+    #[test]
+    fn embedded_implementation_revision_is_canonical() {
+        assert_eq!(IMPLEMENTATION_REVISION.len(), 40);
+        assert!(IMPLEMENTATION_REVISION
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')));
+    }
+
+    #[test]
+    fn embedded_implementation_revision_matches_build_authority() {
+        if let Some(revision_override) = option_env!("ABIR_IMPLEMENTATION_REVISION") {
+            assert_eq!(IMPLEMENTATION_REVISION, revision_override);
+            return;
+        }
+
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(env!("CARGO_MANIFEST_DIR"))
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("local fallback build requires git");
+        assert!(output.status.success());
+        assert_eq!(
+            IMPLEMENTATION_REVISION,
+            String::from_utf8(output.stdout)
+                .expect("git revision is UTF-8")
+                .trim_end_matches(['\r', '\n'])
+        );
+    }
 }

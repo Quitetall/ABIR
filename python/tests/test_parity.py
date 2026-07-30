@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 
 import abir
 import jsonschema
@@ -8,6 +9,11 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_python_reports_embedded_implementation_revision():
+    revision = abir.implementation_revision()
+    assert re.fullmatch(r"[0-9a-f]{40}", revision)
 
 
 def test_python_matches_rust_canonical_goldens():
