@@ -110,6 +110,15 @@ impl InMemoryPayloadAccess {
     pub fn insert(&mut self, content_id: ContentId, bytes: Vec<u8>) -> Option<Vec<u8>> {
         self.payloads.insert(content_id, bytes)
     }
+
+    /// Borrow payload bytes by logical content identity.
+    ///
+    /// Source capsules and other content-bound semantic objects do not carry a
+    /// [`PayloadDescriptor`]. This lookup lets host adapters recover their
+    /// retained bytes without inventing a second sidecar carrier.
+    pub fn bytes(&self, content_id: ContentId) -> Option<&[u8]> {
+        self.payloads.get(&content_id).map(Vec::as_slice)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

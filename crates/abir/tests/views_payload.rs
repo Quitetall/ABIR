@@ -5,6 +5,16 @@ use abir::{
     ValidationLimits,
 };
 
+#[test]
+fn in_memory_access_exposes_content_addressed_bytes_without_a_descriptor() {
+    let content_id = ContentId::from_bytes([42; 32]);
+    let mut access = InMemoryPayloadAccess::new();
+    access.insert(content_id, vec![1, 2, 3, 4]);
+
+    assert_eq!(access.bytes(content_id), Some(&[1, 2, 3, 4][..]));
+    assert_eq!(access.bytes(ContentId::from_bytes([43; 32])), None);
+}
+
 fn id<T>(value: u8) -> ObjectId<T> {
     ObjectId::from_bytes([value; 16])
 }
