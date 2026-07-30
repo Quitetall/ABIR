@@ -15,6 +15,8 @@ Version 4 extends v3 with embedded replay evidence:
 
 - `program`: complete `TrainingProgram` closure matching the embedded `spec`.
 - `program.execution_decisions`: closed, typed execution-only values referenced by the decision log.
+- `program.stochastic_nodes`: sorted, unique Node identities authorized for
+  stochastic seed derivation.
 - `decision_log`: complete `DecisionLog` records matching `spec_id`.
 - `decision_log_id`: still required and must equal `decision_log.content_id()`.
 
@@ -98,6 +100,11 @@ require an explicit activation barrier. Replay applies the ordered prefix whose
 barrier is less than or equal to that value, so decisions are never activated
 early. Empty logs represent the static canonical plan.
 
+Epoch execution compiles the rank-projected scientific schedule and physical
+plan through one typed operation against the same embedded decision log and
+activation barrier. The physical plan may change delivery only; it cannot
+substitute rows or stochastic seeds.
+
 ## Replay-ready semantics
 
 Replay-ready state requires both `program` and `decision_log` to be embedded. `decision_log_id` alone is insufficient; consumers must treat only snapshots with embedded replay evidence as replay-ready.
@@ -117,6 +124,10 @@ The snapshot is replay-ready if all of these are true:
 v4 snapshot semantics require distributed epoch invariance for the compiled schedule under fixed seed/program rows: a fixed row set and fixed embedded closure produce the same schedule identity across all worker ranks in one logical epoch. That invariant is violated by mutable or missing replay evidence, so replay-ready v4 snapshots are required where distributed invariance is part of scientific evidence.
 
 Readers and producers keep row closure deterministic by validating compiled schedule ordering and stable seed inputs.
+Every per-row seed binds the run seed, epoch, sampler, augmentation authority,
+declared stochastic Node identity, logical row, and repeated-draw occurrence.
+Changing worker count or delivery order cannot change it; changing the
+stochastic Node identity must change it without changing the global schedule.
 
 ## Resource bounds
 

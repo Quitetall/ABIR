@@ -63,8 +63,8 @@ fn main() {
         window: ids[&TrainingSemanticRole::Window],
         allowed_adaptive_knobs: vec!["prefetch-depth".to_owned()],
     };
-    let program =
-        TrainingProgram::seal(&spec, descriptors, sampler).expect("fixture program must seal");
+    let program = TrainingProgram::seal(&spec, descriptors, sampler, vec![key(200)])
+        .expect("fixture program must seal");
     let decision_log = DecisionLog::seal(&spec, vec![]).expect("fixture decision log must seal");
     let payload = [10_u8, 0];
     let row = TrainingRow {

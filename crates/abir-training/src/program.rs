@@ -256,6 +256,30 @@ impl TrainingSampler {
     }
 }
 
+/// One deterministic rank projection of a globally compiled epoch.
+///
+/// Selection always happens before this projection. Invalid rank/world-size
+/// combinations fail when the epoch is compiled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochShard {
+    rank: u32,
+    world_size: u32,
+}
+
+impl EpochShard {
+    pub const fn new(rank: u32, world_size: u32) -> Self {
+        Self { rank, world_size }
+    }
+
+    pub const fn rank(self) -> u32 {
+        self.rank
+    }
+
+    pub const fn world_size(self) -> u32 {
+        self.world_size
+    }
+}
+
 /// Complete semantic and executable authority for one training snapshot.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TrainingProgram {
@@ -264,6 +288,7 @@ pub struct TrainingProgram {
     sampler: TrainingSampler,
     schema: String,
     sealed: bool,
+    stochastic_nodes: Vec<ContentKey>,
 }
 
 impl TrainingProgram {
@@ -271,17 +296,26 @@ impl TrainingProgram {
         spec: &TrainingSpec,
         descriptors: Vec<TrainingSemanticDescriptor>,
         sampler: TrainingSampler,
+        stochastic_nodes: Vec<ContentKey>,
     ) -> Result<Self, TrainingError> {
-        Self::seal_with_execution_decisions(spec, descriptors, sampler, Vec::new())
+        Self::seal_with_execution_decisions(
+            spec,
+            descriptors,
+            sampler,
+            stochastic_nodes,
+            Vec::new(),
+        )
     }
 
     pub fn seal_with_execution_decisions(
         spec: &TrainingSpec,
         mut descriptors: Vec<TrainingSemanticDescriptor>,
         sampler: TrainingSampler,
+        mut stochastic_nodes: Vec<ContentKey>,
         mut execution_decisions: Vec<TrainingExecutionDecision>,
     ) -> Result<Self, TrainingError> {
         descriptors.sort_by_key(TrainingSemanticDescriptor::role);
+        stochastic_nodes.sort_unstable();
         execution_decisions.sort_by_key(|decision| {
             decision
                 .content_id()
@@ -294,6 +328,7 @@ impl TrainingProgram {
             sampler,
             schema: PROGRAM_SCHEMA.to_owned(),
             sealed: true,
+            stochastic_nodes,
         };
         program.validate_for_spec(spec)?;
         Ok(program)
@@ -309,6 +344,11 @@ impl TrainingProgram {
 
     pub const fn sampler(&self) -> &TrainingSampler {
         &self.sampler
+    }
+
+    /// Declared stochastic Node identities eligible for per-row seed derivation.
+    pub fn stochastic_nodes(&self) -> &[ContentKey] {
+        &self.stochastic_nodes
     }
 
     pub fn descriptor(&self, role: TrainingSemanticRole) -> Option<&TrainingSemanticDescriptor> {
@@ -414,12 +454,23 @@ impl TrainingProgram {
         rows: &[TrainingRow],
         decision_log_id: ContentKey,
         epoch: u64,
-        rank: u32,
-        world_size: u32,
+        stochastic_node_id: ContentKey,
+        shard: EpochShard,
     ) -> Result<CompiledTrainingEpoch, TrainingError> {
+        let rank = shard.rank();
+        let world_size = shard.world_size();
         self.validate_for_spec(spec)?;
         if world_size == 0 || rank >= world_size || rows.is_empty() {
             return Err(TrainingError::InvalidEpoch);
+        }
+        if self
+            .stochastic_nodes
+            .binary_search(&stochastic_node_id)
+            .is_err()
+        {
+            return Err(TrainingError::UndeclaredStochasticNode(
+                stochastic_node_id.into(),
+            ));
         }
         let sampler_id = ContentKey::from(self.sampler.content_id()?);
         let mut selected = match self.sampler.strategy() {
@@ -453,7 +504,14 @@ impl TrainingProgram {
                 global_index: global_index as u64,
                 logical_id,
                 occurrence: *occurrence,
-                stochastic_seed: stochastic_seed(spec, epoch, sampler_id, logical_id, *occurrence),
+                stochastic_seed: stochastic_seed(
+                    spec,
+                    epoch,
+                    sampler_id,
+                    stochastic_node_id,
+                    logical_id,
+                    *occurrence,
+                ),
             };
             *occurrence += 1;
             if global_index % world_size as usize == rank as usize {
@@ -468,10 +526,58 @@ impl TrainingProgram {
             rank,
             rows: compiled_rows,
             schema: EPOCH_SCHEMA.to_owned(),
+            stochastic_node_id,
             world_size,
         };
         compiled.validate()?;
         Ok(compiled)
+    }
+
+    /// Compile one scientific epoch and its replayed physical plan atomically.
+    ///
+    /// Both projections consume the same embedded decision log. Execution-only
+    /// decisions may change physical delivery but cannot change row selection,
+    /// rank projection, or stochastic seeds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compile_epoch_execution(
+        &self,
+        spec: &TrainingSpec,
+        rows: &[TrainingRow],
+        decision_log: &DecisionLog,
+        profile: TrainingProfile,
+        activation_barrier: u64,
+        epoch: u64,
+        stochastic_node_id: ContentKey,
+        rank: u32,
+        world_size: u32,
+    ) -> Result<CompiledEpochExecution, TrainingError> {
+        self.validate_replay_for_spec(spec, decision_log)?;
+        let decision_log_id = ContentKey::from(decision_log.content_id()?);
+        let epoch = self.compile_epoch(
+            spec,
+            rows,
+            decision_log_id,
+            epoch,
+            stochastic_node_id,
+            EpochShard::new(rank, world_size),
+        )?;
+        let plan = self.compile_execution_plan_at_barrier(
+            spec,
+            decision_log,
+            profile,
+            activation_barrier,
+        )?;
+        let applied_decision_count = decision_log
+            .records()
+            .iter()
+            .take_while(|record| record.activation_barrier <= activation_barrier)
+            .count();
+        Ok(CompiledEpochExecution {
+            activation_barrier,
+            applied_decision_count,
+            epoch,
+            plan,
+        })
     }
 
     pub(crate) fn validate_for_spec(&self, spec: &TrainingSpec) -> Result<(), TrainingError> {
@@ -504,6 +610,15 @@ impl TrainingProgram {
         for descriptor in &self.descriptors {
             descriptor.validate()?;
         }
+        if self.stochastic_nodes.is_empty()
+            || self.stochastic_nodes.len() > ResourceBounds::default().max_index_entries as usize
+            || self
+                .stochastic_nodes
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(TrainingError::InvalidTrainingProgram);
+        }
         let mut prior = None;
         for decision in &self.execution_decisions {
             let content_id = decision
@@ -515,6 +630,33 @@ impl TrainingProgram {
             prior = Some(content_id);
         }
         self.sampler.validate()
+    }
+}
+
+/// Atomic scientific schedule plus replayed physical execution plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompiledEpochExecution {
+    activation_barrier: u64,
+    applied_decision_count: usize,
+    epoch: CompiledTrainingEpoch,
+    plan: CompiledExecutionPlan,
+}
+
+impl CompiledEpochExecution {
+    pub const fn activation_barrier(&self) -> u64 {
+        self.activation_barrier
+    }
+
+    pub const fn applied_decision_count(&self) -> usize {
+        self.applied_decision_count
+    }
+
+    pub const fn epoch(&self) -> &CompiledTrainingEpoch {
+        &self.epoch
+    }
+
+    pub const fn plan(&self) -> &CompiledExecutionPlan {
+        &self.plan
     }
 }
 
@@ -537,6 +679,7 @@ pub struct CompiledTrainingEpoch {
     rank: u32,
     rows: Vec<CompiledTrainingRow>,
     schema: String,
+    stochastic_node_id: ContentKey,
     world_size: u32,
 }
 
@@ -559,6 +702,10 @@ impl CompiledTrainingEpoch {
 
     pub const fn rank(&self) -> u32 {
         self.rank
+    }
+
+    pub const fn stochastic_node_id(&self) -> ContentKey {
+        self.stochastic_node_id
     }
 
     pub fn rows(&self) -> &[CompiledTrainingRow] {
@@ -680,16 +827,18 @@ fn stochastic_seed(
     spec: &TrainingSpec,
     epoch: u64,
     sampler_id: ContentKey,
+    stochastic_node_id: ContentKey,
     logical_id: ContentKey,
     occurrence: u64,
 ) -> u64 {
-    let mut bytes = [0_u8; 120];
+    let mut bytes = [0_u8; 152];
     bytes[..8].copy_from_slice(&spec.seed.to_le_bytes());
     bytes[8..16].copy_from_slice(&epoch.to_le_bytes());
     bytes[16..48].copy_from_slice(sampler_id.content_id().as_bytes());
     bytes[48..80].copy_from_slice(spec.augmentation.content_id().as_bytes());
-    bytes[80..112].copy_from_slice(logical_id.content_id().as_bytes());
-    bytes[112..].copy_from_slice(&occurrence.to_le_bytes());
+    bytes[80..112].copy_from_slice(stochastic_node_id.content_id().as_bytes());
+    bytes[112..144].copy_from_slice(logical_id.content_id().as_bytes());
+    bytes[144..].copy_from_slice(&occurrence.to_le_bytes());
     let digest = training_content_id(TrainingContentDomain::StochasticSeedV1, &bytes);
     u64::from_le_bytes(
         digest.as_bytes()[..8]

@@ -1,13 +1,13 @@
 use abir_bcs::{ResourceBounds, SemanticPayloadFrame};
 use abir_core::{payload_content_id, ByteOrder, ContentId, ElementType, Presence};
 use abir_training::{
-    compile_execution_plan, encode_snapshot, ContentKey, ContinualPromotion, DatasetSubscription,
-    DecisionLog, DecisionRecord, DecisionReplayReceipt, MicroSnapshot, PayloadAccessPolicy,
-    PlanOverrides, PrefetchPolicy, RowGrouping, SamplerStrategy, SamplerStratum, SamplerStratumKey,
-    SourceEquivalenceReceipt, SubscriptionCorrection, TrainingAssociatedPayload,
-    TrainingExecutionDecision, TrainingLabelPayloadAssociation, TrainingProgram, TrainingRow,
-    TrainingSampler, TrainingSemanticDescriptor, TrainingSemanticRole, TrainingSnapshot,
-    TrainingSpec,
+    compile_execution_plan, encode_snapshot, CompiledExecutionPlan, CompiledTrainingEpoch,
+    ContentKey, ContinualPromotion, DatasetSubscription, DecisionLog, DecisionRecord,
+    DecisionReplayReceipt, MicroSnapshot, PayloadAccessPolicy, PlanOverrides, PrefetchPolicy,
+    RowGrouping, SamplerStrategy, SamplerStratum, SamplerStratumKey, SourceEquivalenceReceipt,
+    SubscriptionCorrection, TrainingAssociatedPayload, TrainingExecutionDecision,
+    TrainingLabelPayloadAssociation, TrainingProgram, TrainingRow, TrainingSampler,
+    TrainingSemanticDescriptor, TrainingSemanticRole, TrainingSnapshot, TrainingSpec,
 };
 use abir_training::{
     DecisionLogReplayState, TrainingProfile, TrainingWindowFileIndex, TrainingWindowStore,
@@ -63,6 +63,31 @@ struct RowLocation {
     payload_id: ContentId,
     shape: Vec<u64>,
     split: String,
+}
+
+enum RowSequence<'a> {
+    Canonical(&'a [RowLocation]),
+    Projected(Vec<&'a RowLocation>),
+}
+
+impl<'a> RowSequence<'a> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Canonical(rows) => rows.len(),
+            Self::Projected(rows) => rows.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get(&self, index: usize) -> &'a RowLocation {
+        match self {
+            Self::Canonical(rows) => &rows[index],
+            Self::Projected(rows) => rows[index],
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -365,12 +390,24 @@ impl PyTrainingWindowStore {
             .transpose()
     }
 
+    #[getter]
+    fn stochastic_node_ids(&self) -> Option<Vec<String>> {
+        self.training_program.as_ref().map(|program| {
+            program
+                .stochastic_nodes()
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+    }
+
     /// Compile one exact scientific epoch before physical worker delivery.
-    #[pyo3(signature = (epoch_index, rank=0, world_size=1))]
+    #[pyo3(signature = (epoch_index, stochastic_node_id, rank=0, world_size=1))]
     fn compile_epoch<'py>(
         &self,
         py: Python<'py>,
         epoch_index: u64,
+        stochastic_node_id: &str,
         rank: u32,
         world_size: u32,
     ) -> PyResult<Bound<'py, PyDict>> {
@@ -390,8 +427,8 @@ impl PyTrainingWindowStore {
                 &self.semantic_rows,
                 decision_log_id,
                 epoch_index,
-                rank,
-                world_size,
+                ContentKey::new(super::parse_content_id(stochastic_node_id)?),
+                abir_training::EpochShard::new(rank, world_size),
             )
             .map_err(training_error)?;
         let rows = PyList::empty_bound(py);
@@ -417,6 +454,10 @@ impl PyTrainingWindowStore {
         )?;
         result.set_item("rank", compiled.rank())?;
         result.set_item("rows", rows)?;
+        result.set_item(
+            "stochastic_node_id",
+            compiled.stochastic_node_id().to_string(),
+        )?;
         result.set_item("world_size", compiled.world_size())?;
         Ok(result)
     }
@@ -486,142 +527,79 @@ impl PyTrainingWindowStore {
                 0,
             ),
         };
-        let plan_id = plan
-            .content_id()
-            .map_err(|error| PyValueError::new_err(error.to_string()))?
-            .to_string();
-        let cache_budget = usize::try_from(plan.cache_budget().bytes())
-            .map_err(|_| PyValueError::new_err("training cache budget exceeds this host"))?;
+        let rows = RowSequence::Canonical(&self.rows);
+        self.execute_compiled_plan(
+            py,
+            &plan,
+            &rows,
+            activation_barrier,
+            applied_decision_count,
+            None,
+        )
+    }
 
-        let (payload_access, implementation, metrics) = match (
-            plan.payload_access(),
-            &self.artifact,
-        ) {
-            (
-                PayloadAccessPolicy::RequireMmap | PayloadAccessPolicy::PreferMmap,
-                ArtifactOwner::PathFile { mmap, .. },
-            ) => (
-                "mmap-direct",
-                "bounded-mmap-lookahead-v1",
-                execute_borrowed_rows(&self.rows, mmap, plan.row_grouping(), plan.prefetch(), 0)?,
-            ),
-            (PayloadAccessPolicy::RequireMmap, ArtifactOwner::VerifiedPathFile { .. }) => {
-                return Err(PyValueError::new_err(
-                    "canonical training plan requires immutable mmap backing; verified-read backing is disk-optimized",
-                ));
-            }
-            (PayloadAccessPolicy::RequireMmap, ArtifactOwner::Bytes(_)) => {
-                return Err(PyValueError::new_err(
-                    "canonical training plan requires mmap backing",
-                ));
-            }
-            (PayloadAccessPolicy::PreferMmap, ArtifactOwner::Bytes(_)) => {
-                return Err(PyValueError::new_err(
-                    "canonical acceptance execution requires preferred mmap backing",
-                ));
-            }
-            (PayloadAccessPolicy::PreferMmap, ArtifactOwner::VerifiedPathFile { file }) => (
-                "file-stream",
-                "bounded-preferred-mmap-fallback-v1",
-                execute_streamed_rows(
-                    &self.rows,
-                    file,
-                    plan.row_grouping(),
-                    plan.prefetch(),
-                    cache_budget,
-                )?,
-            ),
-            (PayloadAccessPolicy::Materialize, ArtifactOwner::Bytes(artifact)) => {
-                let bytes = artifact.bind(py).as_bytes();
-                if bytes.len() > cache_budget {
-                    return Err(PyValueError::new_err(
-                        "materialized training artifact exceeds canonical cache budget",
-                    ));
-                }
-                (
-                    "materialized-bytes",
-                    "bounded-materialized-groups-v1",
-                    execute_borrowed_rows(
-                        &self.rows,
-                        bytes,
-                        plan.row_grouping(),
-                        plan.prefetch(),
-                        bytes.len(),
-                    )?,
-                )
-            }
-            (
-                PayloadAccessPolicy::Materialize,
-                ArtifactOwner::PathFile { .. } | ArtifactOwner::VerifiedPathFile { .. },
-            ) => {
-                return Err(PyValueError::new_err(
-                    "canonical training plan requires materialized bytes backing",
-                ));
-            }
-            (
-                PayloadAccessPolicy::Stream,
-                ArtifactOwner::PathFile { file, .. } | ArtifactOwner::VerifiedPathFile { file },
-            ) => (
-                "file-stream",
-                "bounded-file-stream-lookahead-v1",
-                execute_streamed_rows(
-                    &self.rows,
-                    file,
-                    plan.row_grouping(),
-                    plan.prefetch(),
-                    cache_budget,
-                )?,
-            ),
-            (PayloadAccessPolicy::Stream, ArtifactOwner::Bytes(_)) => {
-                return Err(PyValueError::new_err(
-                    "canonical training plan requires file-stream backing",
-                ));
-            }
-        };
-
-        let implementation_descriptor = serde_json::json!({
-            "executor": implementation,
-            "payload_access": payload_access,
-            "plan_id": plan_id,
-            "profile": self.profile,
-            "schema": "org.quitetall.abir.training.execution-implementation-v1",
-        });
-        let implementation_bytes = serde_json::to_vec(&implementation_descriptor)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let implementation_id = format!("{:x}", Sha256::digest(&implementation_bytes));
-        let observed_trace = serde_json::json!({
-            "backing": self.artifact.backing(),
-            "cache_budget_bytes": cache_budget,
-            "cache_peak_bytes": metrics.cache_peak_bytes,
-            "group_count": metrics.group_count,
-            "logical_bytes": metrics.logical_bytes,
-            "payload_access": payload_access,
-            "plan_id": plan_id,
-            "prefetch_rows_observed": metrics.prefetch_rows_observed,
-            "profile": self.profile,
-            "row_count": metrics.row_count,
-            "schema": "org.quitetall.abir.training.observed-execution-v1",
-        });
-        let observed_trace_json = serde_json::to_string(&observed_trace)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let observed_trace_id = format!("{:x}", Sha256::digest(observed_trace_json.as_bytes()));
-
-        let result = PyDict::new_bound(py);
-        result.set_item("activation_barrier", activation_barrier)?;
-        result.set_item("applied_decision_count", applied_decision_count)?;
-        result.set_item("decision_log_id", &self.decision_log_id)?;
-        result.set_item("implementation_id", implementation_id)?;
-        result.set_item("logical_bytes", metrics.logical_bytes)?;
-        result.set_item("logical_payload_sha256", metrics.logical_payload_sha256)?;
-        result.set_item("observed_trace_id", observed_trace_id)?;
-        result.set_item("observed_trace_json", observed_trace_json)?;
-        result.set_item("physical_artifact_sha256", &self.physical_artifact_sha256)?;
-        result.set_item("plan_id", plan_id)?;
-        result.set_item("profile", self.profile)?;
-        result.set_item("row_count", metrics.row_count)?;
-        result.set_item("row_ids_sha256", metrics.row_ids_sha256)?;
-        result.set_item("snapshot_id", &self.snapshot_id)?;
-        Ok(result)
+    /// Execute one rank-projected scientific epoch through its replayed plan.
+    ///
+    /// Schedule and physical-plan authority are compiled atomically from the
+    /// same embedded program and decision log.
+    #[pyo3(signature = (epoch_index, stochastic_node_id, activation_barrier=None, rank=0, world_size=1))]
+    fn execute_training_epoch<'py>(
+        &self,
+        py: Python<'py>,
+        epoch_index: u64,
+        stochastic_node_id: &str,
+        activation_barrier: Option<u64>,
+        rank: u32,
+        world_size: u32,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let spec = self.training_spec.as_ref().ok_or_else(|| {
+            PyValueError::new_err("snapshot lacks embedded TrainingSpec authority")
+        })?;
+        let program = self.training_program.as_ref().ok_or_else(|| {
+            PyValueError::new_err("snapshot lacks executable TrainingProgram authority")
+        })?;
+        let decision_log = self.decision_log.as_ref().ok_or_else(|| {
+            PyValueError::new_err("snapshot lacks embedded decision-log replay authority")
+        })?;
+        if !decision_log.records().is_empty() && activation_barrier.is_none() {
+            return Err(PyValueError::new_err(
+                "activation_barrier is required to replay a non-empty decision log",
+            ));
+        }
+        let compiled = program
+            .compile_epoch_execution(
+                spec,
+                &self.semantic_rows,
+                decision_log,
+                parse_profile(self.profile)?,
+                activation_barrier.unwrap_or(0),
+                epoch_index,
+                ContentKey::new(super::parse_content_id(stochastic_node_id)?),
+                rank,
+                world_size,
+            )
+            .map_err(training_error)?;
+        let mut rows = Vec::with_capacity(compiled.epoch().rows().len());
+        for draw in compiled.epoch().rows() {
+            let index = self
+                .semantic_rows
+                .binary_search_by_key(&draw.logical_id, |row| row.logical_id)
+                .map_err(|_| {
+                    PyValueError::new_err(
+                        "compiled epoch references a row outside the validated snapshot",
+                    )
+                })?;
+            rows.push(&self.rows[index]);
+        }
+        let rows = RowSequence::Projected(rows);
+        self.execute_compiled_plan(
+            py,
+            compiled.plan(),
+            &rows,
+            activation_barrier,
+            compiled.applied_decision_count(),
+            Some(compiled.epoch()),
+        )
     }
 
     #[getter]
@@ -790,7 +768,7 @@ struct ExecutionMetrics {
     row_ids_sha256: String,
 }
 
-fn row_groups(rows: &[RowLocation], grouping: RowGrouping) -> PyResult<Vec<(usize, usize)>> {
+fn row_groups(rows: &RowSequence<'_>, grouping: RowGrouping) -> PyResult<Vec<(usize, usize)>> {
     if rows.is_empty() {
         return Err(PyValueError::new_err(
             "canonical execution requires at least one training row",
@@ -814,7 +792,7 @@ fn row_groups(rows: &[RowLocation], grouping: RowGrouping) -> PyResult<Vec<(usiz
                 let mut group_bytes = 0_usize;
                 while end < rows.len() {
                     let next = group_bytes
-                        .checked_add(rows[end].logical_bytes)
+                        .checked_add(rows.get(end).logical_bytes)
                         .ok_or_else(|| {
                             PyValueError::new_err("training row group byte count overflow")
                         })?;
@@ -874,7 +852,7 @@ fn update_execution_hashes(
 }
 
 fn execute_borrowed_rows(
-    rows: &[RowLocation],
+    rows: &RowSequence<'_>,
     artifact: &[u8],
     grouping: RowGrouping,
     prefetch: PrefetchPolicy,
@@ -891,15 +869,17 @@ fn execute_borrowed_rows(
         for index in start..end {
             let lookahead = requested_lookahead.min(rows.len().saturating_sub(index + 1));
             observed_lookahead = observed_lookahead.max(lookahead);
-            for future in &rows[index + 1..index + 1 + lookahead] {
+            for future_index in index + 1..index + 1 + lookahead {
+                let future = rows.get(future_index);
                 let bytes = checked_row_slice(artifact, future)?;
                 if let Some(first) = bytes.first() {
                     prefetch_probe ^= *first;
                 }
             }
-            let bytes = checked_row_slice(artifact, &rows[index])?;
+            let row = rows.get(index);
+            let bytes = checked_row_slice(artifact, row)?;
             update_execution_hashes(
-                &rows[index],
+                row,
                 bytes,
                 &mut payload_digest,
                 &mut row_id_digest,
@@ -947,7 +927,7 @@ fn read_stream_row(
 }
 
 fn execute_streamed_rows(
-    rows: &[RowLocation],
+    rows: &RowSequence<'_>,
     file: &Mutex<File>,
     grouping: RowGrouping,
     prefetch: PrefetchPolicy,
@@ -970,15 +950,16 @@ fn execute_streamed_rows(
     let queue_rows = requested_lookahead.saturating_add(1);
     while next < rows.len() || !queue.is_empty() {
         while next < rows.len() && queue.len() < queue_rows {
+            let row = rows.get(next);
             let prospective =
-                bounded_stream_cache_bytes(queued_bytes, rows[next].logical_bytes, cache_budget)
+                bounded_stream_cache_bytes(queued_bytes, row.logical_bytes, cache_budget)
                     .ok_or_else(|| {
                         PyValueError::new_err(
                             "streaming training lookahead exceeds canonical cache budget",
                         )
                     })?;
             let remaining = cache_budget - queued_bytes;
-            let bytes = read_stream_row(&mut file, &rows[next], remaining)?;
+            let bytes = read_stream_row(&mut file, row, remaining)?;
             queued_bytes = prospective;
             peak_cache = peak_cache.max(queued_bytes);
             queue.push_back((next, bytes));
@@ -992,7 +973,7 @@ fn execute_streamed_rows(
             .checked_sub(bytes.len())
             .ok_or_else(|| PyValueError::new_err("streaming cache accounting underflow"))?;
         update_execution_hashes(
-            &rows[index],
+            rows.get(index),
             &bytes,
             &mut payload_digest,
             &mut row_id_digest,
@@ -1423,6 +1404,170 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
 }
 
 impl PyTrainingWindowStore {
+    #[allow(clippy::too_many_arguments)]
+    fn execute_compiled_plan<'py>(
+        &self,
+        py: Python<'py>,
+        plan: &CompiledExecutionPlan,
+        rows: &RowSequence<'_>,
+        activation_barrier: Option<u64>,
+        applied_decision_count: usize,
+        epoch: Option<&CompiledTrainingEpoch>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let plan_id = plan
+            .content_id()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+            .to_string();
+        let epoch_id = epoch
+            .map(|epoch| epoch.content_id().map(|id| id.to_string()))
+            .transpose()
+            .map_err(training_error)?;
+        let global_schedule_id = epoch.map(|epoch| epoch.global_schedule_id().to_string());
+        let stochastic_node_id = epoch.map(|epoch| epoch.stochastic_node_id().to_string());
+        let cache_budget = usize::try_from(plan.cache_budget().bytes())
+            .map_err(|_| PyValueError::new_err("training cache budget exceeds this host"))?;
+
+        let (payload_access, implementation, metrics) = match (
+            plan.payload_access(),
+            &self.artifact,
+        ) {
+            (
+                PayloadAccessPolicy::RequireMmap | PayloadAccessPolicy::PreferMmap,
+                ArtifactOwner::PathFile { mmap, .. },
+            ) => (
+                "mmap-direct",
+                "bounded-mmap-lookahead-v1",
+                execute_borrowed_rows(rows, mmap, plan.row_grouping(), plan.prefetch(), 0)?,
+            ),
+            (PayloadAccessPolicy::RequireMmap, ArtifactOwner::VerifiedPathFile { .. }) => {
+                return Err(PyValueError::new_err(
+                        "canonical training plan requires immutable mmap backing; verified-read backing is disk-optimized",
+                    ));
+            }
+            (PayloadAccessPolicy::RequireMmap, ArtifactOwner::Bytes(_)) => {
+                return Err(PyValueError::new_err(
+                    "canonical training plan requires mmap backing",
+                ));
+            }
+            (PayloadAccessPolicy::PreferMmap, ArtifactOwner::Bytes(_)) => {
+                return Err(PyValueError::new_err(
+                    "canonical acceptance execution requires preferred mmap backing",
+                ));
+            }
+            (PayloadAccessPolicy::PreferMmap, ArtifactOwner::VerifiedPathFile { file }) => (
+                "file-stream",
+                "bounded-preferred-mmap-fallback-v1",
+                execute_streamed_rows(
+                    rows,
+                    file,
+                    plan.row_grouping(),
+                    plan.prefetch(),
+                    cache_budget,
+                )?,
+            ),
+            (PayloadAccessPolicy::Materialize, ArtifactOwner::Bytes(artifact)) => {
+                let bytes = artifact.bind(py).as_bytes();
+                if bytes.len() > cache_budget {
+                    return Err(PyValueError::new_err(
+                        "materialized training artifact exceeds canonical cache budget",
+                    ));
+                }
+                (
+                    "materialized-bytes",
+                    "bounded-materialized-groups-v1",
+                    execute_borrowed_rows(
+                        rows,
+                        bytes,
+                        plan.row_grouping(),
+                        plan.prefetch(),
+                        bytes.len(),
+                    )?,
+                )
+            }
+            (
+                PayloadAccessPolicy::Materialize,
+                ArtifactOwner::PathFile { .. } | ArtifactOwner::VerifiedPathFile { .. },
+            ) => {
+                return Err(PyValueError::new_err(
+                    "canonical training plan requires materialized bytes backing",
+                ));
+            }
+            (
+                PayloadAccessPolicy::Stream,
+                ArtifactOwner::PathFile { file, .. } | ArtifactOwner::VerifiedPathFile { file },
+            ) => (
+                "file-stream",
+                "bounded-file-stream-lookahead-v1",
+                execute_streamed_rows(
+                    rows,
+                    file,
+                    plan.row_grouping(),
+                    plan.prefetch(),
+                    cache_budget,
+                )?,
+            ),
+            (PayloadAccessPolicy::Stream, ArtifactOwner::Bytes(_)) => {
+                return Err(PyValueError::new_err(
+                    "canonical training plan requires file-stream backing",
+                ));
+            }
+        };
+
+        let implementation_descriptor = serde_json::json!({
+            "executor": implementation,
+            "payload_access": payload_access,
+            "plan_id": plan_id,
+            "profile": self.profile,
+            "schema": "org.quitetall.abir.training.execution-implementation-v1",
+        });
+        let implementation_bytes = serde_json::to_vec(&implementation_descriptor)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let implementation_id = format!("{:x}", Sha256::digest(&implementation_bytes));
+        let observed_trace = serde_json::json!({
+            "backing": self.artifact.backing(),
+            "cache_budget_bytes": cache_budget,
+            "cache_peak_bytes": metrics.cache_peak_bytes,
+            "epoch_id": epoch_id,
+            "global_schedule_id": global_schedule_id,
+            "group_count": metrics.group_count,
+            "logical_bytes": metrics.logical_bytes,
+            "payload_access": payload_access,
+            "plan_id": plan_id,
+            "prefetch_rows_observed": metrics.prefetch_rows_observed,
+            "profile": self.profile,
+            "rank": epoch.map(CompiledTrainingEpoch::rank),
+            "row_count": metrics.row_count,
+            "schema": "org.quitetall.abir.training.observed-execution-v1",
+            "stochastic_node_id": stochastic_node_id,
+            "world_size": epoch.map(CompiledTrainingEpoch::world_size),
+        });
+        let observed_trace_json = serde_json::to_string(&observed_trace)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let observed_trace_id = format!("{:x}", Sha256::digest(observed_trace_json.as_bytes()));
+
+        let result = PyDict::new_bound(py);
+        result.set_item("activation_barrier", activation_barrier)?;
+        result.set_item("applied_decision_count", applied_decision_count)?;
+        result.set_item("decision_log_id", &self.decision_log_id)?;
+        result.set_item("epoch_id", epoch_id)?;
+        result.set_item("global_schedule_id", global_schedule_id)?;
+        result.set_item("implementation_id", implementation_id)?;
+        result.set_item("logical_bytes", metrics.logical_bytes)?;
+        result.set_item("logical_payload_sha256", metrics.logical_payload_sha256)?;
+        result.set_item("observed_trace_id", observed_trace_id)?;
+        result.set_item("observed_trace_json", observed_trace_json)?;
+        result.set_item("physical_artifact_sha256", &self.physical_artifact_sha256)?;
+        result.set_item("plan_id", plan_id)?;
+        result.set_item("profile", self.profile)?;
+        result.set_item("rank", epoch.map(CompiledTrainingEpoch::rank))?;
+        result.set_item("row_count", metrics.row_count)?;
+        result.set_item("row_ids_sha256", metrics.row_ids_sha256)?;
+        result.set_item("snapshot_id", &self.snapshot_id)?;
+        result.set_item("stochastic_node_id", stochastic_node_id)?;
+        result.set_item("world_size", epoch.map(CompiledTrainingEpoch::world_size))?;
+        Ok(result)
+    }
+
     fn row(&self, logical_id: &str) -> PyResult<&RowLocation> {
         self.rows
             .binary_search_by(|row| row.logical_id.as_str().cmp(logical_id))
@@ -2507,7 +2652,7 @@ pub(crate) fn seal_training_continual_promotion<'py>(
 /// ABIR owns payload identities, canonical catalog identity, and physical frame
 /// closure.
 #[pyfunction]
-#[pyo3(signature = (*, dataset_roots, profile, rows, label_payloads, decision_log_id=None, spec_id=None, spec=None, semantic_descriptors=None, sampler=None, execution_decisions=None, decision_records=None))]
+#[pyo3(signature = (*, dataset_roots, profile, rows, label_payloads, decision_log_id=None, spec_id=None, spec=None, semantic_descriptors=None, sampler=None, stochastic_nodes=None, execution_decisions=None, decision_records=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_training_snapshot<'py>(
     py: Python<'py>,
@@ -2520,6 +2665,7 @@ pub(crate) fn seal_training_snapshot<'py>(
     spec: Option<&Bound<'py, PyDict>>,
     semantic_descriptors: Option<&Bound<'py, PyList>>,
     sampler: Option<&Bound<'py, PyDict>>,
+    stochastic_nodes: Option<&Bound<'py, PyList>>,
     execution_decisions: Option<&Bound<'py, PyList>>,
     decision_records: Option<&Bound<'py, PyList>>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -2584,16 +2730,25 @@ pub(crate) fn seal_training_snapshot<'py>(
     let replay_arguments = (
         semantic_descriptors.is_some(),
         sampler.is_some(),
+        stochastic_nodes.is_some(),
         decision_records.is_some(),
     );
-    if !matches!(replay_arguments, (false, false, false) | (true, true, true)) {
+    if !matches!(
+        replay_arguments,
+        (false, false, false, false) | (true, true, true, true)
+    ) {
         return Err(PyValueError::new_err(
-            "snapshot-v4 requires semantic_descriptors, sampler, and decision_records together",
+            "snapshot-v4 requires semantic_descriptors, sampler, stochastic_nodes, and decision_records together",
         ));
     }
-    if execution_decisions.is_some() && replay_arguments != (true, true, true) {
+    if execution_decisions.is_some() && replay_arguments != (true, true, true, true) {
         return Err(PyValueError::new_err(
             "execution decisions require complete snapshot-v4 replay authority",
+        ));
+    }
+    if stochastic_nodes.is_some_and(|nodes| nodes.len() > bounds.max_index_entries as usize) {
+        return Err(PyValueError::new_err(
+            "stochastic Node identities exceed the ABIR BCS2 index resource bound",
         ));
     }
     let snapshot = if let Some(spec) = spec {
@@ -2604,13 +2759,25 @@ pub(crate) fn seal_training_snapshot<'py>(
                 "training spec_id does not match embedded TrainingSpec",
             ));
         }
-        if let (Some(descriptors), Some(sampler), Some(records)) =
-            (semantic_descriptors, sampler, decision_records)
-        {
+        if let (Some(descriptors), Some(sampler), Some(stochastic_nodes), Some(records)) = (
+            semantic_descriptors,
+            sampler,
+            stochastic_nodes,
+            decision_records,
+        ) {
             let program = TrainingProgram::seal_with_execution_decisions(
                 &spec,
                 parse_semantic_descriptors(descriptors)?,
                 parse_sampler(sampler)?,
+                stochastic_nodes
+                    .iter()
+                    .map(|value| {
+                        let value = value.downcast::<PyString>().map_err(|_| {
+                            PyValueError::new_err("stochastic Node IDs must be strings")
+                        })?;
+                        super::parse_content_id(value.to_str()?).map(ContentKey::new)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
                 execution_decisions
                     .map(parse_execution_decisions)
                     .transpose()?
@@ -2649,7 +2816,7 @@ pub(crate) fn seal_training_snapshot<'py>(
             )
         }
     } else {
-        if replay_arguments != (false, false, false) {
+        if replay_arguments != (false, false, false, false) {
             return Err(PyValueError::new_err(
                 "snapshot-v4 semantic authority requires embedded TrainingSpec",
             ));
@@ -2718,6 +2885,14 @@ pub(crate) fn seal_training_snapshot<'py>(
         result.set_item(
             "training_program_id",
             program.content_id().map_err(training_error)?.to_string(),
+        )?;
+        result.set_item(
+            "stochastic_node_ids",
+            program
+                .stochastic_nodes()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
         )?;
     }
     result.set_item("artifact", PyBytes::new_bound(py, &artifact))?;
@@ -2812,10 +2987,14 @@ pub(crate) fn training_fixture_bytes<'py>(
 }
 
 /// Deterministic replay-ready fixture for TrainingProgram integration tests.
-#[pyfunction(name = "_training_v4_fixture_bytes")]
+#[pyfunction(name = "_training_v4_fixture_bytes", signature = (label_presence=None))]
 #[cfg(feature = "test-fixtures")]
-pub(crate) fn training_v4_fixture_bytes<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+pub(crate) fn training_v4_fixture_bytes<'py>(
+    py: Python<'py>,
+    label_presence: Option<&str>,
+) -> PyResult<Bound<'py, PyBytes>> {
     let payload = [1_u8, 0, 2, 0, 3, 0, 4, 0];
+    let mask = [0_u8, 1];
     let row = TrainingRow {
         encoding: None,
         byte_order: ByteOrder::Little,
@@ -2827,6 +3006,32 @@ pub(crate) fn training_v4_fixture_bytes<'py>(py: Python<'py>) -> PyResult<Bound<
         element: ElementType::I16,
         shape: vec![2, 2],
         split: key(8),
+    };
+    let label_payloads = match label_presence {
+        None => Vec::new(),
+        Some(presence) => {
+            let presence = match presence {
+                "present" => Presence::Present,
+                "absent-at-source" => Presence::AbsentAtSource,
+                "unknown-at-source" => Presence::UnknownAtSource,
+                "withheld" => Presence::Withheld,
+                "redacted" => Presence::Redacted,
+                "not-applicable" => Presence::NotApplicable,
+                _ => return Err(PyValueError::new_err("unsupported label presence fixture")),
+            };
+            vec![TrainingLabelPayloadAssociation {
+                concept: "org.quitetall.lamquant.label.seizure-mask-v1".to_owned(),
+                logical_id: key(7),
+                payload: (presence == Presence::Present).then(|| TrainingAssociatedPayload {
+                    byte_order: ByteOrder::NotApplicable,
+                    element: ElementType::U8,
+                    logical_bytes: mask.len() as u64,
+                    payload: ContentKey::new(payload_content_id(ElementType::U8, &mask)),
+                    shape: vec![mask.len() as u64],
+                }),
+                presence,
+            }]
+        }
     };
     let descriptors = TrainingSemanticRole::ALL
         .into_iter()
@@ -2869,22 +3074,24 @@ pub(crate) fn training_v4_fixture_bytes<'py>(py: Python<'py>) -> PyResult<Bound<
         window: ids[&TrainingSemanticRole::Window],
         allowed_adaptive_knobs: Vec::new(),
     };
-    let program = TrainingProgram::seal(&spec, descriptors, sampler).map_err(training_error)?;
+    let program = TrainingProgram::seal(&spec, descriptors, sampler, vec![key(200)])
+        .map_err(training_error)?;
     let decision_log = DecisionLog::seal(&spec, Vec::new()).map_err(training_error)?;
-    let snapshot = TrainingSnapshot::seal_with_program(
+    let snapshot = TrainingSnapshot::seal_with_program_and_label_payloads(
         vec![key(1)],
         spec,
         program,
         TrainingProfile::Balanced,
         vec![row],
+        label_payloads,
         decision_log,
     )
     .map_err(training_error)?;
-    let encoded = encode_snapshot(
-        &snapshot,
-        &[SemanticPayloadFrame::new(ElementType::I16, &payload)],
-        ResourceBounds::default(),
-    )
-    .map_err(training_error)?;
+    let mut frames = vec![SemanticPayloadFrame::new(ElementType::I16, &payload)];
+    if label_presence == Some("present") {
+        frames.push(SemanticPayloadFrame::new(ElementType::U8, &mask));
+    }
+    let encoded =
+        encode_snapshot(&snapshot, &frames, ResourceBounds::default()).map_err(training_error)?;
     Ok(PyBytes::new_bound(py, &encoded))
 }

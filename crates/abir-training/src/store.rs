@@ -494,6 +494,7 @@ impl<'a> TrainingWindowStore<'a> {
     pub fn compile_epoch(
         &self,
         epoch: u64,
+        stochastic_node_id: ContentKey,
         rank: u32,
         world_size: u32,
     ) -> Result<CompiledTrainingEpoch, TrainingError> {
@@ -510,8 +511,8 @@ impl<'a> TrainingWindowStore<'a> {
             self.snapshot.rows(),
             self.snapshot.decision_log_id(),
             epoch,
-            rank,
-            world_size,
+            stochastic_node_id,
+            crate::EpochShard::new(rank, world_size),
         )
     }
 
@@ -644,6 +645,7 @@ impl TrainingWindowFileIndex {
     pub fn compile_epoch(
         &self,
         epoch: u64,
+        stochastic_node_id: ContentKey,
         rank: u32,
         world_size: u32,
     ) -> Result<CompiledTrainingEpoch, TrainingError> {
@@ -660,8 +662,8 @@ impl TrainingWindowFileIndex {
             self.snapshot.rows(),
             self.snapshot.decision_log_id(),
             epoch,
-            rank,
-            world_size,
+            stochastic_node_id,
+            crate::EpochShard::new(rank, world_size),
         )
     }
 

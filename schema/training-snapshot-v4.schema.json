@@ -389,7 +389,7 @@
     "trainingProgram": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["descriptors", "execution_decisions", "schema", "sealed", "sampler"],
+      "required": ["descriptors", "execution_decisions", "schema", "sealed", "sampler", "stochastic_nodes"],
       "properties": {
         "descriptors": {
           "type": "array",
@@ -462,7 +462,13 @@
         },
         "schema": { "const": "org.quitetall.abir.training.program-v1" },
         "sealed": { "const": true },
-        "sampler": { "$ref": "#/$defs/sampler" }
+        "sampler": { "$ref": "#/$defs/sampler" },
+        "stochastic_nodes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/contentId" }
+        }
       }
     },
     "associatedPayload": {

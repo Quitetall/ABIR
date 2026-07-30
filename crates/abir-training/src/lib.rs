@@ -35,8 +35,9 @@ pub use model::{
     TrainingSnapshot, TrainingSpec,
 };
 pub use program::{
-    CompiledTrainingEpoch, CompiledTrainingRow, SamplerStrategy, SamplerStratum, SamplerStratumKey,
-    TrainingProgram, TrainingSampler, TrainingSemanticDescriptor, TrainingSemanticRole,
+    CompiledEpochExecution, CompiledTrainingEpoch, CompiledTrainingRow, EpochShard,
+    SamplerStrategy, SamplerStratum, SamplerStratumKey, TrainingProgram, TrainingSampler,
+    TrainingSemanticDescriptor, TrainingSemanticRole,
 };
 pub use store::{
     DecisionLogReplayState, TrainingFileLabelPayload, TrainingFileRow, TrainingLabelPayloadLease,

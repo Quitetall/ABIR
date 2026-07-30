@@ -6,11 +6,11 @@
   "artifacts": [
     {
       "path": "spec/TRAINING_WINDOW_STORE_V4.md",
-      "sha256": "cf34611fd9434e8939d1bbcce370245f41ab695db4186bd37b95e4dc9148ba0b"
+      "sha256": "a4075093caf66734f9253f3c7ce7d2a6abb60e8c3c7cc12bfb3901eab7e3bad5"
     },
     {
       "path": "schema/training-snapshot-v4.schema.json",
-      "sha256": "9ac6caeb0c2fb26a81045278f17b1c6ad197c4122000bd083bd19221973f92b8"
+      "sha256": "48a8604c129ed08437d7b8b74d88dca172caeda17ee135cfdeab4666994b5763"
     },
     {
       "path": "registries/training-content-domains-v1.json",
@@ -22,11 +22,11 @@
     },
     {
       "path": "fixtures/training/v4/valid-snapshot.json",
-      "sha256": "ac5e7f854dd9a422fe169d44b1b315c73a82ff109806334c3a04b723790b3840"
+      "sha256": "d1318decbf8a24bbf8b7ab21f23ff75bc463c077da78c050d42fd3ce42d77f71"
     },
     {
       "path": "fixtures/training/v4/valid-snapshot.content-id",
-      "sha256": "5c0697879c2164ce84045df9acbaa2ba2f29c7ca2c99d03ac8923e687dd7c2db"
+      "sha256": "4e3a00e1443d4c903c47a2fdcade385492a45fa145dbff50eb8bcdc2473bdd0a"
     },
     {
       "path": "fixtures/training/v4/invalid-vectors.json",
@@ -34,7 +34,7 @@
     },
     {
       "path": "crates/abir-training/examples/generate_training_v4_fixture.rs",
-      "sha256": "24bda3379ae185b53953e90bf07c78054cfdff0e58a9bc0176da21305f71c4c9"
+      "sha256": "a5375d5f9d88b6cafa53a22ad65211dd8e060f1404d144c9e78038e563ba36cd"
     }
   ]
 }

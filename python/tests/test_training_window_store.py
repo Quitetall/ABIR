@@ -370,6 +370,18 @@ def test_typed_label_payload_preserves_present_and_unknown_semantics():
         unknown.row_label_payload_numpy(unknown_row_id, concept)
 
 
+def test_replay_ready_fixture_preserves_typed_label_payload():
+    concept = "org.quitetall.lamquant.label.seizure-mask-v1"
+    store = abir.TrainingWindowStore.open_bytes(
+        abir._training_v4_fixture_bytes(label_presence="present")
+    )
+    row_id = store.row_ids[0]
+
+    assert store.decision_log_replay_state == "replay-ready"
+    assert store.row_label_payload_info(row_id, concept)["presence"] == "present"
+    assert store.row_label_payload_numpy(row_id, concept).tolist() == [0, 1]
+
+
 def test_public_training_sealer_round_trips_typed_labels_deterministically():
     concept = "org.quitetall.lamquant.label.seizure-mask-v1"
     row_ids = ["7" * 64, "8" * 64]
@@ -1183,7 +1195,7 @@ def _replay_ready_program_inputs(sampler=None):
         "window": ids["window"],
         "allowed_adaptive_knobs": [],
     }
-    return spec, descriptors, sampler
+    return spec, descriptors, sampler, ["ca" * 32, "cb" * 32]
 
 
 def test_training_v4_schema_and_manifest_bind_replay_authority():
@@ -1222,7 +1234,7 @@ def test_training_v4_schema_and_manifest_bind_replay_authority():
 
 
 def test_snapshot_v4_compiles_replay_ready_epoch_and_native_batch():
-    spec, descriptors, sampler = _replay_ready_program_inputs()
+    spec, descriptors, sampler, stochastic_nodes = _replay_ready_program_inputs()
     rows = [
         {
             "logical_id": f"{0x70 + index:02x}" * 32,
@@ -1244,6 +1256,7 @@ def test_snapshot_v4_compiles_replay_ready_epoch_and_native_batch():
         spec=spec,
         semantic_descriptors=descriptors,
         sampler=sampler,
+        stochastic_nodes=stochastic_nodes,
         decision_records=[],
     )
     store = abir.TrainingWindowStore.open_bytes(sealed["artifact"])
@@ -1251,9 +1264,15 @@ def test_snapshot_v4_compiles_replay_ready_epoch_and_native_batch():
     assert sealed["decision_log_replay_state"] == "replay-ready"
     assert store.decision_log_replay_state == "replay-ready"
     assert store.training_program_id == sealed["training_program_id"]
-    single = dict(store.compile_epoch(3))
-    rank_zero = dict(store.compile_epoch(3, rank=0, world_size=2))
-    rank_one = dict(store.compile_epoch(3, rank=1, world_size=2))
+    assert list(store.stochastic_node_ids) == stochastic_nodes
+    assert sealed["stochastic_node_ids"] == stochastic_nodes
+    single = dict(store.compile_epoch(3, stochastic_nodes[0]))
+    rank_zero = dict(
+        store.compile_epoch(3, stochastic_nodes[0], rank=0, world_size=2)
+    )
+    rank_one = dict(
+        store.compile_epoch(3, stochastic_nodes[0], rank=1, world_size=2)
+    )
     assert single["global_schedule_id"] == rank_zero["global_schedule_id"]
     assert single["global_schedule_id"] == rank_one["global_schedule_id"]
     combined = sorted(
@@ -1261,7 +1280,17 @@ def test_snapshot_v4_compiles_replay_ready_epoch_and_native_batch():
         key=lambda row: row["global_index"],
     )
     assert combined == single["rows"]
-    assert dict(store.compile_epoch(3)) == single
+    assert dict(store.compile_epoch(3, stochastic_nodes[0])) == single
+    other_node = dict(store.compile_epoch(3, stochastic_nodes[1]))
+    assert other_node["global_schedule_id"] == single["global_schedule_id"]
+    assert [row["logical_id"] for row in other_node["rows"]] == [
+        row["logical_id"] for row in single["rows"]
+    ]
+    assert [row["stochastic_seed"] for row in other_node["rows"]] != [
+        row["stochastic_seed"] for row in single["rows"]
+    ]
+    with pytest.raises(ValueError, match="stochastic"):
+        store.compile_epoch(3, "cc" * 32)
 
     arrays = store.batch_numpy(
         [single["rows"][0]["logical_id"], single["rows"][1]["logical_id"]]
@@ -1274,7 +1303,7 @@ def test_snapshot_v4_compiles_replay_ready_epoch_and_native_batch():
 
 
 def test_snapshot_v4_replays_typed_execution_decision_at_explicit_barrier(tmp_path):
-    spec, descriptors, sampler = _replay_ready_program_inputs()
+    spec, descriptors, sampler, stochastic_nodes = _replay_ready_program_inputs()
     spec["allowed_adaptive_knobs"] = ["prefetch-depth"]
     decision = {
         "knob": "prefetch-depth",
@@ -1300,6 +1329,7 @@ def test_snapshot_v4_replays_typed_execution_decision_at_explicit_barrier(tmp_pa
         spec=spec,
         semantic_descriptors=descriptors,
         sampler=sampler,
+        stochastic_nodes=stochastic_nodes,
         execution_decisions=[decision],
         decision_records=[
             {
@@ -1317,13 +1347,30 @@ def test_snapshot_v4_replays_typed_execution_decision_at_explicit_barrier(tmp_pa
     store = abir.TrainingWindowStore.open_path(path)
 
     with pytest.raises(ValueError, match="activation_barrier"):
-        store.execute_training_plan()
-    before = dict(store.execute_training_plan(activation_barrier=3))
-    after = dict(store.execute_training_plan(activation_barrier=4))
+        store.execute_training_epoch(7, stochastic_nodes[0])
+    before = dict(
+        store.execute_training_epoch(
+            7, stochastic_nodes[0], activation_barrier=3
+        )
+    )
+    after = dict(
+        store.execute_training_epoch(
+            7, stochastic_nodes[0], activation_barrier=4
+        )
+    )
     assert before["applied_decision_count"] == 0
     assert after["applied_decision_count"] == 1
     assert before["plan_id"] != after["plan_id"]
     assert after["decision_log_id"] == sealed["decision_log_id"]
+    compiled = dict(store.compile_epoch(7, stochastic_nodes[0]))
+    assert after["epoch_id"] == compiled["epoch_id"]
+    assert after["global_schedule_id"] == compiled["global_schedule_id"]
+    assert after["row_ids_sha256"] == hashlib.sha256(
+        b"".join(
+            row["logical_id"].encode() + b"\0"
+            for row in compiled["rows"]
+        )
+    ).hexdigest()
 
 
 def test_training_semantic_roles_own_fixed_distinct_domains():
@@ -1346,7 +1393,7 @@ def test_training_semantic_roles_own_fixed_distinct_domains():
 
 
 def test_snapshot_v4_rejects_unresolved_descriptor_and_sampler_authority():
-    spec, descriptors, sampler = _replay_ready_program_inputs()
+    spec, descriptors, sampler, stochastic_nodes = _replay_ready_program_inputs()
     row = {
         "logical_id": "90" * 32,
         "group": "91" * 32,
@@ -1366,6 +1413,7 @@ def test_snapshot_v4_rejects_unresolved_descriptor_and_sampler_authority():
             spec=spec,
             semantic_descriptors=descriptors[:-1],
             sampler=sampler,
+            stochastic_nodes=stochastic_nodes,
             decision_records=[],
         )
 
@@ -1379,5 +1427,6 @@ def test_snapshot_v4_rejects_unresolved_descriptor_and_sampler_authority():
             spec=mismatched,
             semantic_descriptors=descriptors,
             sampler=sampler,
+            stochastic_nodes=stochastic_nodes,
             decision_records=[],
         )

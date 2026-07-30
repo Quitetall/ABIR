@@ -1,7 +1,7 @@
 use abir::{payload_content_id, ByteOrder, ContentId, ElementType};
 use abir_bcs::{ResourceBounds, SemanticPayloadFrame};
 use abir_training::{
-    encode_snapshot, ContentKey, DecisionLog, DecisionLogReplayState, DecisionRecord,
+    encode_snapshot, ContentKey, DecisionLog, DecisionLogReplayState, DecisionRecord, EpochShard,
     PrefetchPolicy, SamplerStrategy, SamplerStratum, SamplerStratumKey, TrainingExecutionDecision,
     TrainingProfile, TrainingProgram, TrainingRow, TrainingSampler, TrainingSemanticDescriptor,
     TrainingSemanticRole, TrainingSnapshot, TrainingSpec, TrainingWindowStore,
@@ -80,7 +80,8 @@ fn program_and_spec(
         window: ids[&TrainingSemanticRole::Window],
         allowed_adaptive_knobs: vec!["prefetch-depth".to_owned()],
     };
-    let program = TrainingProgram::seal(&spec, descriptors.clone(), sampler).unwrap();
+    let program =
+        TrainingProgram::seal(&spec, descriptors.clone(), sampler, vec![key(200)]).unwrap();
     (program, spec, descriptors)
 }
 
@@ -227,9 +228,9 @@ fn snapshot_v4_embeds_replayable_program_and_compiles_world_invariant_epoch() {
         store.decision_log_replay_state(),
         DecisionLogReplayState::ReplayReady
     );
-    let single = store.compile_epoch(3, 0, 1).unwrap();
-    let rank_zero = store.compile_epoch(3, 0, 2).unwrap();
-    let rank_one = store.compile_epoch(3, 1, 2).unwrap();
+    let single = store.compile_epoch(3, key(200), 0, 1).unwrap();
+    let rank_zero = store.compile_epoch(3, key(200), 0, 2).unwrap();
+    let rank_one = store.compile_epoch(3, key(200), 1, 2).unwrap();
     assert_eq!(single.global_schedule_id(), rank_zero.global_schedule_id());
     assert_eq!(single.global_schedule_id(), rank_one.global_schedule_id());
 
@@ -241,11 +242,57 @@ fn snapshot_v4_embeds_replayable_program_and_compiles_world_invariant_epoch() {
         .collect::<Vec<_>>();
     sharded.sort_by_key(|row| row.global_index);
     assert_eq!(single.rows(), sharded);
-    assert_eq!(single, store.compile_epoch(3, 0, 1).unwrap());
+    assert_eq!(single, store.compile_epoch(3, key(200), 0, 1).unwrap());
     assert_ne!(
         single.rows()[0].stochastic_seed,
-        store.compile_epoch(4, 0, 1).unwrap().rows()[0].stochastic_seed
+        store.compile_epoch(4, key(200), 0, 1).unwrap().rows()[0].stochastic_seed
     );
+}
+
+#[test]
+fn stochastic_seed_is_bound_to_declared_node_identity() {
+    let (base_program, spec, descriptors) = program_and_spec(SamplerStrategy::Sequential);
+    let sampler = base_program.sampler().clone();
+    let program =
+        TrainingProgram::seal(&spec, descriptors, sampler, vec![key(200), key(201)]).unwrap();
+    let rows = [row(10, 1).0, row(11, 1).0];
+    let first = program
+        .compile_epoch(&spec, &rows, key(90), 3, key(200), EpochShard::new(0, 1))
+        .unwrap();
+    let second = program
+        .compile_epoch(&spec, &rows, key(90), 3, key(201), EpochShard::new(0, 1))
+        .unwrap();
+
+    assert_eq!(first.global_schedule_id(), second.global_schedule_id());
+    assert_eq!(
+        first
+            .rows()
+            .iter()
+            .map(|row| row.logical_id)
+            .collect::<Vec<_>>(),
+        second
+            .rows()
+            .iter()
+            .map(|row| row.logical_id)
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(
+        first
+            .rows()
+            .iter()
+            .map(|row| row.stochastic_seed)
+            .collect::<Vec<_>>(),
+        second
+            .rows()
+            .iter()
+            .map(|row| row.stochastic_seed)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(first.stochastic_node_id(), key(200));
+    assert_eq!(second.stochastic_node_id(), key(201));
+    assert!(program
+        .compile_epoch(&spec, &rows, key(90), 3, key(202), EpochShard::new(0, 1),)
+        .is_err());
 }
 
 #[test]
@@ -270,6 +317,7 @@ fn snapshot_v4_replay_resolves_typed_execution_decisions_at_declared_barriers() 
         &spec,
         descriptors.clone(),
         sampler.clone(),
+        vec![key(200)],
         vec![decision],
     )
     .unwrap();
@@ -283,7 +331,7 @@ fn snapshot_v4_replay_resolves_typed_execution_decisions_at_declared_barriers() 
     assert_ne!(before.prefetch(), PrefetchPolicy::Rows { rows: 7 });
     assert_eq!(after.prefetch(), PrefetchPolicy::Rows { rows: 7 });
 
-    let unresolved = TrainingProgram::seal(&spec, descriptors, sampler).unwrap();
+    let unresolved = TrainingProgram::seal(&spec, descriptors, sampler, vec![key(200)]).unwrap();
     assert!(TrainingSnapshot::seal_with_program(
         vec![key(1)],
         spec,
@@ -296,14 +344,83 @@ fn snapshot_v4_replay_resolves_typed_execution_decisions_at_declared_barriers() 
 }
 
 #[test]
+fn epoch_execution_compiles_schedule_and_replayed_plan_from_one_log() {
+    let (_, spec, descriptors) = program_and_spec(SamplerStrategy::Sequential);
+    let sampler = TrainingSampler::seal(SamplerStrategy::Sequential).unwrap();
+    let decision = TrainingExecutionDecision::PrefetchDepth(PrefetchPolicy::Rows { rows: 7 });
+    let decision_id = ContentKey::from(decision.content_id().unwrap());
+    let log = DecisionLog::seal(
+        &spec,
+        vec![DecisionRecord {
+            activation_barrier: 4,
+            decision: decision_id,
+            durable_before_activation: true,
+            knob: "prefetch-depth".to_owned(),
+            rank: 0,
+            sequence: 0,
+        }],
+    )
+    .unwrap();
+    let program = TrainingProgram::seal_with_execution_decisions(
+        &spec,
+        descriptors,
+        sampler,
+        vec![key(200)],
+        vec![decision],
+    )
+    .unwrap();
+    let rows = [row(10, 1).0, row(11, 1).0];
+
+    let before = program
+        .compile_epoch_execution(
+            &spec,
+            &rows,
+            &log,
+            TrainingProfile::Balanced,
+            3,
+            7,
+            key(200),
+            0,
+            1,
+        )
+        .unwrap();
+    let after = program
+        .compile_epoch_execution(
+            &spec,
+            &rows,
+            &log,
+            TrainingProfile::Balanced,
+            4,
+            7,
+            key(200),
+            0,
+            1,
+        )
+        .unwrap();
+
+    assert_eq!(before.epoch(), after.epoch());
+    assert_eq!(before.applied_decision_count(), 0);
+    assert_eq!(after.applied_decision_count(), 1);
+    assert_ne!(
+        before.plan().content_id().unwrap(),
+        after.plan().content_id().unwrap()
+    );
+    assert_eq!(after.plan().prefetch(), PrefetchPolicy::Rows { rows: 7 });
+    assert_eq!(
+        after.epoch().decision_log_id(),
+        ContentKey::from(log.content_id().unwrap())
+    );
+}
+
+#[test]
 fn compiled_epoch_binds_decision_log_without_changing_scientific_order() {
     let (program, spec, _) = program_and_spec(SamplerStrategy::Shuffle);
     let rows = [row(10, 1).0, row(11, 1).0];
     let first = program
-        .compile_epoch(&spec, &rows, key(90), 3, 0, 1)
+        .compile_epoch(&spec, &rows, key(90), 3, key(200), EpochShard::new(0, 1))
         .unwrap();
     let second = program
-        .compile_epoch(&spec, &rows, key(91), 3, 0, 1)
+        .compile_epoch(&spec, &rows, key(91), 3, key(200), EpochShard::new(0, 1))
         .unwrap();
 
     assert_eq!(first.rows(), second.rows());
@@ -316,10 +433,22 @@ fn compiled_epoch_binds_decision_log_without_changing_scientific_order() {
 fn semantic_descriptor_mismatch_and_incomplete_closure_fail_closed() {
     let (program, mut spec, mut descriptors) = program_and_spec(SamplerStrategy::Sequential);
     spec.view = key(99);
-    assert!(TrainingProgram::seal(&spec, descriptors.clone(), program.sampler().clone()).is_err());
+    assert!(TrainingProgram::seal(
+        &spec,
+        descriptors.clone(),
+        program.sampler().clone(),
+        vec![key(200)],
+    )
+    .is_err());
 
     descriptors.pop();
-    assert!(TrainingProgram::seal(&spec, descriptors, program.sampler().clone()).is_err());
+    assert!(TrainingProgram::seal(
+        &spec,
+        descriptors,
+        program.sampler().clone(),
+        vec![key(200)],
+    )
+    .is_err());
 }
 
 #[test]
@@ -340,7 +469,7 @@ fn stratified_sampler_replays_exact_declared_draws_with_replacement() {
     let (program, spec, _) = program_and_spec(strategy);
     let rows = vec![row(10, 1).0, row(11, 2).0, row(12, 2).0];
     let compiled = program
-        .compile_epoch(&spec, &rows, key(90), 7, 0, 1)
+        .compile_epoch(&spec, &rows, key(90), 7, key(200), EpochShard::new(0, 1))
         .unwrap();
     let rare = compiled
         .rows()
@@ -352,7 +481,7 @@ fn stratified_sampler_replays_exact_declared_draws_with_replacement() {
     assert_eq!(
         compiled,
         program
-            .compile_epoch(&spec, &rows, key(90), 7, 0, 1)
+            .compile_epoch(&spec, &rows, key(90), 7, key(200), EpochShard::new(0, 1),)
             .unwrap()
     );
 }
@@ -362,7 +491,7 @@ fn distributed_epoch_refuses_implicit_example_drops() {
     let (program, spec, _) = program_and_spec(SamplerStrategy::Sequential);
     let rows = vec![row(10, 1).0, row(11, 1).0, row(12, 1).0];
     let error = program
-        .compile_epoch(&spec, &rows, key(90), 0, 0, 2)
+        .compile_epoch(&spec, &rows, key(90), 0, key(200), EpochShard::new(0, 2))
         .unwrap_err();
     assert!(matches!(
         error,

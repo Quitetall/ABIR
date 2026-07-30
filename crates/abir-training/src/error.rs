@@ -79,6 +79,7 @@ pub enum TrainingError {
         rows: usize,
         world_size: u32,
     },
+    UndeclaredStochasticNode(ContentId),
     UnknownCorrection(ContentId),
     UnknownLabelRow(ContentId),
 }
@@ -212,6 +213,9 @@ impl fmt::Display for TrainingError {
                 f,
                 "global training epoch with {rows} rows cannot be divided across {world_size} ranks without changing selected examples"
             ),
+            Self::UndeclaredStochasticNode(id) => {
+                write!(f, "undeclared stochastic training node {id}")
+            }
             Self::UnknownCorrection(id) => write!(f, "correction has no prior generation for {id}"),
             Self::UnknownLabelRow(id) => {
                 write!(f, "label payload association references unknown row {id}")
