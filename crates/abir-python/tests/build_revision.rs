@@ -25,11 +25,17 @@ fn accepts_exact_lowercase_git_revision() {
 }
 
 #[test]
-fn accepts_explicit_revision_override_without_git_authority() {
+fn development_build_uses_unmistakable_non_revision_identity() {
     assert_eq!(
-        build_script::implementation_revision_from_override(TEST_REVISION).unwrap(),
-        TEST_REVISION
+        build_script::implementation_revision_from_development_build("1").unwrap(),
+        build_script::DEVELOPMENT_REVISION
     );
+    for value in ["", "0", "true", TEST_REVISION] {
+        assert!(
+            build_script::implementation_revision_from_development_build(value).is_err(),
+            "accepted malformed development opt-in {value:?}"
+        );
+    }
 }
 
 #[test]
@@ -139,6 +145,13 @@ fn clean_git_fallback_resolves_head_and_rejects_dirty_checkout() {
     assert_eq!(
         build_script::implementation_revision_from_git_at(&manifest_dir).unwrap(),
         expected
+    );
+
+    fs::write(repository.join(".cargo-ok"), []).unwrap();
+    assert_eq!(
+        build_script::implementation_revision_from_git_at(&manifest_dir).unwrap(),
+        expected,
+        "Cargo Git checkout sentinel must not make immutable source dirty"
     );
 
     fs::write(

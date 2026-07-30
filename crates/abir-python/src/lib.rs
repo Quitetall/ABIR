@@ -388,9 +388,8 @@ fn version() -> &'static str {
 
 /// Return the exact Git revision from which this Python extension was built.
 ///
-/// Local Git authority requires a clean ABIR worktree. Controlled development
-/// and source-archive builds must declare `ABIR_IMPLEMENTATION_REVISION`
-/// explicitly.
+/// Production builds require a clean ABIR Git worktree. Explicit development
+/// builds return forty zeroes, which cannot impersonate a reviewed revision.
 #[pyfunction]
 fn implementation_revision() -> &'static str {
     IMPLEMENTATION_REVISION
@@ -443,11 +442,10 @@ mod tests {
 
     #[test]
     fn embedded_implementation_revision_matches_build_authority() {
-        if let Some(revision_override) = option_env!("ABIR_IMPLEMENTATION_REVISION") {
-            assert_eq!(IMPLEMENTATION_REVISION, revision_override);
+        if IMPLEMENTATION_REVISION == "0000000000000000000000000000000000000000" {
+            assert_eq!(option_env!("ABIR_DEVELOPMENT_BUILD"), Some("1"));
             return;
         }
-
         let output = Command::new("git")
             .arg("-C")
             .arg(env!("CARGO_MANIFEST_DIR"))

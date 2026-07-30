@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
 
 import abir
 import jsonschema
@@ -14,6 +16,16 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_python_reports_embedded_implementation_revision():
     revision = abir.implementation_revision()
     assert re.fullmatch(r"[0-9a-f]{40}", revision)
+    if os.environ.get("ABIR_DEVELOPMENT_BUILD") == "1":
+        assert revision == "0" * 40
+        return
+    expected = subprocess.run(
+        ["git", "-C", ROOT, "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert revision == expected
 
 
 def test_python_matches_rust_canonical_goldens():

@@ -2,10 +2,11 @@ use std::env::{self, VarError};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const REVISION_ENV: &str = "ABIR_IMPLEMENTATION_REVISION";
+const DEVELOPMENT_BUILD_ENV: &str = "ABIR_DEVELOPMENT_BUILD";
+pub(crate) const DEVELOPMENT_REVISION: &str = "0000000000000000000000000000000000000000";
 
 fn main() {
-    println!("cargo:rerun-if-env-changed={REVISION_ENV}");
+    println!("cargo:rerun-if-env-changed={DEVELOPMENT_BUILD_ENV}");
 
     let revision = implementation_revision()
         .unwrap_or_else(|error| panic!("cannot establish ABIR implementation revision: {error}"));
@@ -13,17 +14,24 @@ fn main() {
 }
 
 fn implementation_revision() -> Result<String, String> {
-    match env::var(REVISION_ENV) {
-        Ok(revision) => implementation_revision_from_override(&revision),
-        Err(VarError::NotUnicode(_)) => Err(format!("{REVISION_ENV} must be valid UTF-8")),
+    match env::var(DEVELOPMENT_BUILD_ENV) {
+        Ok(value) => implementation_revision_from_development_build(&value),
+        Err(VarError::NotUnicode(_)) => Err(format!("{DEVELOPMENT_BUILD_ENV} must be valid UTF-8")),
         Err(VarError::NotPresent) => implementation_revision_from_git(),
     }
 }
 
-pub(crate) fn implementation_revision_from_override(revision: &str) -> Result<String, String> {
-    validate_revision(revision)
-        .map(|()| revision.to_owned())
-        .map_err(|error| format!("{REVISION_ENV} {error}"))
+pub(crate) fn implementation_revision_from_development_build(
+    value: &str,
+) -> Result<String, String> {
+    if value == "1" {
+        Ok(DEVELOPMENT_REVISION.to_owned())
+    } else {
+        Err(format!(
+            "{DEVELOPMENT_BUILD_ENV} must equal 1 when explicitly opting into an unreviewable \
+             development build"
+        ))
+    }
 }
 
 fn implementation_revision_from_git() -> Result<String, String> {
@@ -49,12 +57,13 @@ pub(crate) fn implementation_revision_from_git_at(manifest_dir: &Path) -> Result
 }
 
 pub(crate) fn validate_clean_repository(repository: &Path) -> Result<(), String> {
+    let repository_root = git_repository_root(repository)?;
     let output = git(
-        repository,
+        &repository_root,
         &[
             "status",
             "--porcelain=v1",
-            "--untracked-files=all",
+            "--untracked-files=no",
             "--ignore-submodules=none",
         ],
     )?;
@@ -64,16 +73,51 @@ pub(crate) fn validate_clean_repository(repository: &Path) -> Result<(), String>
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    if output.stdout.is_empty() {
-        return Ok(());
+    if !output.stdout.is_empty() {
+        let status = String::from_utf8_lossy(&output.stdout);
+        let first_change = status.lines().next().unwrap_or("<unparseable change>");
+        return Err(dirty_checkout_error(first_change));
     }
 
-    let status = String::from_utf8_lossy(&output.stdout);
-    let first_change = status.lines().next().unwrap_or("<unparseable change>");
-    Err(format!(
+    let output = git(
+        &repository_root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?;
+    if !output.status.success() {
+        return Err(format!(
+            "`git ls-files --others --exclude-standard -z` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    for path in output.stdout.split(|byte| *byte == 0) {
+        if path.is_empty() || path == b".cargo-ok" {
+            continue;
+        }
+        let path = String::from_utf8_lossy(path);
+        return Err(dirty_checkout_error(&format!("?? {path}")));
+    }
+    Ok(())
+}
+
+fn git_repository_root(repository: &Path) -> Result<PathBuf, String> {
+    let output = git(repository, &["rev-parse", "--show-toplevel"])?;
+    if !output.status.success() {
+        return Err(format!(
+            "`git rev-parse --show-toplevel` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(PathBuf::from(parse_single_line(
+        &output.stdout,
+        "`git rev-parse --show-toplevel`",
+    )?))
+}
+
+fn dirty_checkout_error(first_change: &str) -> String {
+    format!(
         "ABIR source checkout is dirty (first change: {first_change}); commit exact sources or \
-         set {REVISION_ENV} explicitly for controlled development or source-archive builds"
-    ))
+         set {DEVELOPMENT_BUILD_ENV}=1 to produce an all-zero, non-production development identity"
+    )
 }
 
 pub(crate) fn validate_repository_authority(manifest_dir: &Path) -> Result<(), String> {
@@ -110,8 +154,8 @@ pub(crate) fn validate_repository_authority(manifest_dir: &Path) -> Result<(), S
     )?;
     if !output.status.success() {
         return Err(
-            "Git HEAD does not contain crates/abir-python/Cargo.toml; set \
-             ABIR_IMPLEMENTATION_REVISION for source-archive builds"
+            "Git HEAD does not contain crates/abir-python/Cargo.toml; source archives cannot claim \
+             an implementation revision without an authenticated provenance mechanism"
                 .to_owned(),
         );
     }

@@ -29,9 +29,11 @@ Normative material is split across `spec/`, `schema/`, `registries/`, and
 - `cargo check -p abir --no-default-features`
 
 `abir-biosignal` embeds its exact 40-character implementation revision. Clean
-Git checkouts derive it from `HEAD`; dirty checkouts fail closed. Audited
-source-archive builders must set `ABIR_IMPLEMENTATION_REVISION` to the source
-commit recorded by their release provenance.
+Git checkouts derive it from `HEAD`; dirty checkouts fail closed. Cargo Git
+checkouts may contain Cargo's root `.cargo-ok` sentinel, which is not source.
+`ABIR_DEVELOPMENT_BUILD=1` permits local dirty-tree builds but embeds forty
+zeroes, never a claim to a reviewed revision. Source archives cannot claim an
+implementation revision until an authenticated provenance mechanism exists.
 
 ## Contributing
 
