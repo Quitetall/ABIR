@@ -3,10 +3,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const DEVELOPMENT_BUILD_ENV: &str = "ABIR_DEVELOPMENT_BUILD";
+const ALWAYS_RECHECK_PATH: &str = ".abir-revision-always-recheck";
 pub(crate) const DEVELOPMENT_REVISION: &str = "0000000000000000000000000000000000000000";
 
 fn main() {
     println!("cargo:rerun-if-env-changed={DEVELOPMENT_BUILD_ENV}");
+    // This path must remain absent. Cargo re-runs a build script whenever a
+    // declared input is missing, so every invocation revalidates Git status
+    // instead of reusing a clean result after an untracked path appears.
+    println!("cargo:rerun-if-changed={ALWAYS_RECHECK_PATH}");
 
     let revision = implementation_revision()
         .unwrap_or_else(|error| panic!("cannot establish ABIR implementation revision: {error}"));

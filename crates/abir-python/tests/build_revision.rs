@@ -168,6 +168,98 @@ fn clean_git_fallback_resolves_head_and_rejects_dirty_checkout() {
     assert!(error.contains("checkout is dirty"), "{error}");
 }
 
+#[test]
+fn warmed_cargo_build_rechecks_new_untracked_paths() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("ABIR");
+    let manifest_dir = repository.join("crates/abir-python");
+    fs::create_dir_all(manifest_dir.join("src")).unwrap();
+    fs::write(
+        repository.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/abir-python\"]\n",
+    )
+    .unwrap();
+    fs::write(repository.join(".gitignore"), "/target\n").unwrap();
+    fs::write(
+        manifest_dir.join("Cargo.toml"),
+        "[package]\nname = \"abir-revision-fixture\"\nversion = \"0.0.0\"\n\
+         edition = \"2021\"\nbuild = \"build.rs\"\n",
+    )
+    .unwrap();
+    fs::write(manifest_dir.join("build.rs"), include_str!("../build.rs")).unwrap();
+    fs::write(
+        manifest_dir.join("src/lib.rs"),
+        "pub const REVISION: &str = env!(\"ABIR_EMBEDDED_IMPLEMENTATION_REVISION\");\n",
+    )
+    .unwrap();
+    let lock_status = Command::new(
+        std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo")),
+    )
+    .arg("generate-lockfile")
+    .arg("--manifest-path")
+    .arg(manifest_dir.join("Cargo.toml"))
+    .status()
+    .unwrap();
+    assert!(lock_status.success(), "fixture lockfile generation failed");
+    run_git(&repository, &["init", "--quiet"]);
+    run_git(&repository, &["add", "."]);
+    run_git(
+        &repository,
+        &[
+            "-c",
+            "user.name=ABIR Test",
+            "-c",
+            "user.email=abir-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ],
+    );
+
+    assert!(
+        run_cargo_build(&manifest_dir).success(),
+        "initial clean Cargo build must pass"
+    );
+    assert!(
+        run_cargo_build(&manifest_dir).success(),
+        "warmed clean Cargo build must pass"
+    );
+
+    fs::write(repository.join("unexpected-source"), "untracked\n").unwrap();
+    let output = cargo_build_output(&manifest_dir);
+    assert!(
+        !output.status.success(),
+        "dirty warmed build unexpectedly passed"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("checkout is dirty"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_cargo_build(manifest_dir: &Path) -> std::process::ExitStatus {
+    cargo_build_command(manifest_dir).status().unwrap()
+}
+
+fn cargo_build_output(manifest_dir: &Path) -> std::process::Output {
+    cargo_build_command(manifest_dir).output().unwrap()
+}
+
+fn cargo_build_command(manifest_dir: &Path) -> Command {
+    let mut command = Command::new(
+        std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo")),
+    );
+    command
+        .arg("build")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(manifest_dir.join("Cargo.toml"))
+        .env_remove("ABIR_DEVELOPMENT_BUILD");
+    command
+}
+
 fn run_git(repository: &Path, arguments: &[&str]) {
     let status = Command::new("git")
         .arg("-C")

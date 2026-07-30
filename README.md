@@ -34,6 +34,8 @@ checkouts may contain Cargo's root `.cargo-ok` sentinel, which is not source.
 `ABIR_DEVELOPMENT_BUILD=1` permits local dirty-tree builds but embeds forty
 zeroes, never a claim to a reviewed revision. Source archives cannot claim an
 implementation revision until an authenticated provenance mechanism exists.
+The Python build script deliberately watches one absent sentinel, forcing Git
+status revalidation even when Cargo would otherwise reuse an incremental build.
 
 ## Contributing
 
