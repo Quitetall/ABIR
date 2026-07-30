@@ -102,12 +102,15 @@ pub(crate) struct PyTrainingWindowStore {
     artifact: ArtifactOwner,
     dataset_roots: Vec<String>,
     decision_log_id: String,
+    fitted_state_id: Option<String>,
+    preprocessing_graph_id: Option<String>,
     profile: &'static str,
     rows: Vec<RowLocation>,
     label_payloads: Vec<Vec<LabelPayloadLocation>>,
     physical_artifact_sha256: String,
     snapshot_id: String,
     spec_id: String,
+    view_id: Option<String>,
 }
 
 #[pymethods]
@@ -122,12 +125,15 @@ impl PyTrainingWindowStore {
             artifact: ArtifactOwner::Bytes(artifact),
             dataset_roots: metadata.dataset_roots,
             decision_log_id: metadata.decision_log_id,
+            fitted_state_id: metadata.fitted_state_id,
+            preprocessing_graph_id: metadata.preprocessing_graph_id,
             profile: metadata.profile,
             rows: metadata.rows,
             label_payloads: metadata.label_payloads,
             physical_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
+            view_id: metadata.view_id,
         })
     }
 
@@ -179,12 +185,15 @@ impl PyTrainingWindowStore {
             },
             dataset_roots: metadata.dataset_roots,
             decision_log_id: metadata.decision_log_id,
+            fitted_state_id: metadata.fitted_state_id,
+            preprocessing_graph_id: metadata.preprocessing_graph_id,
             profile: metadata.profile,
             rows: metadata.rows,
             label_payloads: metadata.label_payloads,
             physical_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
+            view_id: metadata.view_id,
         })
     }
 
@@ -242,12 +251,15 @@ impl PyTrainingWindowStore {
             },
             dataset_roots: metadata.dataset_roots,
             decision_log_id: metadata.decision_log_id,
+            fitted_state_id: metadata.fitted_state_id,
+            preprocessing_graph_id: metadata.preprocessing_graph_id,
             profile: metadata.profile,
             rows: metadata.rows,
             label_payloads: metadata.label_payloads,
             physical_artifact_sha256: actual_artifact_sha256,
             snapshot_id: metadata.snapshot_id,
             spec_id: metadata.spec_id,
+            view_id: metadata.view_id,
         })
     }
 
@@ -259,6 +271,21 @@ impl PyTrainingWindowStore {
     #[getter]
     fn spec_id(&self) -> &str {
         &self.spec_id
+    }
+
+    #[getter]
+    fn preprocessing_graph_id(&self) -> Option<&str> {
+        self.preprocessing_graph_id.as_deref()
+    }
+
+    #[getter]
+    fn fitted_state_id(&self) -> Option<&str> {
+        self.fitted_state_id.as_deref()
+    }
+
+    #[getter]
+    fn view_id(&self) -> Option<&str> {
+        self.view_id.as_deref()
     }
 
     #[getter]
@@ -900,11 +927,14 @@ fn hash_artifact(file: &mut File, expected_bytes: u64) -> PyResult<String> {
 struct SnapshotMetadata {
     dataset_roots: Vec<String>,
     decision_log_id: String,
+    fitted_state_id: Option<String>,
+    preprocessing_graph_id: Option<String>,
     profile: &'static str,
     rows: Vec<RowLocation>,
     label_payloads: Vec<Vec<LabelPayloadLocation>>,
     snapshot_id: String,
     spec_id: String,
+    view_id: Option<String>,
 }
 
 fn inspect_file_index(index: &TrainingWindowFileIndex) -> PyResult<SnapshotMetadata> {
@@ -991,6 +1021,7 @@ fn inspect_file_index(index: &TrainingWindowFileIndex) -> PyResult<SnapshotMetad
         })
         .collect::<PyResult<Vec<_>>>()?;
     let snapshot_id = index.snapshot_id().map_err(training_error)?.to_string();
+    let embedded_spec = index.snapshot().spec();
     Ok(SnapshotMetadata {
         dataset_roots: index
             .dataset_roots()
@@ -998,11 +1029,14 @@ fn inspect_file_index(index: &TrainingWindowFileIndex) -> PyResult<SnapshotMetad
             .map(ToString::to_string)
             .collect(),
         decision_log_id: index.decision_log_id().to_string(),
+        fitted_state_id: embedded_spec.map(|spec| spec.fitted_state.to_string()),
+        preprocessing_graph_id: embedded_spec.map(|spec| spec.preprocessing.to_string()),
         profile: profile_name(index.snapshot().profile()),
         rows,
         label_payloads,
         snapshot_id,
         spec_id: index.spec_id().to_string(),
+        view_id: embedded_spec.map(|spec| spec.view.to_string()),
     })
 }
 
@@ -1162,6 +1196,7 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
         .content_id()
         .map_err(training_error)?
         .to_string();
+    let embedded_spec = store.snapshot().spec();
     Ok(SnapshotMetadata {
         dataset_roots: store
             .dataset_roots()
@@ -1169,11 +1204,14 @@ fn inspect_artifact(artifact: &[u8]) -> PyResult<SnapshotMetadata> {
             .map(ToString::to_string)
             .collect(),
         decision_log_id: store.decision_log_id().to_string(),
+        fitted_state_id: embedded_spec.map(|spec| spec.fitted_state.to_string()),
+        preprocessing_graph_id: embedded_spec.map(|spec| spec.preprocessing.to_string()),
         profile: profile_name(store.snapshot().profile()),
         rows,
         label_payloads,
         snapshot_id,
         spec_id: store.spec_id().to_string(),
+        view_id: embedded_spec.map(|spec| spec.view.to_string()),
     })
 }
 
@@ -1912,15 +1950,17 @@ pub(crate) fn seal_training_continual_promotion<'py>(
 /// ABIR exclusively owns payload identities, canonical catalog identity, and
 /// physical frame closure.
 #[pyfunction]
-#[pyo3(signature = (*, dataset_roots, spec_id, profile, rows, label_payloads, decision_log_id))]
+#[pyo3(signature = (*, dataset_roots, profile, rows, label_payloads, decision_log_id, spec_id=None, spec=None))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_training_snapshot<'py>(
     py: Python<'py>,
     dataset_roots: &Bound<'py, PyList>,
-    spec_id: &str,
     profile: &str,
     rows: &Bound<'py, PyList>,
     label_payloads: &Bound<'py, PyList>,
     decision_log_id: &str,
+    spec_id: Option<&str>,
+    spec: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let bounds = ResourceBounds::default();
     if dataset_roots.len() > bounds.max_index_entries as usize {
@@ -1971,17 +2011,46 @@ pub(crate) fn seal_training_snapshot<'py>(
         ));
     }
 
-    let snapshot = TrainingSnapshot::seal_with_label_payloads(
-        dataset_roots,
-        ContentKey::new(super::parse_content_id(spec_id)?),
-        parse_profile(profile)?,
-        bound_rows.iter().map(|row| row.metadata.clone()).collect(),
-        bound_labels
-            .iter()
-            .map(|association| association.metadata.clone())
-            .collect(),
-        ContentKey::new(super::parse_content_id(decision_log_id)?),
-    )
+    let declared_spec_id = spec_id
+        .map(super::parse_content_id)
+        .transpose()?
+        .map(ContentKey::new);
+    let rows = bound_rows.iter().map(|row| row.metadata.clone()).collect();
+    let labels = bound_labels
+        .iter()
+        .map(|association| association.metadata.clone())
+        .collect();
+    let snapshot = if let Some(spec) = spec {
+        let spec = parse_training_spec(spec)?;
+        let embedded_spec_id = ContentKey::from(spec.content_id().map_err(training_error)?);
+        if declared_spec_id.is_some_and(|declared| declared != embedded_spec_id) {
+            return Err(PyValueError::new_err(
+                "training spec_id does not match embedded TrainingSpec",
+            ));
+        }
+        TrainingSnapshot::seal_with_spec_and_label_payloads(
+            dataset_roots,
+            spec,
+            parse_profile(profile)?,
+            rows,
+            labels,
+            ContentKey::new(super::parse_content_id(decision_log_id)?),
+        )
+    } else {
+        let declared_spec_id = declared_spec_id.ok_or_else(|| {
+            PyValueError::new_err(
+                "legacy training snapshot sealing requires spec_id or embedded spec",
+            )
+        })?;
+        TrainingSnapshot::seal_with_label_payloads(
+            dataset_roots,
+            declared_spec_id,
+            parse_profile(profile)?,
+            rows,
+            labels,
+            ContentKey::new(super::parse_content_id(decision_log_id)?),
+        )
+    }
     .map_err(training_error)?;
 
     let mut payloads = BTreeMap::<ContentId, (ElementType, &[u8])>::new();
@@ -2011,6 +2080,12 @@ pub(crate) fn seal_training_snapshot<'py>(
         "snapshot_id",
         snapshot.content_id().map_err(training_error)?.to_string(),
     )?;
+    result.set_item("spec_id", snapshot.spec_id().to_string())?;
+    if let Some(spec) = snapshot.spec() {
+        result.set_item("preprocessing_graph_id", spec.preprocessing.to_string())?;
+        result.set_item("fitted_state_id", spec.fitted_state.to_string())?;
+        result.set_item("view_id", spec.view.to_string())?;
+    }
     result.set_item("artifact", PyBytes::new_bound(py, &artifact))?;
     Ok(result)
 }

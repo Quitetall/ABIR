@@ -8,8 +8,10 @@ use std::fmt;
 const SPEC_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.spec-v1\0";
 const SNAPSHOT_V1_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.snapshot-v1\0";
 const SNAPSHOT_V2_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.snapshot-v2\0";
+const SNAPSHOT_V3_HASH_DOMAIN: &[u8] = b"org.quitetall.abir.training.snapshot-v3\0";
 const SNAPSHOT_V1_SCHEMA: &str = "org.quitetall.abir.training.snapshot-v1";
 const SNAPSHOT_V2_SCHEMA: &str = "org.quitetall.abir.training.snapshot-v2";
+const SNAPSHOT_V3_SCHEMA: &str = "org.quitetall.abir.training.snapshot-v3";
 
 /// A serde-compatible lowercase hexadecimal wrapper around an ABIR ContentId.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -356,6 +358,8 @@ pub struct TrainingSnapshot {
     rows: Vec<TrainingRow>,
     schema: String,
     sealed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec: Option<TrainingSpec>,
     spec_id: ContentKey,
 }
 
@@ -378,8 +382,72 @@ impl TrainingSnapshot {
     }
 
     pub fn seal_with_label_payloads(
+        dataset_roots: Vec<ContentKey>,
+        spec_id: ContentKey,
+        profile: TrainingProfile,
+        rows: Vec<TrainingRow>,
+        label_payloads: Vec<TrainingLabelPayloadAssociation>,
+        decision_log_id: ContentKey,
+    ) -> Result<Self, TrainingError> {
+        Self::seal_inner(
+            dataset_roots,
+            spec_id,
+            None,
+            profile,
+            rows,
+            label_payloads,
+            decision_log_id,
+        )
+    }
+
+    /// Seal a snapshot with its complete immutable TrainingSpec embedded.
+    ///
+    /// The snapshot derives `spec_id`; callers cannot pair arbitrary graph,
+    /// fitted-state, view, or policy identities with otherwise valid rows.
+    pub fn seal_with_spec(
+        dataset_roots: Vec<ContentKey>,
+        spec: TrainingSpec,
+        profile: TrainingProfile,
+        rows: Vec<TrainingRow>,
+        decision_log_id: ContentKey,
+    ) -> Result<Self, TrainingError> {
+        Self::seal_with_spec_and_label_payloads(
+            dataset_roots,
+            spec,
+            profile,
+            rows,
+            Vec::new(),
+            decision_log_id,
+        )
+    }
+
+    /// Seal a spec-bearing snapshot with typed label payload associations.
+    pub fn seal_with_spec_and_label_payloads(
+        dataset_roots: Vec<ContentKey>,
+        mut spec: TrainingSpec,
+        profile: TrainingProfile,
+        rows: Vec<TrainingRow>,
+        label_payloads: Vec<TrainingLabelPayloadAssociation>,
+        decision_log_id: ContentKey,
+    ) -> Result<Self, TrainingError> {
+        spec.allowed_adaptive_knobs = spec.normalized_adaptive_knobs()?;
+        validate_authorized_purpose(&spec.authorized_purpose)?;
+        let spec_id = ContentKey::from(spec.content_id()?);
+        Self::seal_inner(
+            dataset_roots,
+            spec_id,
+            Some(spec),
+            profile,
+            rows,
+            label_payloads,
+            decision_log_id,
+        )
+    }
+
+    fn seal_inner(
         mut dataset_roots: Vec<ContentKey>,
         spec_id: ContentKey,
+        spec: Option<TrainingSpec>,
         profile: TrainingProfile,
         mut rows: Vec<TrainingRow>,
         mut label_payloads: Vec<TrainingLabelPayloadAssociation>,
@@ -423,15 +491,16 @@ impl TrainingSnapshot {
         let snapshot = Self {
             dataset_roots,
             decision_log_id,
-            schema: if label_payloads.is_empty() {
-                SNAPSHOT_V1_SCHEMA.to_owned()
-            } else {
-                SNAPSHOT_V2_SCHEMA.to_owned()
+            schema: match (&spec, label_payloads.is_empty()) {
+                (Some(_), _) => SNAPSHOT_V3_SCHEMA.to_owned(),
+                (None, true) => SNAPSHOT_V1_SCHEMA.to_owned(),
+                (None, false) => SNAPSHOT_V2_SCHEMA.to_owned(),
             },
             label_payloads,
             profile,
             rows,
             sealed: true,
+            spec,
             spec_id,
         };
         snapshot.validate()?;
@@ -447,6 +516,7 @@ impl TrainingSnapshot {
         let domain = match self.schema.as_str() {
             SNAPSHOT_V1_SCHEMA => SNAPSHOT_V1_HASH_DOMAIN,
             SNAPSHOT_V2_SCHEMA => SNAPSHOT_V2_HASH_DOMAIN,
+            SNAPSHOT_V3_SCHEMA => SNAPSHOT_V3_HASH_DOMAIN,
             _ => return Err(TrainingError::InvalidSnapshot),
         };
         hash_canonical(domain, &self.canonical_json()?)
@@ -476,6 +546,10 @@ impl TrainingSnapshot {
         self.spec_id
     }
 
+    pub const fn spec(&self) -> Option<&TrainingSpec> {
+        self.spec.as_ref()
+    }
+
     pub(crate) fn from_catalog(catalog: &[u8]) -> Result<Self, TrainingError> {
         let snapshot: Self = serde_json::from_slice(catalog)?;
         snapshot.validate()?;
@@ -490,9 +564,18 @@ impl TrainingSnapshot {
             return Err(TrainingError::NotSealed);
         }
         match self.schema.as_str() {
-            SNAPSHOT_V1_SCHEMA if self.label_payloads.is_empty() => {}
-            SNAPSHOT_V2_SCHEMA if !self.label_payloads.is_empty() => {}
+            SNAPSHOT_V1_SCHEMA if self.label_payloads.is_empty() && self.spec.is_none() => {}
+            SNAPSHOT_V2_SCHEMA if !self.label_payloads.is_empty() && self.spec.is_none() => {}
+            SNAPSHOT_V3_SCHEMA if self.spec.is_some() => {}
             _ => return Err(TrainingError::InvalidSnapshot),
+        }
+        if let Some(spec) = &self.spec {
+            if spec.allowed_adaptive_knobs != spec.normalized_adaptive_knobs()?
+                || ContentKey::from(spec.content_id()?) != self.spec_id
+            {
+                return Err(TrainingError::InvalidSnapshot);
+            }
+            validate_authorized_purpose(&spec.authorized_purpose)?;
         }
         if self.dataset_roots.is_empty()
             || self.rows.is_empty()

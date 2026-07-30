@@ -13,6 +13,26 @@ import pytest
 import jsonschema
 
 
+def _embedded_training_spec():
+    return {
+        "augmentation": "11" * 32,
+        "authorized_purpose": "representation-learning",
+        "cohort": "12" * 32,
+        "feature": "13" * 32,
+        "fitted_state": "14" * 32,
+        "grouping": "15" * 32,
+        "label": "16" * 32,
+        "policy": "17" * 32,
+        "preprocessing": "18" * 32,
+        "sampler": "19" * 32,
+        "seed": 42,
+        "split": "1a" * 32,
+        "view": "1b" * 32,
+        "window": "1c" * 32,
+        "allowed_adaptive_knobs": ["worker-count"],
+    }
+
+
 def test_training_window_store_opens_validated_bundle_and_lends_rows():
     artifact = abir._training_fixture_bytes()
     store = abir.TrainingWindowStore.open_bytes(artifact)
@@ -449,6 +469,56 @@ def test_public_training_sealer_rejects_payload_for_non_present_label():
         )
 
 
+def test_public_training_sealer_embeds_and_exposes_complete_spec_semantics():
+    spec = _embedded_training_spec()
+    sealed = abir.seal_training_snapshot(
+        dataset_roots=["1" * 64],
+        profile="balanced",
+        rows=[{
+            "logical_id": "3" * 64,
+            "group": "4" * 64,
+            "label": "5" * 64,
+            "split": "6" * 64,
+            "element": "f32",
+            "byte_order": "little",
+            "shape": [1],
+            "payload": struct.pack("<f", 1.0),
+        }],
+        label_payloads=[],
+        decision_log_id="7" * 64,
+        spec=spec,
+    )
+
+    store = abir.TrainingWindowStore.open_bytes(sealed["artifact"])
+    assert store.spec_id == sealed["spec_id"]
+    assert store.preprocessing_graph_id == spec["preprocessing"]
+    assert store.fitted_state_id == spec["fitted_state"]
+    assert store.view_id == spec["view"]
+    assert sealed["preprocessing_graph_id"] == spec["preprocessing"]
+    assert sealed["fitted_state_id"] == spec["fitted_state"]
+    assert sealed["view_id"] == spec["view"]
+
+    with pytest.raises(ValueError, match="does not match embedded"):
+        abir.seal_training_snapshot(
+            dataset_roots=["1" * 64],
+            spec_id="f" * 64,
+            profile="balanced",
+            rows=[{
+                "logical_id": "3" * 64,
+                "group": "4" * 64,
+                "label": "5" * 64,
+                "split": "6" * 64,
+                "element": "f32",
+                "byte_order": "little",
+                "shape": [1],
+                "payload": struct.pack("<f", 1.0),
+            }],
+            label_payloads=[],
+            decision_log_id="7" * 64,
+            spec=spec,
+        )
+
+
 @pytest.mark.parametrize(
     "presence",
     [
@@ -588,6 +658,55 @@ def test_training_v2_schema_admits_typed_labels_and_v1_rejects_them():
 
     catalog["label_payloads"][0]["presence"] = "unknown-at-source"
     assert list(jsonschema.Draft202012Validator(v2).iter_errors(catalog))
+
+
+def test_training_v3_schema_and_manifest_bind_embedded_spec_authority():
+    root = Path(__file__).parents[2]
+    schema = json.loads((root / "schema/training-snapshot-v3.schema.json").read_text())
+    jsonschema.Draft202012Validator.check_schema(schema)
+    catalog = {
+        "dataset_roots": ["1" * 64],
+        "decision_log_id": "2" * 64,
+        "profile": "balanced",
+        "rows": [{
+            "byte_order": "little",
+            "element": "f32",
+            "group": "3" * 64,
+            "label": "4" * 64,
+            "logical_bytes": 4,
+            "logical_id": "5" * 64,
+            "payload": "6" * 64,
+            "shape": [1],
+            "split": "7" * 64,
+        }],
+        "schema": "org.quitetall.abir.training.snapshot-v3",
+        "sealed": True,
+        "spec": _embedded_training_spec(),
+        "spec_id": "8" * 64,
+    }
+    jsonschema.validate(catalog, schema)
+    missing_spec = dict(catalog)
+    missing_spec.pop("spec")
+    assert list(jsonschema.Draft202012Validator(schema).iter_errors(missing_spec))
+
+    encoded_catalog = json.loads(json.dumps(catalog))
+    encoded_catalog["rows"][0]["encoding"] = {
+        "capabilities": 1,
+        "stored_bytes": 2,
+        "stored_element": "i16",
+        "stored_payload": "9" * 64,
+    }
+    jsonschema.validate(encoded_catalog, schema)
+
+    oversized_seed = json.loads(json.dumps(catalog))
+    oversized_seed["spec"]["seed"] = 2**64
+    assert list(jsonschema.Draft202012Validator(schema).iter_errors(oversized_seed))
+
+    manifest = json.loads((root / "spec/training-v3.manifest.json").read_text())
+    for artifact in manifest["artifacts"]:
+        assert hashlib.sha256((root / artifact["path"]).read_bytes()).hexdigest() == (
+            artifact["sha256"]
+        )
 
 
 def _acceptance_spec(*, knobs=("worker-count",)):

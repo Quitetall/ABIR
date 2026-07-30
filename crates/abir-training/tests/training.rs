@@ -231,6 +231,67 @@ fn training_spec(knobs: Vec<&str>) -> TrainingSpec {
 }
 
 #[test]
+fn spec_bearing_snapshot_derives_and_reopens_complete_semantics() {
+    let signal = [1_u8, 0, 2, 0];
+    let row = row(10, 20, &signal);
+    let spec = training_spec(vec!["worker-count"]);
+    let expected_spec_id = ContentKey::from(spec.content_id().unwrap());
+    let snapshot = TrainingSnapshot::seal_with_spec(
+        vec![key(1)],
+        spec.clone(),
+        TrainingProfile::Balanced,
+        vec![row],
+        key(4),
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.spec_id(), expected_spec_id);
+    assert_eq!(snapshot.spec(), Some(&spec));
+    assert!(String::from_utf8(snapshot.canonical_json().unwrap())
+        .unwrap()
+        .contains("org.quitetall.abir.training.snapshot-v3"));
+
+    let encoded = encode_snapshot(
+        &snapshot,
+        &[SemanticPayloadFrame::new(ElementType::I16, &signal)],
+        ResourceBounds::default(),
+    )
+    .unwrap();
+    let reopened = TrainingWindowStore::open(&encoded, ResourceBounds::default()).unwrap();
+    assert_eq!(reopened.spec_id(), expected_spec_id);
+    assert_eq!(reopened.snapshot().spec(), Some(&spec));
+}
+
+#[test]
+fn spec_bearing_snapshot_normalizes_adaptive_knobs_before_identity() {
+    let signal = [1_u8, 0, 2, 0];
+    let row = row(10, 20, &signal);
+    let first = TrainingSnapshot::seal_with_spec(
+        vec![key(1)],
+        training_spec(vec!["worker-count", "prefetch-depth", "worker-count"]),
+        TrainingProfile::Balanced,
+        vec![row.clone()],
+        key(4),
+    )
+    .unwrap();
+    let second = TrainingSnapshot::seal_with_spec(
+        vec![key(1)],
+        training_spec(vec!["prefetch-depth", "worker-count"]),
+        TrainingProfile::Balanced,
+        vec![row],
+        key(4),
+    )
+    .unwrap();
+
+    assert_eq!(first.spec_id(), second.spec_id());
+    assert_eq!(first.content_id().unwrap(), second.content_id().unwrap());
+    assert_eq!(
+        first.spec().unwrap().allowed_adaptive_knobs,
+        ["prefetch-depth", "worker-count"]
+    );
+}
+
+#[test]
 fn source_equivalent_rows_and_roots_have_the_same_snapshot_identity() {
     let row_a_bytes = [1_u8, 0, 2, 0];
     let row_b_bytes = [3_u8, 0, 4, 0];
