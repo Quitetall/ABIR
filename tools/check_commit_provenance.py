@@ -162,7 +162,54 @@ def staged_changes(repo: Path | str = Path(".")) -> list[ChangedFile]:
             "--no-renames",
             empty_tree,
         )
-    return parse_raw_diff(raw)
+    return _drop_inherited_merge_paths(repo_path, parse_raw_diff(raw))
+
+
+def _drop_inherited_merge_paths(
+    repo: Path, changes: list[ChangedFile]
+) -> list[ChangedFile]:
+    """During a merge, keep only what the merger actually authored.
+
+    `git diff --cached` compares the index against HEAD, the FIRST parent, so a
+    merge reports every file the second parent contributed and the policy then
+    demands a per-file authorship trailer for each. That claim is false: a clean
+    merge authors nothing. Those files were authored on the branch being merged
+    and already carry that attribution in their own commits. Measured on the
+    codec-lossless convergence, this took the demand from 170 files to 1.
+
+    What a merger genuinely authors is conflict resolution -- content matching
+    NEITHER side. A path whose staged blob equals MERGE_HEAD's came across
+    verbatim and is dropped. Absence counts as a value, not as a failure to
+    compare: a file deleted on the merged branch is absent from both, and that
+    agreement means the deletion was inherited too.
+
+    `FILE_ROLES` has always included `conflict-resolver`, so merges were
+    anticipated by the policy -- only the detection was missing. Outside a merge
+    this is a no-op.
+    """
+    try:
+        git_dir = Path(
+            _run_git(repo, "rev-parse", "--absolute-git-dir").decode().strip()
+        )
+    except Exception:  # noqa: BLE001 - not a git dir; nothing to filter
+        return changes
+    if not (git_dir / "MERGE_HEAD").exists():
+        return changes
+
+    def _blob(ref: str, path: bytes) -> bytes | None:
+        """Blob id at `ref`, or None when the path does not exist there."""
+        try:
+            return _run_git(
+                repo, "rev-parse", f"{ref}:{path.decode('utf-8', 'surrogateescape')}"
+            ).strip()
+        except Exception:  # noqa: BLE001 - absent on that side
+            return None
+
+    return [
+        change
+        for change in changes
+        if _blob(":0", change.path) != _blob("MERGE_HEAD", change.path)
+    ]
 
 
 def _commit_raw_diff(repo: Path, commit: str) -> bytes:
