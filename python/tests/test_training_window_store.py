@@ -1265,6 +1265,7 @@ def test_snapshot_v4_compiles_replay_ready_epoch_and_native_batch():
     assert store.decision_log_replay_state == "replay-ready"
     assert store.training_program_id == sealed["training_program_id"]
     assert list(store.stochastic_node_ids) == stochastic_nodes
+    assert dict(store.training_sampler) == sampler
     assert sealed["stochastic_node_ids"] == stochastic_nodes
     single = dict(store.compile_epoch(3, stochastic_nodes[0]))
     rank_zero = dict(

@@ -401,6 +401,44 @@ impl PyTrainingWindowStore {
         })
     }
 
+    #[getter]
+    fn training_sampler<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        self.training_program
+            .as_ref()
+            .map(|program| {
+                let result = PyDict::new_bound(py);
+                match program.sampler().strategy() {
+                    SamplerStrategy::Sequential => {
+                        result.set_item("kind", "sequential")?;
+                    }
+                    SamplerStrategy::Shuffle => {
+                        result.set_item("kind", "shuffle")?;
+                    }
+                    SamplerStrategy::Stratified { key, strata } => {
+                        result.set_item("kind", "stratified")?;
+                        result.set_item(
+                            "key",
+                            match key {
+                                SamplerStratumKey::Group => "group",
+                                SamplerStratumKey::Label => "label",
+                                SamplerStratumKey::Split => "split",
+                            },
+                        )?;
+                        let values = PyList::empty_bound(py);
+                        for stratum in strata {
+                            let value = PyDict::new_bound(py);
+                            value.set_item("draws", stratum.draws)?;
+                            value.set_item("value", stratum.value.to_string())?;
+                            values.append(value)?;
+                        }
+                        result.set_item("strata", values)?;
+                    }
+                }
+                Ok(result)
+            })
+            .transpose()
+    }
+
     /// Compile one exact scientific epoch before physical worker delivery.
     #[pyo3(signature = (epoch_index, stochastic_node_id, rank=0, world_size=1))]
     fn compile_epoch<'py>(
