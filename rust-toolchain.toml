@@ -1,3 +1,16 @@
 [toolchain]
 channel = "1.81"
 components = ["rustfmt", "clippy"]
+# abir must build for the MCU, and the ADR 0140 gate proves it with
+# `cargo check -p abir --no-default-features --features alloc
+#  --target riscv32imac-unknown-none-elf`.
+#
+# Declared HERE rather than only in the workflow because this file overrides
+# rustup's default for every command run inside abir/. The semantic-core
+# workflow does pass `targets: riscv32imac-unknown-none-elf`, but it attaches
+# that to the toolchain IT installs -- and the moment cargo runs in this
+# directory, rustup switches to the 1.81 pinned above, which had no such
+# target. The riscv check therefore failed with "can't find crate for `core`"
+# while the workflow looked correctly configured. A toolchain pin has to carry
+# its own targets or it silently un-configures whatever the CI set up.
+targets = ["riscv32imac-unknown-none-elf"]
