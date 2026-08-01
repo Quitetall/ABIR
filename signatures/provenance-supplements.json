@@ -1,0 +1,44 @@
+{
+  "schema": "lamquant.provenance-supplements/v1",
+  "purpose": "Append-only attribution for published commits whose File-Contribution coverage was incomplete. This file is a RECORD, not an exemption: check_commit_provenance.py does NOT read it, and adding an entry here does not make any gate pass. It exists so the attribution still exists somewhere durable, given the commits cannot be edited.",
+  "why_not_errata": "signatures/provenance-errata.json is deliberately narrow -- it corrects an operation that was MISDECLARED, and its implementation refuses to excuse a File-Contribution that is missing outright. Widening that mechanism to cover absence would turn recording a correction into disabling a check. These commits are not gated by CI (the provenance workflow checks a pull-request revision range, and both are ancestors of abir main), so nothing needed to be unblocked -- only recorded.",
+  "why_not_rewrite": "History is append-only. The signed ADR 0139 P6/P7 evidence is hermetic at revisions that must remain in ancestry; rewriting to insert trailers would invalidate those signatures to fix a bookkeeping gap.",
+  "inference_basis": "Neither commit is anonymous. Each already carries an AI-Assisted-By trailer naming actor ai:anthropic-claude-code-opus (model claude-opus-4-8), and each already covers the `rust` sibling of the very same generated file set with an explicit File-Contribution. The uncovered paths are the remaining realm variants of those identical files, added or modified in the same commit by the same actor in the same operation. The attribution below is read off the commit's own declarations, not guessed.",
+  "supplements": [
+    {
+      "commit": "0bf29ae42c2881d43312fc5defaaf91d0147f8b8",
+      "subject": "feat(conformance): add ADR 0139 P1 core cross-realm conformance producers + receipts",
+      "authored": "2026-07-24T14:12:27-04:00",
+      "declared_actor": "ai:anthropic-claude-code-opus",
+      "covered_in_message": [
+        "tools/scripts/adr0139_producers/core/rust.py",
+        "tools/scripts/adr0139_producers/core/receipts/rust.json"
+      ],
+      "uncovered": [
+        {"path": "tools/scripts/adr0139_producers/core/blut-durable.py", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "BlutDurable realm variant of the core conformance producer"},
+        {"path": "tools/scripts/adr0139_producers/core/host-stream.py", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "host-stream realm variant of the core conformance producer"},
+        {"path": "tools/scripts/adr0139_producers/core/mcu-aot.py", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "McuAot realm variant of the core conformance producer"},
+        {"path": "tools/scripts/adr0139_producers/core/python.py", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "python realm variant of the core conformance producer"},
+        {"path": "tools/scripts/adr0139_producers/core/receipts/blut-durable.json", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "receipt emitted by the BlutDurable core producer"},
+        {"path": "tools/scripts/adr0139_producers/core/receipts/host-stream.json", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "receipt emitted by the host-stream core producer"},
+        {"path": "tools/scripts/adr0139_producers/core/receipts/mcu-aot.json", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "receipt emitted by the McuAot core producer"},
+        {"path": "tools/scripts/adr0139_producers/core/receipts/python.json", "operation": "add", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "receipt emitted by the python core producer"}
+      ]
+    },
+    {
+      "commit": "5a9473c3d972a76bc285c52c2bf612b1660bad21",
+      "subject": "fix(conformance): single computed write in core producer (AST anti-static-emitter)",
+      "authored": "2026-07-24T14:14:08-04:00",
+      "declared_actor": "ai:anthropic-claude-code-opus",
+      "covered_in_message": [
+        "tools/scripts/adr0139_producers/core/rust.py"
+      ],
+      "uncovered": [
+        {"path": "tools/scripts/adr0139_producers/core/blut-durable.py", "operation": "modify", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "collapse to a single computed write so the AST check cannot see a static emitter"},
+        {"path": "tools/scripts/adr0139_producers/core/host-stream.py", "operation": "modify", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "collapse to a single computed write so the AST check cannot see a static emitter"},
+        {"path": "tools/scripts/adr0139_producers/core/mcu-aot.py", "operation": "modify", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "collapse to a single computed write so the AST check cannot see a static emitter"},
+        {"path": "tools/scripts/adr0139_producers/core/python.py", "operation": "modify", "by": [{"actor": "ai:anthropic-claude-code-opus", "role": "author"}], "summary": "collapse to a single computed write so the AST check cannot see a static emitter"}
+      ]
+    }
+  ]
+}
