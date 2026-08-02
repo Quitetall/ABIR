@@ -1,8 +1,9 @@
 use abir_core::{
-    canonical_debug_json, logical_content_id, parse_canonical_dataset, Atom, AtomTag, ByteOrder,
-    Clock, ConceptId, ContentId, DatasetDraft, DatasetTag, ElementType, Layout, ObjectId,
-    PayloadDescriptor, Presence, Rational, Recording, RecordingTag, SemanticAxis, Stream,
-    StreamTag, Tensor, ValidationLimits,
+    canonical_debug_json, logical_content_id, parse_canonical_dataset,
+    payload_content_id as core_payload_content_id, Atom, AtomTag, ByteOrder, Clock, ConceptId,
+    ContentId, DatasetDraft, DatasetTag, ElementType, Layout, ObjectId, PayloadDescriptor,
+    Presence, Rational, Recording, RecordingTag, SemanticAxis, Stream, StreamTag, Tensor,
+    ValidationLimits,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -395,6 +396,13 @@ fn implementation_revision() -> &'static str {
     IMPLEMENTATION_REVISION
 }
 
+/// Derive logical payload identity under ABIR's normative element domain.
+#[pyfunction]
+fn payload_content_id(element: &str, payload: &[u8]) -> PyResult<String> {
+    let element = parse_element(element)?;
+    Ok(core_payload_content_id(element, payload).to_string())
+}
+
 #[pymodule]
 fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDataset>()?;
@@ -440,6 +448,7 @@ fn abir(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(implementation_revision, module)?)?;
+    module.add_function(wrap_pyfunction!(payload_content_id, module)?)?;
     module.add_function(wrap_pyfunction!(version, module)?)?;
     Ok(())
 }

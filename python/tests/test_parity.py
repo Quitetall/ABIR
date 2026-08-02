@@ -133,6 +133,30 @@ def test_python_builder_uses_rust_validation_boundary():
         )
 
 
+def test_python_payload_identity_uses_normative_rust_domain():
+    payload = b'{"schema":"package16-source-cohort-v1"}'
+    content_id = abir.payload_content_id("u8", payload)
+    dataset = abir.Dataset.from_tensor(
+        "01" * 16,
+        "02" * 16,
+        "03" * 16,
+        "04" * 16,
+        content_id,
+        "future:modality/biosignal-source-manifest",
+        "u8",
+        "not-applicable",
+        "dense-row-major",
+        [len(payload)],
+        payload,
+    )
+    canonical = json.loads(dataset.canonical_json())
+
+    assert re.fullmatch(r"[0-9a-f]{64}", content_id)
+    assert canonical["atoms"][0]["payload"]["content_id"] == content_id
+    with pytest.raises(ValueError, match="unsupported fixed-width element type"):
+        abir.payload_content_id("unknown", payload)
+
+
 def test_rust_fixture_conforms_to_normative_json_schema():
     schema = json.loads((ROOT / "schema/abir-semantic-v1.schema.json").read_text())
     jsonschema.Draft202012Validator.check_schema(schema)
