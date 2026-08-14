@@ -124,6 +124,7 @@ fn streaming_writer_matches_empty_transformed_duplicate_and_custom_bound_artifac
         capabilities: CAP_ZSTD,
         logical_content_id: raw_content_id(b"logical bytes"),
         logical_len: 13,
+        parameters: [0; 32],
     });
     assert_streaming_matches_in_memory(
         &ForensicTree {
@@ -333,6 +334,7 @@ fn forensic_file_index_rejects_metadata_index_capability_disagreement() {
         capabilities: CAP_ZSTD,
         logical_content_id: raw_content_id(original),
         logical_len: original.len() as u64,
+        parameters: [0; 32],
     });
     let tree = ForensicTree {
         platform: "linux".into(),
@@ -368,6 +370,7 @@ fn forensic_file_index_rejects_capability_gated_metadata_frame() {
         capabilities: CAP_ZSTD,
         logical_content_id: raw_content_id(original),
         logical_len: original.len() as u64,
+        parameters: [0; 32],
     });
     let tree = ForensicTree {
         platform: "linux".into(),

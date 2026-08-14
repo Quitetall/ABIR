@@ -12,7 +12,7 @@
     {"path": "schema/bcs2-codec-registry-v1.schema.json", "sha256": "b81bb5e142c914484d6ced89acd686283a513918e1f1d2587c28fa78748839f0"},
     {"path": "schema/bcs2-crypto-v1.schema.json", "sha256": "9ee9aedf2f94f5c99e94e33db91eaf8384668c65bd51482c9111a8a5679b6e38"},
     {"path": "schema/bcs2-profile-v1.schema.json", "sha256": "0a436d158956be62ed04b016a1dfc25e4a19c368b2be97316f46503369020dee"},
-    {"path": "spec/BCS2_V1.md", "sha256": "104688030aa7c969c4a1a2e057298e1ebd272fd2499a2f76dccae4ee87dbdda7"},
+    {"path": "spec/BCS2_V1.md", "sha256": "a5338406dafbe2917c7029e3aa5267829cdff216f0477dd44fc235e2f9e353b4"},
     {"path": "spec/CODEC_BUNDLE_V1.md", "sha256": "07956834203d2ba83ccc135b8c2d897d693db9b0d5bbeadcab5fc1379fe0c56c"}
   ]
 }

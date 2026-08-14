@@ -21,6 +21,12 @@ const FORENSIC_TREE_VERSION: u8 = 1;
 /// identically under `decode_metadata`'s canonicalisation check, so this
 /// extension costs no existing artifact its readability.
 const FORENSIC_TREE_VERSION_STORED_FORM: u8 = 2;
+/// Stored-form shape with a fixed capability-defined parameter descriptor.
+///
+/// Version 2 remains readable and maps to an all-zero descriptor. Version 3 is
+/// selected only when at least one transformed entry carries non-zero
+/// parameters, preserving every version-2 artifact byte for byte.
+const FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS: u8 = 3;
 const FORENSIC_TREE_DOMAIN: &[u8] = b"org.quitetall.abir.bcs2.forensic-tree-v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,6 +124,9 @@ pub struct ForensicContentTransform {
     pub logical_content_id: ContentId,
     /// Length of the original file in bytes.
     pub logical_len: u64,
+    /// Fixed-width capability-defined transform parameters. All zero means the
+    /// transform needs no out-of-band parameters.
+    pub parameters: [u8; 32],
 }
 
 /// How an entry's stored frame differs from its logical content, as recovered
@@ -128,6 +137,9 @@ pub struct ForensicStoredForm {
     /// blake3 of the frame as stored — what locates it in the artifact index.
     pub stored_content_id: ContentId,
     pub stored_len: u64,
+    /// Fixed-width capability-defined transform parameters. All zero means the
+    /// transform needs no out-of-band parameters.
+    pub parameters: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -423,6 +435,7 @@ fn metadata_from_tree(tree: &ForensicTree) -> Result<Vec<ForensicEntryMetadata>,
                             capabilities: transform.capabilities,
                             stored_content_id: stored_id,
                             stored_len,
+                            parameters: transform.parameters,
                         }),
                     )
                 }
@@ -461,7 +474,13 @@ pub(crate) fn forensic_tree_content_id(metadata_id: ContentId) -> ContentId {
 /// Encoding is canonical, so this must be a pure function of the content:
 /// `decode_metadata` re-encodes what it read and rejects any difference.
 fn metadata_version(entries: &[ForensicEntryMetadata]) -> u8 {
-    if entries.iter().any(|entry| entry.stored_form.is_some()) {
+    if entries.iter().any(|entry| {
+        entry
+            .stored_form
+            .is_some_and(|stored| stored.parameters != [0; 32])
+    }) {
+        FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS
+    } else if entries.iter().any(|entry| entry.stored_form.is_some()) {
         FORENSIC_TREE_VERSION_STORED_FORM
     } else {
         FORENSIC_TREE_VERSION
@@ -575,11 +594,20 @@ fn encode_metadata_to<W: minicbor::encode::Write>(
             match entry.stored_form {
                 Some(stored) => {
                     encoder
-                        .array(3)
+                        .array(if version >= FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS {
+                            4
+                        } else {
+                            3
+                        })
                         .and_then(|encoder| encoder.u64(stored.capabilities))
                         .and_then(|encoder| encoder.bytes(stored.stored_content_id.as_bytes()))
                         .and_then(|encoder| encoder.u64(stored.stored_len))
                         .map_err(|_| Bcs2Error::SemanticEncoding)?;
+                    if version >= FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS {
+                        encoder
+                            .bytes(&stored.parameters)
+                            .map_err(|_| Bcs2Error::SemanticEncoding)?;
+                    }
                 }
                 None => {
                     encoder.null().map_err(|_| Bcs2Error::SemanticEncoding)?;
@@ -599,7 +627,9 @@ pub(crate) fn decode_metadata(
     let version = decoder.u8().map_err(|_| Bcs2Error::CatalogCorrupt)?;
     if !matches!(
         version,
-        FORENSIC_TREE_VERSION | FORENSIC_TREE_VERSION_STORED_FORM
+        FORENSIC_TREE_VERSION
+            | FORENSIC_TREE_VERSION_STORED_FORM
+            | FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS
     ) {
         return Err(Bcs2Error::CatalogCorrupt);
     }
@@ -674,7 +704,7 @@ pub(crate) fn decode_metadata(
                 Some(decoder.u64().map_err(|_| Bcs2Error::CatalogCorrupt)?)
             };
         let stored_form = if version >= FORENSIC_TREE_VERSION_STORED_FORM {
-            decode_stored_form(&mut decoder)?
+            decode_stored_form(&mut decoder, version)?
         } else {
             None
         };
@@ -906,6 +936,9 @@ fn validate_path(path: &[u8]) -> Result<(), Bcs2Error> {
         || path.contains(&0)
         || path.contains(&b'\\')
         || path.contains(&b':')
+        || path
+            .iter()
+            .any(|byte| *byte < b' ' || matches!(*byte, b'<' | b'>' | b'"' | b'|' | b'?' | b'*'))
     {
         return Err(Bcs2Error::SemanticEncoding);
     }
@@ -1105,20 +1138,40 @@ fn encode_optional_content_id<W: minicbor::encode::Write>(
     Ok(())
 }
 
-fn decode_stored_form(decoder: &mut Decoder<'_>) -> Result<Option<ForensicStoredForm>, Bcs2Error> {
+fn decode_stored_form(
+    decoder: &mut Decoder<'_>,
+    version: u8,
+) -> Result<Option<ForensicStoredForm>, Bcs2Error> {
     if decoder.datatype().map_err(|_| Bcs2Error::CatalogCorrupt)? == Type::Null {
         decoder.null().map_err(|_| Bcs2Error::CatalogCorrupt)?;
         return Ok(None);
     }
-    require_array(decoder, 3)?;
+    require_array(
+        decoder,
+        if version >= FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS {
+            4
+        } else {
+            3
+        },
+    )?;
     let capabilities = decoder.u64().map_err(|_| Bcs2Error::CatalogCorrupt)?;
     let stored_content_id =
         decode_optional_content_id(decoder)?.ok_or(Bcs2Error::CatalogCorrupt)?;
     let stored_len = decoder.u64().map_err(|_| Bcs2Error::CatalogCorrupt)?;
+    let parameters = if version >= FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS {
+        decoder
+            .bytes()
+            .map_err(|_| Bcs2Error::CatalogCorrupt)?
+            .try_into()
+            .map_err(|_| Bcs2Error::CatalogCorrupt)?
+    } else {
+        [0; 32]
+    };
     Ok(Some(ForensicStoredForm {
         capabilities,
         stored_content_id,
         stored_len,
+        parameters,
     }))
 }
 
@@ -1133,4 +1186,48 @@ fn decode_optional_content_id(decoder: &mut Decoder<'_>) -> Result<Option<Conten
         .try_into()
         .map_err(|_| Bcs2Error::CatalogCorrupt)?;
     Ok(Some(ContentId::from_bytes(bytes)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encoded_stored_form(parameters: Option<&[u8]>) -> Vec<u8> {
+        let mut encoder = Encoder::new(Vec::new());
+        encoder
+            .array(if parameters.is_some() { 4 } else { 3 })
+            .unwrap()
+            .u64(1)
+            .unwrap()
+            .bytes(&[7; 32])
+            .unwrap()
+            .u64(9)
+            .unwrap();
+        if let Some(parameters) = parameters {
+            encoder.bytes(parameters).unwrap();
+        }
+        encoder.into_writer()
+    }
+
+    #[test]
+    fn version_two_stored_form_decodes_with_zero_parameters() {
+        let bytes = encoded_stored_form(None);
+        let stored =
+            decode_stored_form(&mut Decoder::new(&bytes), FORENSIC_TREE_VERSION_STORED_FORM)
+                .unwrap()
+                .unwrap();
+        assert_eq!(stored.parameters, [0; 32]);
+    }
+
+    #[test]
+    fn version_three_rejects_wrong_parameter_length() {
+        let bytes = encoded_stored_form(Some(&[3; 31]));
+        assert_eq!(
+            decode_stored_form(
+                &mut Decoder::new(&bytes),
+                FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS,
+            ),
+            Err(Bcs2Error::CatalogCorrupt)
+        );
+    }
 }

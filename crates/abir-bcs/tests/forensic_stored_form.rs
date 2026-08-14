@@ -30,6 +30,7 @@ use abir_bcs::{
 /// the logical content, not a real compressor.
 const STORED_ENCODING: &[u8] = b"<transformed encoding of the file>";
 const FILE_BYTES: &[u8] = b"the original file contents, at rest";
+const TRANSFORM_PARAMETERS: [u8; 32] = [0; 32];
 
 /// The logical id must be derived exactly as the format derives frame ids —
 /// `raw_content_id` is domain-separated, so a bare blake3 of the same bytes is a
@@ -78,6 +79,7 @@ fn transformed_tree() -> ForensicTree {
         capabilities: CAP_ZSTD,
         logical_content_id: logical_id(),
         logical_len: FILE_BYTES.len() as u64,
+        parameters: TRANSFORM_PARAMETERS,
     });
     tree(vec![root, file])
 }
@@ -102,8 +104,48 @@ fn transformation_does_not_disturb_the_chain_of_custody_claim() {
     let stored = file.stored_form.expect("stored form recorded");
     assert_eq!(stored.capabilities, CAP_ZSTD);
     assert_eq!(stored.stored_len, STORED_ENCODING.len() as u64);
+    assert_eq!(stored.parameters, TRANSFORM_PARAMETERS);
     assert_ne!(stored.stored_content_id, logical_id());
     assert_eq!(view.stored_bytes(file), Some(STORED_ENCODING));
+}
+
+#[test]
+fn transform_parameters_round_trip_in_metadata_version_three() {
+    let mut tree = transformed_tree();
+    let mut parameters = [0_u8; 32];
+    parameters[..8].copy_from_slice(b"template");
+    tree.entries[1]
+        .content_transform
+        .as_mut()
+        .expect("transform")
+        .parameters = parameters;
+
+    let bytes = encode_forensic_tree(&tree, ResourceBounds::default()).expect("capsule encodes");
+    let view = ForensicTreeView::parse(&bytes, CAP_ZSTD, ResourceBounds::default())
+        .expect("capable reader parses");
+    let file = view
+        .entries()
+        .iter()
+        .find(|entry| entry.path == b"recording/capture.edf")
+        .expect("file entry present");
+    assert_eq!(
+        file.stored_form.expect("stored form").parameters,
+        parameters
+    );
+
+    let entry_frames: Vec<_> = view
+        .entries()
+        .iter()
+        .filter_map(|entry| entry.frame_content_id())
+        .collect();
+    let metadata_frame = view
+        .artifact()
+        .frames()
+        .iter()
+        .find(|frame| !entry_frames.contains(&frame.content_id()))
+        .expect("metadata frame present")
+        .bytes();
+    assert_eq!(&metadata_frame[..2], &[0x83, 0x03]);
 }
 
 #[test]
@@ -194,6 +236,7 @@ fn a_transform_requiring_nothing_is_refused() {
         capabilities: 0,
         logical_content_id: logical_id(),
         logical_len: FILE_BYTES.len() as u64,
+        parameters: TRANSFORM_PARAMETERS,
     });
     assert_eq!(
         encode_forensic_tree(&broken, ResourceBounds::default()).unwrap_err(),
@@ -211,6 +254,7 @@ fn a_transform_that_changes_nothing_is_refused() {
         capabilities: CAP_ZSTD,
         logical_content_id: logical_id(),
         logical_len: FILE_BYTES.len() as u64,
+        parameters: TRANSFORM_PARAMETERS,
     });
     assert_eq!(
         encode_forensic_tree(&broken, ResourceBounds::default()).unwrap_err(),
@@ -225,6 +269,7 @@ fn a_transform_on_a_directory_is_refused() {
         capabilities: CAP_ZSTD,
         logical_content_id: logical_id(),
         logical_len: 1,
+        parameters: TRANSFORM_PARAMETERS,
     });
     assert_eq!(
         encode_forensic_tree(&broken, ResourceBounds::default()).unwrap_err(),

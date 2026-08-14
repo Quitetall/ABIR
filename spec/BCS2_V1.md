@@ -219,8 +219,9 @@ reproduced.
 A forensic tree is a Bundle-root artifact under `bcs.forensic.tree.v1`. Its
 canonical semantic JSON identifies a single raw metadata frame, entry count,
 and metadata generation. The metadata frame is deterministic CBOR: a fixed
-three-element array containing version 1, a bounded platform identifier, and a
-path-sorted entry array. Every entry is a fixed 15-element array containing, in
+three-element array containing a metadata version, a bounded platform
+identifier, and a path-sorted entry array. Every version-1 entry is a fixed
+15-element array containing, in
 order, relative path bytes, node type, mode, optional uid/gid, four optional
 nanosecond timestamps (access, modification, status-change, birth), optional
 ACL bytes, sorted xattrs, optional hardlink and symlink targets, complete sparse
@@ -229,6 +230,18 @@ optional raw payload ContentId, and optional payload length. Indefinite CBOR,
 non-minimal integer encodings, duplicate paths or xattrs, unsafe relative paths,
 inconsistent hardlink metadata, incomplete sparse maps, and fields forbidden by
 the declared node type are noncanonical.
+
+Version 2 appends a sixteenth per-entry field: null for verbatim content, or a
+fixed three-element stored-form array containing required capability mask,
+stored-frame ContentId, and stored-frame length. Logical ContentId and length
+remain in fields 14 and 15. Version 3 changes each non-null stored-form array to
+four elements by appending exactly 32 opaque transform-parameter bytes. Those
+bytes are interpreted only by capabilities named in that entry; all zero means
+no parameter descriptor. Version selection is canonical: no stored forms uses
+version 1, stored forms with only zero descriptors use version 2, and any
+non-zero descriptor uses version 3. A version-2 reader therefore preserves its
+wire contract, while a version-3 reader maps version-2 stored forms to an
+all-zero descriptor.
 
 Regular-file bytes are kind-2 raw frames. Equal file contents are stored once;
 the metadata refers to the same ContentId from every path. The Bundle root
@@ -243,6 +256,9 @@ empty real directory. Paths and link targets are preflighted before the first
 write. Portable restore reports every intentionally omitted attribute. Exact
 restore first rejects platform mismatch, unsupported metadata, unsafe links,
 and unsupported node types; it never silently weakens an exact request.
+Portable relative paths reject NUL, ASCII control bytes, backslash, colon,
+`<`, `>`, `"`, `|`, `?`, `*`, trailing dot or space, and Win32 device names,
+independent of writer platform.
 
 A forensic image or exact source-file payload is a Blob-root BCS2 artifact under
 `bcs.forensic.image.v1`. Its canonical semantic JSON records raw content ID,
