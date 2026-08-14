@@ -6,6 +6,8 @@ fn artifact_identity_is_deterministic_and_domain_separated() {
     let canonical = br#"{"kind":"checkpoint","schema":1}"#;
     let first = training_artifact_content_id(canonical);
     let second = training_artifact_content_id(canonical);
+    // Recompute another registered domain independently so this test catches a
+    // copied domain label inside the artifact sealer itself.
     let mut semantic_hasher = blake3::Hasher::new();
     semantic_hasher.update(b"org.quitetall.abir.training.semantic.feature-v1\0");
     semantic_hasher.update(canonical);

@@ -6,7 +6,7 @@
   "artifacts": [
     {
       "path": "spec/TRAINING_WINDOW_STORE_V4.md",
-      "sha256": "22200a9ed99e70b4b06564b9c70d3cca3117173c992257bef8541fb1fd3acb79"
+      "sha256": "f83c46b93176311407a359193829cb1b59ad7d9d8f15da34920adaeff0fa435c"
     },
     {
       "path": "schema/training-snapshot-v4.schema.json",
