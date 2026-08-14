@@ -16,6 +16,10 @@ use abir::{
 };
 use serde::{Deserialize, Serialize};
 
+mod identity;
+
+pub use identity::{IdentityProjection, IdentityProjectionError, IntegrityObservation};
+
 pub const ADAPTER_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
