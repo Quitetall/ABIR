@@ -19,6 +19,7 @@
           "bit": {"type": "integer", "minimum": 0, "maximum": 63},
           "mask": {"type": "integer", "minimum": 1},
           "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+          "parameter_schema": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
           "purpose": {"type": "string", "minLength": 1}
         }
       }

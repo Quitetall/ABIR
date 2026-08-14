@@ -2,17 +2,17 @@
   "generation": 1,
   "artifacts": [
     {"path": "fixtures/bcs2/codec-v1/manifest.json", "sha256": "b8c10171a4153f1a8c2994fa8024028b6923e5063141d4e7433cd0d18781cd6f"},
-    {"path": "fixtures/bcs2/v1/manifest.json", "sha256": "9caba34e3020513e31b85de128f28dca67198453d7645bd1010d8992b25229df"},
-    {"path": "registries/bcs2-capabilities-v1.json", "sha256": "a9b1341ca9723ecd8114cd1ce30e505d588f0b9f399655601e8623a3470c0d99"},
+    {"path": "fixtures/bcs2/v1/manifest.json", "sha256": "becf77465b9ec4f0fc3fb4d58dd567d36f50e68ece267034ab1781170798a435"},
+    {"path": "registries/bcs2-capabilities-v1.json", "sha256": "d0f6f7827e1f94ab41e7cdc8bf6b373b6cc4bc782b7463b1263b4a33618f6762"},
     {"path": "registries/bcs2-codecs-v1.json", "sha256": "97d0bf99f3eaeb0057ff348a04cf1a8bb711741542b3b1a7740bf829b1e68cf5"},
     {"path": "registries/bcs2-crypto-v1.json", "sha256": "806567026f80e7243f1a3688e9eb333a973e16b02c785bcc86df48f1a83caea1"},
     {"path": "registries/bcs2-profiles-v1.json", "sha256": "300b0890de8ed536c96cc94427339463ed10334c63f575c1efe797a07f5611e1"},
-    {"path": "schema/bcs2-capability-registry-v1.schema.json", "sha256": "79dcad99a86f5e4201f824a0f9354be412dcf78c6f341d82942b34cfd96a7f8a"},
+    {"path": "schema/bcs2-capability-registry-v1.schema.json", "sha256": "ac171b15edf0d2e1508e7f11030a4b15023d872bbb614354e572132769a988e0"},
     {"path": "schema/bcs2-codec-bundle-v1.schema.json", "sha256": "800d3fe0ee6698dd89cbc3d0bd90af7607f83d9bdb9a7129df90d2b187e8f66e"},
     {"path": "schema/bcs2-codec-registry-v1.schema.json", "sha256": "b81bb5e142c914484d6ced89acd686283a513918e1f1d2587c28fa78748839f0"},
     {"path": "schema/bcs2-crypto-v1.schema.json", "sha256": "9ee9aedf2f94f5c99e94e33db91eaf8384668c65bd51482c9111a8a5679b6e38"},
     {"path": "schema/bcs2-profile-v1.schema.json", "sha256": "0a436d158956be62ed04b016a1dfc25e4a19c368b2be97316f46503369020dee"},
-    {"path": "spec/BCS2_V1.md", "sha256": "a5338406dafbe2917c7029e3aa5267829cdff216f0477dd44fc235e2f9e353b4"},
+    {"path": "spec/BCS2_V1.md", "sha256": "b68f401084dc9cb6e58a25b0b2cb223761f8d907cbc765ad4867b005c1b3e544"},
     {"path": "spec/CODEC_BUNDLE_V1.md", "sha256": "07956834203d2ba83ccc135b8c2d897d693db9b0d5bbeadcab5fc1379fe0c56c"}
   ]
 }

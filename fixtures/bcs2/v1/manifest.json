@@ -21,6 +21,18 @@
       "sha256": "df927d25ff322ba3bf4ab7c90f86be3dcf080bf0f4ba06f3e171937a9c013634"
     },
     {
+      "bytes": 729,
+      "name": "forensic-tree-stored-v2.bcs2",
+      "root_content_id": "0b2ed85c94b2827b99743f39971d31d79c96ad285e97f78318d5f4a4fbca0735",
+      "sha256": "acee23addf46eded2b332cb6427b2ac324d0605b454887c856a65083be485321"
+    },
+    {
+      "bytes": 763,
+      "name": "forensic-tree-parameters-v3.bcs2",
+      "root_content_id": "857509c22dcb79731209e0c8d6e38d6b8f19796d17ce3f7a0ba07dd45377afd5",
+      "sha256": "d14f18f6d95d767182ed4d4bcb32dc504e7c4f22c4ec4315c3e0d02a71b80210"
+    },
+    {
       "bytes": 1624,
       "name": "generational-dataset.bcs2",
       "root_content_id": "6125861d76449cc4387e2120e144d20b33733a5ae194fff242d2f03be9f4e3e8",

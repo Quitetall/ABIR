@@ -1,7 +1,7 @@
 use crate::wire::{encode_raw_root_with_capabilities, raw_content_id};
 use crate::{
     Bcs2Error, Bcs2View, FrameKind, PrivacyMode, ProfileId, ResourceBounds, RootKind,
-    StorageContract,
+    StorageContract, CAP_LMA_SYNTHETIC_REEMIT,
 };
 use abir::ContentId;
 use alloc::collections::BTreeSet;
@@ -129,6 +129,24 @@ pub struct ForensicContentTransform {
     pub parameters: [u8; 32],
 }
 
+impl ForensicContentTransform {
+    /// Declare a transform with no capability-specific parameters.
+    pub const fn new(capabilities: u64, logical_content_id: ContentId, logical_len: u64) -> Self {
+        Self {
+            capabilities,
+            logical_content_id,
+            logical_len,
+            parameters: [0; 32],
+        }
+    }
+
+    /// Attach a fixed capability-specific parameter descriptor.
+    pub const fn with_parameters(mut self, parameters: [u8; 32]) -> Self {
+        self.parameters = parameters;
+        self
+    }
+}
+
 /// How an entry's stored frame differs from its logical content, as recovered
 /// from a parsed capsule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,6 +158,86 @@ pub struct ForensicStoredForm {
     /// Fixed-width capability-defined transform parameters. All zero means the
     /// transform needs no out-of-band parameters.
     pub parameters: [u8; 32],
+}
+
+impl ForensicStoredForm {
+    pub const fn new(capabilities: u64, stored_content_id: ContentId, stored_len: u64) -> Self {
+        Self {
+            capabilities,
+            stored_content_id,
+            stored_len,
+            parameters: [0; 32],
+        }
+    }
+}
+
+/// Line-ending tag used by the registered `lma-synthetic-reemit` descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum LmaSyntheticLineEnding {
+    Lf = 0,
+    CrLf = 1,
+}
+
+/// Parameters for `lma-synthetic-reemit` descriptor version 1.
+///
+/// This fixed schema belongs to the parameter-bearing capability bit, not to
+/// the full capability mask. Decoder capabilities such as zstd or LML may be
+/// combined with it without creating competing interpretations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LmaSyntheticReemitParametersV1 {
+    pub line_ending: LmaSyntheticLineEnding,
+    pub leading_whitespace: u8,
+    pub field_width: u8,
+    pub trailing_newline: bool,
+}
+
+impl LmaSyntheticReemitParametersV1 {
+    pub const fn new(
+        line_ending: LmaSyntheticLineEnding,
+        leading_whitespace: u8,
+        field_width: u8,
+        trailing_newline: bool,
+    ) -> Self {
+        Self {
+            line_ending,
+            leading_whitespace,
+            field_width,
+            trailing_newline,
+        }
+    }
+
+    pub const fn encode(self) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[0] = 1;
+        bytes[1] = 1;
+        bytes[2] = self.line_ending as u8;
+        bytes[3] = self.leading_whitespace;
+        bytes[4] = self.field_width;
+        bytes[5] = self.trailing_newline as u8;
+        bytes
+    }
+
+    pub fn decode(bytes: [u8; 32]) -> Result<Self, Bcs2Error> {
+        if bytes[0] != 1
+            || bytes[1] != 1
+            || bytes[2] > 1
+            || bytes[5] > 1
+            || bytes[6..].iter().any(|byte| *byte != 0)
+        {
+            return Err(Bcs2Error::CatalogCorrupt);
+        }
+        Ok(Self {
+            line_ending: if bytes[2] == 0 {
+                LmaSyntheticLineEnding::Lf
+            } else {
+                LmaSyntheticLineEnding::CrLf
+            },
+            leading_whitespace: bytes[3],
+            field_width: bytes[4],
+            trailing_newline: bytes[5] != 0,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -800,6 +898,12 @@ pub(crate) fn validate_metadata(
             if stored.capabilities == 0 || Some(stored.stored_content_id) == entry.content_id {
                 return Err(Bcs2Error::SemanticEncoding);
             }
+            if stored.parameters != [0; 32]
+                && (stored.capabilities & CAP_LMA_SYNTHETIC_REEMIT == 0
+                    || LmaSyntheticReemitParametersV1::decode(stored.parameters).is_err())
+            {
+                return Err(Bcs2Error::SemanticEncoding);
+            }
         }
         match entry.file_type {
             ForensicFileType::Regular => {
@@ -1221,13 +1325,15 @@ mod tests {
 
     #[test]
     fn version_three_rejects_wrong_parameter_length() {
-        let bytes = encoded_stored_form(Some(&[3; 31]));
-        assert_eq!(
-            decode_stored_form(
-                &mut Decoder::new(&bytes),
-                FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS,
-            ),
-            Err(Bcs2Error::CatalogCorrupt)
-        );
+        for parameters in [&[3; 31][..], &[3; 33][..]] {
+            let bytes = encoded_stored_form(Some(parameters));
+            assert_eq!(
+                decode_stored_form(
+                    &mut Decoder::new(&bytes),
+                    FORENSIC_TREE_VERSION_TRANSFORM_PARAMETERS,
+                ),
+                Err(Bcs2Error::CatalogCorrupt)
+            );
+        }
     }
 }

@@ -35,7 +35,8 @@ pub use generation::{
 pub use forensic::{
     encode_forensic_tree, ForensicContentTransform, ForensicEntry, ForensicEntryMetadata,
     ForensicFileType, ForensicStoredForm, ForensicTimestamp, ForensicTree, ForensicTreeMetadata,
-    ForensicTreeView, ForensicXattr, SparseExtent,
+    ForensicTreeView, ForensicXattr, LmaSyntheticLineEnding, LmaSyntheticReemitParametersV1,
+    SparseExtent,
 };
 
 #[cfg(feature = "alloc")]

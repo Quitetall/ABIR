@@ -1,8 +1,10 @@
 use abir::{DatasetDraft, DatasetTag, ObjectId, ValidationLimits};
 use abir_bcs::{
     append_dataset_generation, encode_blob, encode_dataset, encode_forensic_tree,
-    encode_generational_dataset, encrypt_bcs2, Bcs2View, ForensicEntry, ForensicFileType,
-    ForensicTree, ForensicTreeView, PrivacyMode, ProfileId, ResourceBounds,
+    encode_generational_dataset, encrypt_bcs2, raw_content_id, Bcs2View, ForensicContentTransform,
+    ForensicEntry, ForensicFileType, ForensicTree, ForensicTreeView, LmaSyntheticLineEnding,
+    LmaSyntheticReemitParametersV1, PrivacyMode, ProfileId, ResourceBounds,
+    CAP_LMA_SYNTHETIC_REEMIT, CAP_ZSTD,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -28,6 +30,10 @@ fn main() {
 
     let tree = fixture_tree();
     let tree_bytes = encode_forensic_tree(&tree, bounds).expect("encode tree fixture");
+    let stored_v2_bytes = encode_forensic_tree(&stored_form_tree(false), bounds)
+        .expect("encode stored-form v2 fixture");
+    let parameters_v3_bytes = encode_forensic_tree(&stored_form_tree(true), bounds)
+        .expect("encode transform-parameters v3 fixture");
 
     let mut generation_bytes =
         encode_generational_dataset(&dataset, ProfileId::LML_LOSSLESS_V1, bounds, [])
@@ -52,14 +58,16 @@ fn main() {
         ("dataset.bcs2", dataset_bytes),
         ("forensic-image.bcs2", blob_bytes),
         ("forensic-tree.bcs2", tree_bytes),
+        ("forensic-tree-stored-v2.bcs2", stored_v2_bytes),
+        ("forensic-tree-parameters-v3.bcs2", parameters_v3_bytes),
         ("generational-dataset.bcs2", generation_bytes),
         ("encrypted-discoverable.bcs2", encrypted_bytes),
     ];
     let mut entries = Vec::new();
     for (name, bytes) in vectors {
         fs::write(output.join(name), &bytes).expect("write fixture");
-        let identity = if name == "forensic-tree.bcs2" {
-            ForensicTreeView::parse(&bytes, 0, bounds)
+        let identity = if name.starts_with("forensic-tree") {
+            ForensicTreeView::parse(&bytes, CAP_ZSTD | CAP_LMA_SYNTHETIC_REEMIT, bounds)
                 .expect("parse tree fixture")
                 .content_id()
         } else if name == "encrypted-discoverable.bcs2" {
@@ -93,6 +101,33 @@ fn main() {
         format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
     )
     .expect("write fixture manifest");
+}
+
+fn stored_form_tree(with_parameters: bool) -> ForensicTree {
+    let logical = b"logical source bytes";
+    let mut file = entry(
+        b"source.txt",
+        ForensicFileType::Regular,
+        Some(b"stored transform bytes".to_vec()),
+    );
+    file.content_transform = Some(ForensicContentTransform {
+        capabilities: if with_parameters {
+            CAP_ZSTD | CAP_LMA_SYNTHETIC_REEMIT
+        } else {
+            CAP_ZSTD
+        },
+        logical_content_id: raw_content_id(logical),
+        logical_len: logical.len() as u64,
+        parameters: if with_parameters {
+            LmaSyntheticReemitParametersV1::new(LmaSyntheticLineEnding::CrLf, 2, 7, true).encode()
+        } else {
+            [0; 32]
+        },
+    });
+    ForensicTree {
+        platform: "linux".into(),
+        entries: vec![file],
+    }
 }
 
 fn output_directory() -> PathBuf {

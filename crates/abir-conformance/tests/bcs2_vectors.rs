@@ -40,13 +40,23 @@ fn committed_bcs2_vectors_match_generator_and_rust_reader() {
         if name == "encrypted-discoverable.bcs2" {
             EncryptedEnvelopeView::parse(&expected, ResourceBounds::default()).unwrap();
         } else {
-            let view = Bcs2View::parse(&expected, 0, ResourceBounds::default()).unwrap();
+            let supported = if name.starts_with("forensic-tree") {
+                abir_bcs::CAP_ZSTD | abir_bcs::CAP_LMA_SYNTHETIC_REEMIT
+            } else {
+                0
+            };
+            let view = Bcs2View::parse(&expected, supported, ResourceBounds::default()).unwrap();
             assert_eq!(
                 view.root_content_id().to_string(),
                 vector["root_content_id"].as_str().unwrap()
             );
-            if name == "forensic-tree.bcs2" {
-                ForensicTreeView::parse(&expected, 0, ResourceBounds::default()).unwrap();
+            if name.starts_with("forensic-tree") {
+                ForensicTreeView::parse(
+                    &expected,
+                    abir_bcs::CAP_ZSTD | abir_bcs::CAP_LMA_SYNTHETIC_REEMIT,
+                    ResourceBounds::default(),
+                )
+                .unwrap();
             }
         }
     }

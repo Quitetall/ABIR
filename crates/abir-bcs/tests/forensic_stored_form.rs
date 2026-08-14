@@ -23,7 +23,8 @@
 
 use abir_bcs::{
     encode_forensic_tree, raw_content_id, Bcs2Error, Bcs2View, ForensicContentTransform,
-    ForensicEntry, ForensicFileType, ForensicTree, ForensicTreeView, ResourceBounds, CAP_ZSTD,
+    ForensicEntry, ForensicFileType, ForensicTree, ForensicTreeView, LmaSyntheticLineEnding,
+    LmaSyntheticReemitParametersV1, ResourceBounds, CAP_LMA_SYNTHETIC_REEMIT, CAP_ZSTD,
 };
 
 /// Stand-in for a real transform: the test needs a byte string that differs from
@@ -112,17 +113,26 @@ fn transformation_does_not_disturb_the_chain_of_custody_claim() {
 #[test]
 fn transform_parameters_round_trip_in_metadata_version_three() {
     let mut tree = transformed_tree();
-    let mut parameters = [0_u8; 32];
-    parameters[..8].copy_from_slice(b"template");
+    let parameters =
+        LmaSyntheticReemitParametersV1::new(LmaSyntheticLineEnding::CrLf, 2, 7, true).encode();
     tree.entries[1]
         .content_transform
         .as_mut()
         .expect("transform")
         .parameters = parameters;
+    tree.entries[1]
+        .content_transform
+        .as_mut()
+        .expect("transform")
+        .capabilities |= CAP_LMA_SYNTHETIC_REEMIT;
 
     let bytes = encode_forensic_tree(&tree, ResourceBounds::default()).expect("capsule encodes");
-    let view = ForensicTreeView::parse(&bytes, CAP_ZSTD, ResourceBounds::default())
-        .expect("capable reader parses");
+    let view = ForensicTreeView::parse(
+        &bytes,
+        CAP_ZSTD | CAP_LMA_SYNTHETIC_REEMIT,
+        ResourceBounds::default(),
+    )
+    .expect("capable reader parses");
     let file = view
         .entries()
         .iter()
@@ -146,6 +156,39 @@ fn transform_parameters_round_trip_in_metadata_version_three() {
         .expect("metadata frame present")
         .bytes();
     assert_eq!(&metadata_frame[..2], &[0x83, 0x03]);
+}
+
+#[test]
+fn nonzero_parameters_require_their_registered_capability() {
+    let mut tree = transformed_tree();
+    tree.entries[1]
+        .content_transform
+        .as_mut()
+        .expect("transform")
+        .parameters =
+        LmaSyntheticReemitParametersV1::new(LmaSyntheticLineEnding::Lf, 0, 0, false).encode();
+    assert_eq!(
+        encode_forensic_tree(&tree, ResourceBounds::default()),
+        Err(Bcs2Error::SemanticEncoding)
+    );
+}
+
+#[test]
+fn synthetic_parameter_descriptor_rejects_reserved_bytes() {
+    let mut tree = transformed_tree();
+    let mut parameters =
+        LmaSyntheticReemitParametersV1::new(LmaSyntheticLineEnding::Lf, 0, 0, true).encode();
+    parameters[31] = 1;
+    let transform = tree.entries[1]
+        .content_transform
+        .as_mut()
+        .expect("transform");
+    transform.capabilities |= CAP_LMA_SYNTHETIC_REEMIT;
+    transform.parameters = parameters;
+    assert_eq!(
+        encode_forensic_tree(&tree, ResourceBounds::default()),
+        Err(Bcs2Error::SemanticEncoding)
+    );
 }
 
 #[test]

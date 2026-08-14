@@ -243,6 +243,16 @@ non-zero descriptor uses version 3. A version-2 reader therefore preserves its
 wire contract, while a version-3 reader maps version-2 stored forms to an
 all-zero descriptor.
 
+Exactly one capability in a transform mask may own a non-zero parameter
+descriptor, identified by its `parameter_schema` registry field. Other bits in
+the same mask describe independent decoder requirements and do not reinterpret
+the bytes. Generation 1 registers `lma-synthetic-reemit-v1`: byte 0 is schema
+version 1, byte 1 is source format 1 (`ascii-int-lines`), byte 2 is line ending
+(0 LF, 1 CRLF), byte 3 is leading-whitespace width, byte 4 is field width, byte
+5 is trailing-newline presence (0 or 1), and bytes 6 through 31 are zero.
+Unknown schema versions, formats, tags, non-zero reserved bytes, or non-zero
+parameters without `lma-synthetic-reemit` fail closed.
+
 Regular-file bytes are kind-2 raw frames. Equal file contents are stored once;
 the metadata refers to the same ContentId from every path. The Bundle root
 ContentId domain-separates and hashes the metadata-frame ContentId, so all
