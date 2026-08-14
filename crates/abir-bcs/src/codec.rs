@@ -127,6 +127,15 @@ pub const CAP_LML_ARITHMETIC_V1: u64 = 1 << 6;
 /// with this bit makes that distinction fail closed at the BCS2 envelope.
 pub const CAP_LMQC_LEGACY_V1: u64 = 1 << 7;
 
+/// Required-capability bit for retired raw `LML1` frames.
+///
+/// Current baseline LML readers consume BCS2 codec bundles, not the retired
+/// container grammar. Recovering an `LML1` frame therefore requires a
+/// separately supervised legacy materializer. This bit must accompany
+/// [`CAP_LML_LOSSLESS_V1`] on imported forensic frames so a normal current LML
+/// reader is refused before it encounters bytes it cannot parse.
+pub const CAP_LML1_LEGACY_MATERIALIZE: u64 = 1 << 8;
+
 /// A registered ABIR codec-bundle profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

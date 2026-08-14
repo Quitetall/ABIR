@@ -77,7 +77,10 @@ where
         return Err(Bcs2Error::BoundsExceeded.into());
     }
     validate_metadata(&tree.platform, &tree.entries)?;
-    if metadata_encoded_len(&tree.platform, &tree.entries)? > bounds.max_frame_bytes as usize {
+    let metadata_len = metadata_encoded_len(&tree.platform, &tree.entries)?;
+    if metadata_len > bounds.max_frame_bytes as usize
+        || metadata_len > bounds.max_catalog_bytes as usize
+    {
         return Err(Bcs2Error::BoundsExceeded.into());
     }
 
@@ -307,6 +310,11 @@ impl ForensicFileIndex {
             find_frame(artifact.frames(), metadata_id).ok_or(Bcs2Error::RootIdentityMismatch)?;
         if metadata_frame.required_capabilities() != 0 {
             return Err(Bcs2Error::FrameIdentityMismatch.into());
+        }
+        if metadata_frame.len() > u64::from(artifact.bounds().max_catalog_bytes)
+            || metadata_frame.len() > u64::from(artifact.bounds().max_frame_bytes)
+        {
+            return Err(Bcs2Error::BoundsExceeded.into());
         }
         if forensic_tree_content_id(metadata_id) != artifact.root_content_id() {
             return Err(Bcs2Error::RootIdentityMismatch.into());

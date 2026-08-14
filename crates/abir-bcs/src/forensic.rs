@@ -356,7 +356,10 @@ pub fn encode_forensic_tree(
     }
     let entries = metadata_from_tree(tree)?;
     validate_metadata(&tree.platform, &entries)?;
-    if metadata_encoded_len(&tree.platform, &entries)? > bounds.max_frame_bytes as usize {
+    let metadata_len = metadata_encoded_len(&tree.platform, &entries)?;
+    if metadata_len > bounds.max_frame_bytes as usize
+        || metadata_len > bounds.max_catalog_bytes as usize
+    {
         return Err(Bcs2Error::BoundsExceeded);
     }
     let metadata = encode_metadata(&tree.platform, &entries)?;
@@ -895,15 +898,51 @@ fn validate_sparse_extents(extents: &[SparseExtent], content_len: u64) -> Result
 }
 
 fn validate_path(path: &[u8]) -> Result<(), Bcs2Error> {
-    if path.is_empty() || path[0] == b'/' || path.contains(&0) {
+    // Portable forensic paths always use `/`. Backslashes and colons are
+    // rejected even on Unix so a capsule cannot become traversal, drive-prefix,
+    // UNC, or alternate-data-stream syntax when restored on Windows.
+    if path.is_empty()
+        || path[0] == b'/'
+        || path.contains(&0)
+        || path.contains(&b'\\')
+        || path.contains(&b':')
+    {
         return Err(Bcs2Error::SemanticEncoding);
     }
     for component in path.split(|byte| *byte == b'/') {
-        if component.is_empty() || component == b"." || component == b".." {
+        if component.is_empty()
+            || component == b"."
+            || component == b".."
+            || component.ends_with(b".")
+            || component.ends_with(b" ")
+            || is_windows_device_name(component)
+        {
             return Err(Bcs2Error::SemanticEncoding);
         }
     }
     Ok(())
+}
+
+fn is_windows_device_name(component: &[u8]) -> bool {
+    // Win32 device aliases remain reserved with an extension. Normalize spaces
+    // before that extension too, so `AUX .txt` cannot evade portable checks.
+    let stem = component
+        .split(|byte| *byte == b'.')
+        .next()
+        .unwrap_or(component);
+    let stem = &stem[..stem
+        .iter()
+        .rposition(|byte| *byte != b' ')
+        .map_or(0, |index| index + 1)];
+    let equals = |name: &[u8]| stem.eq_ignore_ascii_case(name);
+    equals(b"CON")
+        || equals(b"PRN")
+        || equals(b"AUX")
+        || equals(b"NUL")
+        || equals(b"CLOCK$")
+        || (stem.len() == 4
+            && (stem[..3].eq_ignore_ascii_case(b"COM") || stem[..3].eq_ignore_ascii_case(b"LPT"))
+            && matches!(stem[3], b'1'..=b'9'))
 }
 
 #[cfg(feature = "std")]

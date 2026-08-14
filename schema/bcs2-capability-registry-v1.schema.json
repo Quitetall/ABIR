@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://abir.quitetall.org/schema/bcs2-capability-registry-v1.schema.json",
+  "title": "ABIR BCS2 capability registry generation 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capabilities", "generation"],
+  "properties": {
+    "generation": {"const": 1},
+    "capabilities": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bit", "mask", "name", "purpose"],
+        "properties": {
+          "bit": {"type": "integer", "minimum": 0, "maximum": 63},
+          "mask": {"type": "integer", "minimum": 1},
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+          "purpose": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

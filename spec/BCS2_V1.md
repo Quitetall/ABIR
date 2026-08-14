@@ -45,6 +45,24 @@ Every artifact begins with one 128-byte little-endian envelope:
 | 88 | 8 | latest generation-footer offset, or zero |
 | 96 | 32 | logical root `ContentId` |
 
+### Capability registry generation 1
+
+`required capability bitmap` is a union of stable, additive bits. Readers
+reject unknown required bits before lending frame bytes. Assignments are frozen
+in `registries/bcs2-capabilities-v1.json`; retired assignments are never reused.
+
+| bit | mask | registered name |
+|---:|---:|---|
+| 0 | 1 | `xchacha20-poly1305` |
+| 1 | 2 | `lml-optimum-v1` |
+| 2 | 4 | `zstd` |
+| 3 | 8 | `lml-lossless-v1` |
+| 4 | 16 | `lma-synthetic-reemit` |
+| 5 | 32 | `lamquant-bfp-v1` |
+| 6 | 64 | `lml-arithmetic-v1` |
+| 7 | 128 | `lmqc-legacy-v1` |
+| 8 | 256 | `lml1-legacy-materialize` |
+
 The only legal root kinds are Dataset (1), Recording (2), Stream (3), Atom (4),
 Blob (5), and Bundle (6).
 The only legal storage contracts are SealedImmutable, SealedGenerational,
@@ -87,8 +105,9 @@ strictly by logical object `ContentId`. Entry bytes 0–31 contain `ContentId`,
 length, and byte 80 is frame kind: 1 is embedded BCS2, 2 is a raw blob, and 3
 is a semantic payload. Byte 81 is zero for kinds 1 and 2; for kind 3 it is the
 registered element-type code (`i8` through `bytes`, codes 1 through 15 in
-`ElementType` declaration order). Bytes 82–95 are zero, and bytes 96–127
-contain the raw BLAKE3-256 frame digest. Frame
+`ElementType` declaration order). Bytes 82–89 contain the frame's required
+capability bitmap, bytes 90–95 are zero, and bytes 96–127 contain the raw
+BLAKE3-256 frame digest. Frame
 payloads occur contiguously between catalog and index in entry order. Readers
 verify both digests and recompute kind-specific identities. Embedded BCS2 frames
 are parsed and their root `ContentId` must equal the entry. Raw frames use

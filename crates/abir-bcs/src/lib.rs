@@ -46,7 +46,8 @@ pub use codec::{
     encode_codec_bundle, CodecBundleCatalog, CodecBundleError, CodecBundleInput, CodecBundleView,
     CodecFidelity, CodecFidelityKind, CodecImplementation, CodecParameter, CodecParameterValue,
     CodecProfile, ModelProvenance, PccpStatus, CAP_LAMQUANT_BFP_V1, CAP_LMA_SYNTHETIC_REEMIT,
-    CAP_LML_ARITHMETIC_V1, CAP_LML_LOSSLESS_V1, CAP_LML_OPTIMUM_V1, CAP_LMQC_LEGACY_V1, CAP_ZSTD,
+    CAP_LML1_LEGACY_MATERIALIZE, CAP_LML_ARITHMETIC_V1, CAP_LML_LOSSLESS_V1, CAP_LML_OPTIMUM_V1,
+    CAP_LMQC_LEGACY_V1, CAP_ZSTD,
 };
 
 #[cfg(feature = "alloc")]

@@ -1,0 +1,14 @@
+{
+  "capabilities": [
+    {"bit": 0, "mask": 1, "name": "xchacha20-poly1305", "purpose": "decrypt and authenticate an encrypted BCS2 envelope"},
+    {"bit": 1, "mask": 2, "name": "lml-optimum-v1", "purpose": "decode an optimum-tier LML frame"},
+    {"bit": 2, "mask": 4, "name": "zstd", "purpose": "decompress a zstd-transformed frame"},
+    {"bit": 3, "mask": 8, "name": "lml-lossless-v1", "purpose": "decode a current baseline LML frame"},
+    {"bit": 4, "mask": 16, "name": "lma-synthetic-reemit", "purpose": "re-emit exact source bytes from a stored synthetic-source template"},
+    {"bit": 5, "mask": 32, "name": "lamquant-bfp-v1", "purpose": "decode block-floating-point training rows"},
+    {"bit": 6, "mask": 64, "name": "lml-arithmetic-v1", "purpose": "decode arithmetic-coded LML subband payloads"},
+    {"bit": 7, "mask": 128, "name": "lmqc-legacy-v1", "purpose": "decode packets imported from a retired LMQC container"},
+    {"bit": 8, "mask": 256, "name": "lml1-legacy-materialize", "purpose": "materialize a retired raw LML1 frame through a supervised legacy adapter"}
+  ],
+  "generation": 1
+}

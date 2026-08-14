@@ -121,7 +121,23 @@ fn forensic_tree_preserves_special_metadata_and_deduplicates_content() {
 #[test]
 fn unsafe_paths_and_semantically_invalid_entries_fail_closed() {
     let bounds = ResourceBounds::default();
-    for path in [b"/absolute".as_slice(), b"../escape", b"a//b", b"a/./b"] {
+    for path in [
+        b"/absolute".as_slice(),
+        b"../escape",
+        b"a//b",
+        b"a/./b",
+        b"..\\escape",
+        b"C:\\absolute",
+        b"directory\\file",
+        b"file:stream",
+        b"NUL",
+        b"con.txt",
+        b"AUX .txt",
+        b"COM1.log",
+        b"lpt9",
+        b"trailing.",
+        b"trailing ",
+    ] {
         let mut regular = entry(path, ForensicFileType::Regular);
         regular.content = Some(Vec::new());
         let tree = ForensicTree {
