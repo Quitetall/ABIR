@@ -62,6 +62,7 @@ Replay semantics bind eleven fixed semantic domains from `TrainingSemanticRole` 
   - `org.quitetall.abir.training.semantic.window-v1`
 
 - executable/runtime domains:
+  - `org.quitetall.abir.training.artifact-v1`
   - `org.quitetall.abir.training.program-v1`
   - `org.quitetall.abir.training.execution-decision-v1`
   - `org.quitetall.abir.training.sampler-v1`
@@ -71,6 +72,11 @@ Replay semantics bind eleven fixed semantic domains from `TrainingSemanticRole` 
   - `org.quitetall.abir.training.stochastic-seed-v1`
 
 The registry file `registries/training-content-domains-v1.json` must enumerate these fixed domains with generation `1`.
+
+`artifact-v1` seals canonical logical artifact bytes supplied by a typed owner.
+Physical locations, modification times, transfer framing, and integrity
+checksums are excluded. This lets execution systems carry ABIR `ContentId`
+without redefining semantic identity or mistaking storage integrity for meaning.
 
 ## Embedded decision log and program
 

@@ -2,6 +2,7 @@
   "registry": "org.quitetall.abir.training.content-domains",
   "version": 1,
   "entries": [
+    {"domain": "org.quitetall.abir.training.artifact-v1", "role": "artifact", "purpose": "semantic-artifact", "generation": 1},
     {"domain": "org.quitetall.abir.training.semantic.augmentation-v1", "role": "augmentation", "purpose": "semantic-identity", "generation": 1},
     {"domain": "org.quitetall.abir.training.semantic.cohort-v1", "role": "cohort", "purpose": "semantic-identity", "generation": 1},
     {"domain": "org.quitetall.abir.training.epoch-v1", "role": "epoch", "purpose": "epoch-scheduling", "generation": 1},

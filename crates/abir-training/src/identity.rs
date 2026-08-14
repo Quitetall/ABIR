@@ -6,6 +6,7 @@ use abir::ContentId;
 /// requires a schema generation, registry update, fixtures, and manifest hash.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrainingContentDomain {
+    ArtifactV1,
     AugmentationV1,
     CohortV1,
     EpochV1,
@@ -29,6 +30,7 @@ pub(crate) enum TrainingContentDomain {
 impl TrainingContentDomain {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::ArtifactV1 => "org.quitetall.abir.training.artifact-v1",
             Self::AugmentationV1 => "org.quitetall.abir.training.semantic.augmentation-v1",
             Self::CohortV1 => "org.quitetall.abir.training.semantic.cohort-v1",
             Self::EpochV1 => "org.quitetall.abir.training.epoch-v1",
@@ -49,6 +51,15 @@ impl TrainingContentDomain {
             Self::WindowV1 => "org.quitetall.abir.training.semantic.window-v1",
         }
     }
+}
+
+/// Seal canonical logical bytes for one training artifact.
+///
+/// Callers own canonicalization of their typed artifact contract before this
+/// boundary. Physical locations, modification times, transfer framing, and
+/// integrity checksums must not enter `canonical_bytes`.
+pub fn training_artifact_content_id(canonical_bytes: &[u8]) -> ContentId {
+    training_content_id(TrainingContentDomain::ArtifactV1, canonical_bytes)
 }
 
 /// Hash exact bytes under one registered ABIR training domain.
