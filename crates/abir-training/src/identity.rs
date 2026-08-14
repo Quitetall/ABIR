@@ -53,13 +53,44 @@ impl TrainingContentDomain {
     }
 }
 
+/// Incremental fixed-domain sealer for canonical logical artifact bytes.
+///
+/// Chunk boundaries do not enter identity. This lets callers seal large
+/// artifacts without materializing a second contiguous buffer.
+pub struct TrainingArtifactContentHasher(blake3::Hasher);
+
+impl TrainingArtifactContentHasher {
+    pub fn new() -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(TrainingContentDomain::ArtifactV1.as_str().as_bytes());
+        hasher.update(&[0]);
+        Self(hasher)
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn finalize(self) -> ContentId {
+        ContentId::from_bytes(*self.0.finalize().as_bytes())
+    }
+}
+
+impl Default for TrainingArtifactContentHasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Seal canonical logical bytes for one training artifact.
 ///
 /// Callers own canonicalization of their typed artifact contract before this
 /// boundary. Physical locations, modification times, transfer framing, and
 /// integrity checksums must not enter `canonical_bytes`.
 pub fn training_artifact_content_id(canonical_bytes: &[u8]) -> ContentId {
-    training_content_id(TrainingContentDomain::ArtifactV1, canonical_bytes)
+    let mut hasher = TrainingArtifactContentHasher::new();
+    hasher.update(canonical_bytes);
+    hasher.finalize()
 }
 
 /// Hash exact bytes under one registered ABIR training domain.

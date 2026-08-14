@@ -1,5 +1,5 @@
 use abir::ContentId;
-use abir_training::training_artifact_content_id;
+use abir_training::{training_artifact_content_id, TrainingArtifactContentHasher};
 
 #[test]
 fn artifact_identity_is_deterministic_and_domain_separated() {
@@ -20,4 +20,9 @@ fn artifact_identity_is_deterministic_and_domain_separated() {
     );
     assert_ne!(first, semantic);
     assert_ne!(first, training_artifact_content_id(b"different"));
+
+    let mut incremental = TrainingArtifactContentHasher::new();
+    incremental.update(b"{\"kind\":");
+    incremental.update(b"\"checkpoint\",\"schema\":1}");
+    assert_eq!(incremental.finalize(), first);
 }

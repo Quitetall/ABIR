@@ -16,7 +16,7 @@ mod model;
 mod program;
 mod store;
 
-pub use identity::training_artifact_content_id;
+pub use identity::{training_artifact_content_id, TrainingArtifactContentHasher};
 
 pub use acceptance::{
     ContinualPromotion, ContinualPromotionEntry, DecisionReplayReceipt, SourceEquivalenceReceipt,

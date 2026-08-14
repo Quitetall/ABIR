@@ -80,6 +80,8 @@ Physical locations, modification times, transfer framing, and integrity
 checksums are excluded. This lets execution systems carry ABIR `ContentId`
 without redefining semantic identity or mistaking storage integrity for meaning.
 It is not a `TrainingSemanticRole` and does not add a twelfth program descriptor.
+Incremental sealing is equivalent to sealing concatenated canonical bytes;
+caller-selected chunk boundaries never enter identity.
 
 ## Embedded decision log and program
 
