@@ -2,7 +2,7 @@ use abir::{
     canonical_debug_json, logical_content_id, payload_content_id, AbirDataset, ContentId,
     ElementType, StorageId,
 };
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::{vec, vec::Vec};
 use core::fmt;
 use minicbor::{Decoder, Encoder};
@@ -278,26 +278,11 @@ pub fn encode_dataset_with_references(
         return Err(Bcs2Error::BoundsExceeded);
     }
     let root_id = logical_content_id(dataset).map_err(|_| Bcs2Error::SemanticEncoding)?;
-    let references: alloc::collections::BTreeSet<_> = references.into_iter().collect();
+    let references: BTreeSet<_> = references.into_iter().collect();
     if references.len() > bounds.max_index_entries as usize {
         return Err(Bcs2Error::BoundsExceeded);
     }
-    let mut encoder = Encoder::new(Vec::new());
-    encoder
-        .map(3)
-        .and_then(|encoder| encoder.u8(1))
-        .and_then(|encoder| encoder.bytes(&semantic_json))
-        .and_then(|encoder| encoder.u8(2))
-        .and_then(|encoder| encoder.bytes(root_id.as_bytes()))
-        .and_then(|encoder| encoder.u8(3))
-        .and_then(|encoder| encoder.array(references.len() as u64))
-        .map_err(|_| Bcs2Error::SemanticEncoding)?;
-    for reference in references {
-        encoder
-            .bytes(reference.as_bytes())
-            .map_err(|_| Bcs2Error::SemanticEncoding)?;
-    }
-    let catalog = encoder.into_writer();
+    let catalog = encode_catalog(&semantic_json, root_id, &references)?;
     if catalog.len() > bounds.max_catalog_bytes as usize {
         return Err(Bcs2Error::BoundsExceeded);
     }
@@ -310,28 +295,19 @@ pub fn encode_dataset_with_references(
         .checked_add(INDEX_LEN)
         .ok_or(Bcs2Error::BoundsExceeded)?;
     let mut bytes = vec![0_u8; total];
-    bytes[..8].copy_from_slice(&BCS2_MAGIC);
-    put_u16(&mut bytes, 8, WIRE_MAJOR);
-    put_u16(&mut bytes, 10, WIRE_MINOR);
-    put_u32(&mut bytes, 12, BCS2_HEADER_LEN as u32);
-    put_u32(&mut bytes, 16, profile.get());
-    put_u32(&mut bytes, 20, SEMANTIC_GENERATION);
-    bytes[40] = root as u8;
-    bytes[41] = StorageContract::SealedImmutable as u8;
-    bytes[42] = PrivacyMode::Plaintext as u8;
-    bytes[43] = 1;
-    put_u32(&mut bytes, 44, bounds.max_catalog_bytes);
-    put_u32(&mut bytes, 48, bounds.max_index_entries);
-    put_u32(&mut bytes, 52, bounds.max_frame_bytes);
-    put_u64(&mut bytes, 56, catalog_offset as u64);
-    put_u64(&mut bytes, 64, catalog.len() as u64);
-    put_u64(&mut bytes, 72, index_offset as u64);
-    put_u64(&mut bytes, 80, INDEX_LEN as u64);
-    bytes[96..128].copy_from_slice(root_id.as_bytes());
+    bytes[..BCS2_HEADER_LEN].copy_from_slice(&encode_sealed_header(
+        profile,
+        root,
+        root_id,
+        0,
+        bounds,
+        catalog.len() as u64,
+        index_offset as u64,
+        INDEX_LEN as u64,
+    ));
     bytes[catalog_offset..index_offset].copy_from_slice(&catalog);
-    bytes[index_offset..index_offset + 8].copy_from_slice(&INDEX_MAGIC);
-    let catalog_digest = blake3::hash(&catalog);
-    bytes[index_offset + 16..index_offset + 48].copy_from_slice(catalog_digest.as_bytes());
+    bytes[index_offset..index_offset + INDEX_LEN]
+        .copy_from_slice(&encode_index_header(0, &catalog));
     Ok(bytes)
 }
 
@@ -1065,17 +1041,7 @@ fn encode_raw_root_inner<'a>(
         return Err(Bcs2Error::BoundsExceeded);
     }
 
-    let mut encoder = Encoder::new(Vec::new());
-    encoder
-        .map(3)
-        .and_then(|encoder| encoder.u8(1))
-        .and_then(|encoder| encoder.bytes(semantic_json))
-        .and_then(|encoder| encoder.u8(2))
-        .and_then(|encoder| encoder.bytes(root_content_id.as_bytes()))
-        .and_then(|encoder| encoder.u8(3))
-        .and_then(|encoder| encoder.array(0))
-        .map_err(|_| Bcs2Error::SemanticEncoding)?;
-    let catalog = encoder.into_writer();
+    let catalog = encode_catalog(semantic_json, root_content_id, &BTreeSet::new())?;
     if catalog.len() > bounds.max_catalog_bytes as usize {
         return Err(Bcs2Error::BoundsExceeded);
     }
@@ -1103,39 +1069,21 @@ fn encode_raw_root_inner<'a>(
         .checked_add(index_len)
         .ok_or(Bcs2Error::BoundsExceeded)?;
     let mut bytes = vec![0_u8; total];
-    bytes[..8].copy_from_slice(&BCS2_MAGIC);
-    put_u16(&mut bytes, 8, WIRE_MAJOR);
-    put_u16(&mut bytes, 10, WIRE_MINOR);
-    put_u32(&mut bytes, 12, BCS2_HEADER_LEN as u32);
-    put_u32(&mut bytes, 16, profile.get());
-    put_u32(&mut bytes, 20, SEMANTIC_GENERATION);
-    // Union of every frame's declared requirement. Readers AND-mask this against
-    // what they support and refuse the whole artifact up front, so no consumer
-    // ever gets halfway through a parse and then discovers it cannot interpret a
-    // frame. Artifacts with no transformed frames write zero here and stay
-    // readable by any reader, exactly as before.
-    put_u64(&mut bytes, 24, union_capabilities);
-    bytes[40] = root_kind as u8;
-    bytes[41] = StorageContract::SealedImmutable as u8;
-    bytes[42] = PrivacyMode::Plaintext as u8;
-    bytes[43] = 1;
-    put_u32(&mut bytes, 44, bounds.max_catalog_bytes);
-    put_u32(&mut bytes, 48, bounds.max_index_entries);
-    put_u32(&mut bytes, 52, bounds.max_frame_bytes);
-    put_u64(&mut bytes, 56, BCS2_HEADER_LEN as u64);
-    put_u64(&mut bytes, 64, catalog.len() as u64);
-    put_u64(&mut bytes, 72, index_offset as u64);
-    put_u64(&mut bytes, 80, index_len as u64);
-    bytes[96..128].copy_from_slice(root_content_id.as_bytes());
+    bytes[..BCS2_HEADER_LEN].copy_from_slice(&encode_sealed_header(
+        profile,
+        root_kind,
+        root_content_id,
+        union_capabilities,
+        bounds,
+        catalog.len() as u64,
+        index_offset as u64,
+        index_len as u64,
+    ));
     bytes[BCS2_HEADER_LEN..frame_offset].copy_from_slice(&catalog);
 
-    bytes[index_offset..index_offset + 8].copy_from_slice(&INDEX_MAGIC);
-    put_u32(
-        &mut bytes,
-        index_offset + 8,
-        u32::try_from(frames.len()).map_err(|_| Bcs2Error::BoundsExceeded)?,
-    );
-    bytes[index_offset + 16..index_offset + 48].copy_from_slice(blake3::hash(&catalog).as_bytes());
+    let frame_count = u32::try_from(frames.len()).map_err(|_| Bcs2Error::BoundsExceeded)?;
+    bytes[index_offset..index_offset + INDEX_LEN]
+        .copy_from_slice(&encode_index_header(frame_count, &catalog));
     let mut next_frame_offset = frame_offset;
     for (entry_number, (content_id, (frame, capabilities))) in frames.iter().enumerate() {
         let frame_end = next_frame_offset
@@ -1143,19 +1091,104 @@ fn encode_raw_root_inner<'a>(
             .ok_or(Bcs2Error::BoundsExceeded)?;
         bytes[next_frame_offset..frame_end].copy_from_slice(frame);
         let entry = index_offset + INDEX_LEN + entry_number * INDEX_ENTRY_LEN;
-        bytes[entry..entry + 32].copy_from_slice(content_id.as_bytes());
-        bytes[entry + 32..entry + 64].copy_from_slice(raw_storage_id(frame).as_bytes());
-        put_u64(&mut bytes, entry + 64, next_frame_offset as u64);
-        put_u64(&mut bytes, entry + 72, frame.len() as u64);
-        bytes[entry + 80] = FrameKind::RawBlob as u8;
-        put_u64(&mut bytes, entry + 82, *capabilities);
-        bytes[entry + 96..entry + 128].copy_from_slice(blake3::hash(frame).as_bytes());
+        bytes[entry..entry + INDEX_ENTRY_LEN].copy_from_slice(&encode_raw_index_entry(
+            *content_id,
+            raw_storage_id(frame),
+            next_frame_offset as u64,
+            frame.len() as u64,
+            *capabilities,
+            *blake3::hash(frame).as_bytes(),
+        ));
         next_frame_offset = frame_end;
     }
     // The reader must be able to decode every frame it is handed, so verify with
     // exactly the union we declared rather than with zero.
     Bcs2View::parse(&bytes, union_capabilities, bounds)?;
     Ok(bytes)
+}
+
+pub(crate) fn encode_catalog(
+    semantic_json: &[u8],
+    root_content_id: ContentId,
+    references: &BTreeSet<ContentId>,
+) -> Result<Vec<u8>, Bcs2Error> {
+    let mut encoder = Encoder::new(Vec::new());
+    encoder
+        .map(3)
+        .and_then(|encoder| encoder.u8(1))
+        .and_then(|encoder| encoder.bytes(semantic_json))
+        .and_then(|encoder| encoder.u8(2))
+        .and_then(|encoder| encoder.bytes(root_content_id.as_bytes()))
+        .and_then(|encoder| encoder.u8(3))
+        .and_then(|encoder| encoder.array(references.len() as u64))
+        .map_err(|_| Bcs2Error::SemanticEncoding)?;
+    for reference in references {
+        encoder
+            .bytes(reference.as_bytes())
+            .map_err(|_| Bcs2Error::SemanticEncoding)?;
+    }
+    Ok(encoder.into_writer())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_sealed_header(
+    profile: ProfileId,
+    root_kind: RootKind,
+    root_content_id: ContentId,
+    required_capabilities: u64,
+    bounds: ResourceBounds,
+    catalog_len: u64,
+    index_offset: u64,
+    index_len: u64,
+) -> [u8; BCS2_HEADER_LEN] {
+    let mut header = [0_u8; BCS2_HEADER_LEN];
+    header[..8].copy_from_slice(&BCS2_MAGIC);
+    put_u16(&mut header, 8, WIRE_MAJOR);
+    put_u16(&mut header, 10, WIRE_MINOR);
+    put_u32(&mut header, 12, BCS2_HEADER_LEN as u32);
+    put_u32(&mut header, 16, profile.get());
+    put_u32(&mut header, 20, SEMANTIC_GENERATION);
+    put_u64(&mut header, 24, required_capabilities);
+    header[40] = root_kind as u8;
+    header[41] = StorageContract::SealedImmutable as u8;
+    header[42] = PrivacyMode::Plaintext as u8;
+    header[43] = 1;
+    put_u32(&mut header, 44, bounds.max_catalog_bytes);
+    put_u32(&mut header, 48, bounds.max_index_entries);
+    put_u32(&mut header, 52, bounds.max_frame_bytes);
+    put_u64(&mut header, 56, BCS2_HEADER_LEN as u64);
+    put_u64(&mut header, 64, catalog_len);
+    put_u64(&mut header, 72, index_offset);
+    put_u64(&mut header, 80, index_len);
+    header[96..128].copy_from_slice(root_content_id.as_bytes());
+    header
+}
+
+pub(crate) fn encode_index_header(frame_count: u32, catalog: &[u8]) -> [u8; INDEX_LEN] {
+    let mut header = [0_u8; INDEX_LEN];
+    header[..8].copy_from_slice(&INDEX_MAGIC);
+    put_u32(&mut header, 8, frame_count);
+    header[16..48].copy_from_slice(blake3::hash(catalog).as_bytes());
+    header
+}
+
+pub(crate) fn encode_raw_index_entry(
+    content_id: ContentId,
+    storage_id: StorageId,
+    offset: u64,
+    len: u64,
+    capabilities: u64,
+    digest: [u8; 32],
+) -> [u8; INDEX_ENTRY_LEN] {
+    let mut entry = [0_u8; INDEX_ENTRY_LEN];
+    entry[..32].copy_from_slice(content_id.as_bytes());
+    entry[32..64].copy_from_slice(storage_id.as_bytes());
+    put_u64(&mut entry, 64, offset);
+    put_u64(&mut entry, 72, len);
+    entry[80] = FrameKind::RawBlob as u8;
+    put_u64(&mut entry, 82, capabilities);
+    entry[96..128].copy_from_slice(&digest);
+    entry
 }
 
 pub(crate) fn get_u16(bytes: &[u8], offset: usize) -> Result<u16, Bcs2Error> {

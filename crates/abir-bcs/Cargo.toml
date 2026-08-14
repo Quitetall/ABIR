@@ -27,6 +27,9 @@ serde = { version = "1", default-features = false, features = ["alloc", "derive"
 serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
 zeroize = { version = "=1.8.1", default-features = false, optional = true }
 
+[dev-dependencies]
+tempfile = "=3.15.0"
+
 [lib]
 name = "abir_bcs"
 path = "src/lib.rs"

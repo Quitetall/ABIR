@@ -136,6 +136,38 @@ pub struct ForensicTree {
     pub entries: Vec<ForensicEntry>,
 }
 
+/// Content-addressed forensic tree metadata without resident frame bytes.
+///
+/// This is the semantic input to the streaming file writer. Each regular entry
+/// declares the identity and length of its stored frame; a caller supplies those
+/// frames lazily by [`ContentId`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForensicTreeMetadata {
+    pub platform: String,
+    pub entries: Vec<ForensicEntryMetadata>,
+}
+
+impl ForensicTreeMetadata {
+    pub fn content_id(&self) -> Result<ContentId, Bcs2Error> {
+        validate_metadata(&self.platform, &self.entries)?;
+        let metadata = encode_metadata(&self.platform, &self.entries)?;
+        Ok(forensic_tree_content_id(raw_content_id(&metadata)))
+    }
+}
+
+impl TryFrom<&ForensicTree> for ForensicTreeMetadata {
+    type Error = Bcs2Error;
+
+    fn try_from(tree: &ForensicTree) -> Result<Self, Self::Error> {
+        let metadata = Self {
+            platform: tree.platform.clone(),
+            entries: metadata_from_tree(tree)?,
+        };
+        validate_metadata(&metadata.platform, &metadata.entries)?;
+        Ok(metadata)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForensicEntryMetadata {
     pub path: Vec<u8>,
@@ -217,6 +249,9 @@ impl<'a> ForensicTreeView<'a> {
             .iter()
             .find(|frame| frame.content_id() == metadata_id)
             .ok_or(Bcs2Error::RootIdentityMismatch)?;
+        if metadata_frame.required_capabilities() != 0 {
+            return Err(Bcs2Error::FrameIdentityMismatch);
+        }
         if forensic_tree_content_id(metadata_id) != artifact.root_content_id() {
             return Err(Bcs2Error::RootIdentityMismatch);
         }
@@ -316,8 +351,14 @@ pub fn encode_forensic_tree(
     tree: &ForensicTree,
     bounds: ResourceBounds,
 ) -> Result<Vec<u8>, Bcs2Error> {
+    if tree.entries.len() > bounds.max_index_entries as usize {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
     let entries = metadata_from_tree(tree)?;
     validate_metadata(&tree.platform, &entries)?;
+    if metadata_encoded_len(&tree.platform, &entries)? > bounds.max_frame_bytes as usize {
+        return Err(Bcs2Error::BoundsExceeded);
+    }
     let metadata = encode_metadata(&tree.platform, &entries)?;
     let metadata_id = raw_content_id(&metadata);
     let root_content_id = forensic_tree_content_id(metadata_id);
@@ -405,7 +446,7 @@ fn metadata_from_tree(tree: &ForensicTree) -> Result<Vec<ForensicEntryMetadata>,
         .collect()
 }
 
-fn forensic_tree_content_id(metadata_id: ContentId) -> ContentId {
+pub(crate) fn forensic_tree_content_id(metadata_id: ContentId) -> ContentId {
     let mut hasher = blake3::Hasher::new();
     hasher.update(FORENSIC_TREE_DOMAIN);
     hasher.update(metadata_id.as_bytes());
@@ -432,13 +473,47 @@ const fn entry_field_count(version: u8) -> u64 {
     }
 }
 
-fn encode_metadata(
+pub(crate) fn encode_metadata(
     platform: &str,
     entries: &[ForensicEntryMetadata],
 ) -> Result<Vec<u8>, Bcs2Error> {
+    let encoded_len = metadata_encoded_len(platform, entries)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(encoded_len)
+        .map_err(|_| Bcs2Error::BoundsExceeded)?;
+    let bytes = encode_metadata_to(bytes, platform, entries)?;
+    debug_assert_eq!(bytes.len(), encoded_len);
+    Ok(bytes)
+}
+
+pub(crate) fn metadata_encoded_len(
+    platform: &str,
+    entries: &[ForensicEntryMetadata],
+) -> Result<usize, Bcs2Error> {
+    Ok(encode_metadata_to(MetadataLength::default(), platform, entries)?.0)
+}
+
+#[derive(Default)]
+struct MetadataLength(usize);
+
+impl minicbor::encode::Write for MetadataLength {
+    type Error = ();
+
+    fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.0 = self.0.checked_add(bytes.len()).ok_or(())?;
+        Ok(())
+    }
+}
+
+fn encode_metadata_to<W: minicbor::encode::Write>(
+    writer: W,
+    platform: &str,
+    entries: &[ForensicEntryMetadata],
+) -> Result<W, Bcs2Error> {
     let version = metadata_version(entries);
     let entry_fields = entry_field_count(version);
-    let mut encoder = Encoder::new(Vec::new());
+    let mut encoder = Encoder::new(writer);
     encoder
         .array(3)
         .and_then(|encoder| encoder.u8(version))
@@ -512,7 +587,7 @@ fn encode_metadata(
     Ok(encoder.into_writer())
 }
 
-fn decode_metadata(
+pub(crate) fn decode_metadata(
     bytes: &[u8],
     max_items: usize,
 ) -> Result<(String, Vec<ForensicEntryMetadata>), Bcs2Error> {
@@ -627,7 +702,10 @@ fn decode_metadata(
     Ok((platform, entries))
 }
 
-fn validate_metadata(platform: &str, entries: &[ForensicEntryMetadata]) -> Result<(), Bcs2Error> {
+pub(crate) fn validate_metadata(
+    platform: &str,
+    entries: &[ForensicEntryMetadata],
+) -> Result<(), Bcs2Error> {
     if platform.is_empty()
         || platform.len() > 64
         || !platform
@@ -637,27 +715,22 @@ fn validate_metadata(platform: &str, entries: &[ForensicEntryMetadata]) -> Resul
         return Err(Bcs2Error::SemanticEncoding);
     }
     let mut prior_path: Option<&[u8]> = None;
-    let regular_paths: BTreeSet<&[u8]> = entries
-        .iter()
-        .filter(|entry| entry.file_type == ForensicFileType::Regular)
-        .map(|entry| entry.path.as_slice())
-        .collect();
-    let directory_paths: BTreeSet<&[u8]> = entries
-        .iter()
-        .filter(|entry| entry.file_type == ForensicFileType::Directory)
-        .map(|entry| entry.path.as_slice())
-        .collect();
     for entry in entries {
         validate_path(&entry.path)?;
         if prior_path.is_some_and(|prior| prior >= entry.path.as_slice()) {
             return Err(Bcs2Error::SemanticEncoding);
         }
+        prior_path = Some(&entry.path);
+    }
+    for entry in entries {
         if let Some(parent) = parent_path(&entry.path) {
-            if !directory_paths.contains(parent) {
+            let Some(parent_entry) = find_entry_by_path(entries, parent) else {
+                return Err(Bcs2Error::SemanticEncoding);
+            };
+            if parent_entry.file_type != ForensicFileType::Directory {
                 return Err(Bcs2Error::SemanticEncoding);
             }
         }
-        prior_path = Some(&entry.path);
         for timestamp in entry.timestamps.into_iter().flatten() {
             if timestamp.nanoseconds >= 1_000_000_000 {
                 return Err(Bcs2Error::SemanticEncoding);
@@ -729,11 +802,9 @@ fn validate_metadata(platform: &str, entries: &[ForensicEntryMetadata]) -> Resul
                     .as_deref()
                     .ok_or(Bcs2Error::SemanticEncoding)?;
                 validate_path(target)?;
-                let target_entry = entries
-                    .iter()
-                    .find(|candidate| candidate.path.as_slice() == target)
-                    .ok_or(Bcs2Error::SemanticEncoding)?;
-                if !regular_paths.contains(target)
+                let target_entry =
+                    find_entry_by_path(entries, target).ok_or(Bcs2Error::SemanticEncoding)?;
+                if target_entry.file_type != ForensicFileType::Regular
                     || entry.mode != target_entry.mode
                     || entry.owner != target_entry.owner
                     || entry.timestamps != target_entry.timestamps
@@ -778,6 +849,16 @@ fn validate_metadata(platform: &str, entries: &[ForensicEntryMetadata]) -> Resul
         }
     }
     Ok(())
+}
+
+fn find_entry_by_path<'a>(
+    entries: &'a [ForensicEntryMetadata],
+    path: &[u8],
+) -> Option<&'a ForensicEntryMetadata> {
+    entries
+        .binary_search_by(|entry| entry.path.as_slice().cmp(path))
+        .ok()
+        .map(|index| &entries[index])
 }
 
 fn require_no_payload_fields(entry: &ForensicEntryMetadata) -> Result<(), Bcs2Error> {
@@ -836,7 +917,7 @@ fn parent_path(path: &[u8]) -> Option<&[u8]> {
         .map(|separator| &path[..separator])
 }
 
-fn parse_semantic_json(bytes: &[u8]) -> Result<(ContentId, usize), Bcs2Error> {
+pub(crate) fn parse_semantic_json(bytes: &[u8]) -> Result<(ContentId, usize), Bcs2Error> {
     const PREFIX: &str = "{\"forensic_tree\":{\"content_id\":\"";
     const ENTRIES: &str = "\",\"entries\":";
     const SUFFIX: &str = ",\"version\":1}}";
@@ -876,8 +957,8 @@ fn require_array(decoder: &mut Decoder<'_>, expected: u64) -> Result<(), Bcs2Err
     Ok(())
 }
 
-fn encode_pair_u32(
-    encoder: &mut Encoder<Vec<u8>>,
+fn encode_pair_u32<W: minicbor::encode::Write>(
+    encoder: &mut Encoder<W>,
     value: Option<(u32, u32)>,
 ) -> Result<(), Bcs2Error> {
     match value {
@@ -907,8 +988,8 @@ fn decode_pair_u32(decoder: &mut Decoder<'_>) -> Result<Option<(u32, u32)>, Bcs2
     )))
 }
 
-fn encode_timestamp(
-    encoder: &mut Encoder<Vec<u8>>,
+fn encode_timestamp<W: minicbor::encode::Write>(
+    encoder: &mut Encoder<W>,
     value: Option<ForensicTimestamp>,
 ) -> Result<(), Bcs2Error> {
     match value {
@@ -938,8 +1019,8 @@ fn decode_timestamp(decoder: &mut Decoder<'_>) -> Result<Option<ForensicTimestam
     }))
 }
 
-fn encode_optional_bytes(
-    encoder: &mut Encoder<Vec<u8>>,
+fn encode_optional_bytes<W: minicbor::encode::Write>(
+    encoder: &mut Encoder<W>,
     value: Option<&[u8]>,
 ) -> Result<(), Bcs2Error> {
     match value {
@@ -968,8 +1049,8 @@ fn decode_optional_bytes(decoder: &mut Decoder<'_>) -> Result<Option<Vec<u8>>, B
     ))
 }
 
-fn encode_optional_content_id(
-    encoder: &mut Encoder<Vec<u8>>,
+fn encode_optional_content_id<W: minicbor::encode::Write>(
+    encoder: &mut Encoder<W>,
     value: Option<ContentId>,
 ) -> Result<(), Bcs2Error> {
     match value {

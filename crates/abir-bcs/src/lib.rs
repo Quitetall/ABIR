@@ -11,6 +11,8 @@ mod codec;
 mod file;
 #[cfg(feature = "alloc")]
 mod forensic;
+#[cfg(feature = "std")]
+mod forensic_file;
 #[cfg(feature = "alloc")]
 mod generation;
 #[cfg(feature = "alloc")]
@@ -32,8 +34,8 @@ pub use generation::{
 #[cfg(feature = "alloc")]
 pub use forensic::{
     encode_forensic_tree, ForensicContentTransform, ForensicEntry, ForensicEntryMetadata,
-    ForensicFileType, ForensicStoredForm, ForensicTimestamp, ForensicTree, ForensicTreeView,
-    ForensicXattr, SparseExtent,
+    ForensicFileType, ForensicStoredForm, ForensicTimestamp, ForensicTree, ForensicTreeMetadata,
+    ForensicTreeView, ForensicXattr, SparseExtent,
 };
 
 #[cfg(feature = "alloc")]
@@ -61,6 +63,8 @@ pub use privacy::{
 
 #[cfg(feature = "std")]
 pub use file::{Bcs2FileError, Bcs2FileIndex, FileFrame};
+#[cfg(feature = "std")]
+pub use forensic_file::{write_forensic_tree_streaming, ForensicFileIndex, ForensicWriteReceipt};
 #[cfg(feature = "std")]
 pub use restore::{
     restore_forensic_tree_sandboxed, RestoreError, RestoreMode, RestoreOmission, RestoreReport,
