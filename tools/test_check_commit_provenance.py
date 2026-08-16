@@ -202,5 +202,122 @@ class CorrectionTests(unittest.TestCase):
         )
 
 
+class MergeAuthorshipTests(unittest.TestCase):
+    """A merge authors its conflict resolutions, never what it inherited.
+
+    The hook enforced this on the index via MERGE_HEAD, but MERGE_HEAD is gone
+    by the time CI re-checks the finished commit -- so merges that passed
+    locally failed on the server, demanding a per-file trailer for every file
+    the merged branch contributed. That claim would be false.
+    """
+
+    def _git(self, repo: Path, *args: str) -> str:
+        import subprocess
+
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            env={
+                "GIT_AUTHOR_NAME": "T",
+                "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                "GIT_COMMITTER_NAME": "T",
+                "GIT_COMMITTER_EMAIL": "t@example.invalid",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_SYSTEM": "/dev/null",
+                "PATH": __import__("os").environ.get("PATH", ""),
+            },
+        ).stdout.strip()
+
+    def test_clean_merge_reports_only_what_it_reconciled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init", "-q", "-b", "main")
+            (repo / "base.txt").write_text("base\n", encoding="utf-8")
+            self._git(repo, "add", "base.txt")
+            self._git(repo, "commit", "-q", "-m", "base")
+
+            self._git(repo, "checkout", "-q", "-b", "side")
+            (repo / "from_side.txt").write_text("side\n", encoding="utf-8")
+            self._git(repo, "add", "from_side.txt")
+            self._git(repo, "commit", "-q", "-m", "side adds a file")
+
+            self._git(repo, "checkout", "-q", "main")
+            (repo / "from_main.txt").write_text("main\n", encoding="utf-8")
+            self._git(repo, "add", "from_main.txt")
+            self._git(repo, "commit", "-q", "-m", "main adds a file")
+
+            self._git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+            merge_sha = self._git(repo, "rev-parse", "HEAD")
+
+            paths = {
+                change.path.decode() for change in PROVENANCE.commit_changes(merge_sha, repo)
+            }
+
+            # from_side.txt arrived verbatim from the second parent: the merger
+            # did not author it, so it must not demand a trailer here.
+            self.assertNotIn("from_side.txt", paths)
+            self.assertEqual(paths, set())
+
+    def test_non_merge_commit_is_unaffected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init", "-q", "-b", "main")
+            (repo / "only.txt").write_text("x\n", encoding="utf-8")
+            self._git(repo, "add", "only.txt")
+            self._git(repo, "commit", "-q", "-m", "single parent")
+            sha = self._git(repo, "rev-parse", "HEAD")
+
+            paths = {
+                change.path.decode() for change in PROVENANCE.commit_changes(sha, repo)
+            }
+            self.assertEqual(paths, {"only.txt"})
+
+
+class ErrataTests(unittest.TestCase):
+    """Errata excuse ONE operation mismatch, and only the exact one recorded."""
+
+    def test_excuses_only_the_exact_recorded_mismatch(self) -> None:
+        entry = {"declared_operation": "modify", "actual_operation": "add"}
+        self.assertTrue(PROVENANCE._errata_excuses(entry, "modify", "add"))
+        # A different mismatch on the same path is NOT excused.
+        self.assertFalse(PROVENANCE._errata_excuses(entry, "add", "delete"))
+        self.assertFalse(PROVENANCE._errata_excuses(entry, "modify", "delete"))
+        # Absent record excuses nothing.
+        self.assertFalse(PROVENANCE._errata_excuses(None, "modify", "add"))
+
+    def test_absent_file_is_the_normal_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(PROVENANCE.load_errata(Path(directory)), {})
+
+    def test_records_are_keyed_by_commit_and_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / PROVENANCE.ERRATA_PATH
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "corrections": [
+                            {
+                                "commit": "c" * 40,
+                                "path": "contract.toml",
+                                "declared_operation": "modify",
+                                "actual_operation": "add",
+                                "reason": "verified against the parent tree",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            errata = PROVENANCE.load_errata(Path(directory))
+            self.assertIn("contract.toml", errata["c" * 40])
+            # A record for one commit never applies to another.
+            self.assertNotIn("d" * 40, errata)
+
+
 if __name__ == "__main__":
     unittest.main()

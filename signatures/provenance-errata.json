@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Recorded corrections to provenance trailers on commits that are already",
+    "published. Append-only: an entry states what a commit's message claimed,",
+    "what git actually recorded, and why the two differ. Nothing here edits or",
+    "hides history -- the wrong trailer stays in the commit, and this file is",
+    "the correction beside it.",
+    "",
+    "Why not amend the commit: this repository's history is append-only,",
+    "because the signed ADR 0139 P6/P7 evidence is only valid while its bound",
+    "revisions remain in ancestry. Rewriting also renumbers every descendant,",
+    "which invalidates each source-bound evidence document and gitlink naming a",
+    "root revision.",
+    "",
+    "Scope is deliberately tiny. An entry excuses ONE operation mismatch on ONE",
+    "path in ONE commit, and only when both declared_operation and",
+    "actual_operation match what is actually there. It cannot excuse a missing",
+    "or unexpected File-Contribution, a bad actor, or a wildcard. If the facts",
+    "change, the record stops applying and the gate fails again.",
+    "",
+    "This file is DISJOINT from .provenance-corrections.json beside it, which",
+    "repairs the ACTORS a message declared. This one repairs the OPERATION it",
+    "claimed for a path. Neither mechanism can do the other's job."
+  ],
+  "corrections": [
+    {
+      "commit": "37cd630497751462030cdc2068548243cf69ffa4",
+      "path": "contract.toml",
+      "declared_operation": "modify",
+      "actual_operation": "add",
+      "reason": "The commit message declared contract.toml as modified, but the file did not exist in the parent tree and the commit created it. Verified with `git cat-file -e 37cd6304^:contract.toml` (absent) and `git show --stat`, which reports the file as 46 insertions with no deletions. A mis-declaration of operation only; the actor and the per-file attribution are correct.",
+      "recorded_by": "ai:anthropic-claude-code-opus"
+    }
+  ]
+}

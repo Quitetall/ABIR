@@ -241,7 +241,45 @@ def _commit_raw_diff(repo: Path, commit: str) -> bytes:
 
 
 def commit_changes(commit: str, repo: Path | str = Path(".")) -> list[ChangedFile]:
-    return parse_raw_diff(_commit_raw_diff(Path(repo), commit))
+    """Files a commit authored -- for a merge, only what it reconciled.
+
+    `_drop_inherited_merge_paths` already applies this rule to the staged path,
+    but that is only the half the hook sees: the hook checks the index before a
+    commit exists, and CI re-checks the finished commit, where MERGE_HEAD is
+    gone. So a merge that passed locally still failed when re-checked, demanding
+    a per-file trailer for every file the second parent contributed. That claim
+    would be false -- a clean merge authors nothing, and those files already
+    carry their attribution in the commits that wrote them.
+
+    `_commit_raw_diff` diffs a merge against its FIRST parent, which is what
+    makes the second parent's whole contribution appear. Comparing each path
+    against the second parent removes what arrived verbatim, leaving the
+    conflict resolutions the merger actually wrote.
+    """
+    repo_path = Path(repo)
+    changes = parse_raw_diff(_commit_raw_diff(repo_path, commit))
+    parents = _run_git(repo_path, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+    if len(parents) < 2:
+        return changes
+
+    second = parents[1].decode("ascii")
+
+    def _blob(ref: str, path: bytes) -> bytes | None:
+        try:
+            return _run_git(
+                repo_path,
+                "rev-parse",
+                f"{ref}:{path.decode('utf-8', 'surrogateescape')}",
+            ).strip()
+        except Exception:  # noqa: BLE001 - absent on that side
+            return None
+
+    # Absence counts as agreement, so an inherited deletion is inherited too.
+    return [
+        change
+        for change in changes
+        if _blob(commit, change.path) != _blob(second, change.path)
+    ]
 
 
 def _json_trailers(message: str, key: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -406,7 +444,58 @@ def _validate_ai_actor(
             errors.append(f"{label}: {field} must be non-empty")
 
 
-def validate_message(message: str, changes: Sequence[ChangedFile]) -> list[str]:
+ERRATA_PATH = "signatures/provenance-errata.json"
+
+
+def load_errata(repo: Path | str = Path(".")) -> dict[str, dict[str, dict[str, str]]]:
+    """Read the recorded operation errata, keyed by commit then path.
+
+    A published commit's trailers cannot be edited without rewriting history,
+    and this repository's history is append-only -- the signed ADR 0139
+    evidence is only valid while its bound revisions stay in ancestry. So a
+    trailer that was wrong when it was written is corrected the same way
+    everything else here is retired: by appending a record, never by editing
+    the past.
+
+    This is disjoint from `.provenance-corrections.json`, which repairs the
+    ACTORS a message declared. This repairs the OPERATION it claimed for a
+    path. Neither can do the other's job.
+
+    Absent or empty file means no errata, which is the normal state.
+    """
+    path = Path(repo) / ERRATA_PATH
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    corrections: dict[str, dict[str, dict[str, str]]] = {}
+    for entry in document.get("corrections", []):
+        corrections.setdefault(entry["commit"], {})[entry["path"]] = entry
+    return corrections
+
+
+def _errata_excuses(entry: dict[str, str] | None, declared: str, actual: str) -> bool:
+    """True only for the exact mismatch a correction records.
+
+    Deliberately narrow. The record must name both what the message claimed
+    and what git actually did, and both must match what is in front of us. It
+    cannot be a wildcard, it cannot excuse a missing or unexpected
+    File-Contribution, and it cannot excuse a different mismatch on the same
+    path later -- if the facts change, the record stops applying and the gate
+    fails again.
+
+    That is the difference between recording a correction and disabling a
+    check.
+    """
+    if entry is None:
+        return False
+    return entry.get("declared_operation") == declared and entry.get("actual_operation") == actual
+
+
+def validate_message(
+    message: str,
+    changes: Sequence[ChangedFile],
+    errata: dict[str, dict[str, str]] | None = None,
+) -> list[str]:
     """Return every schema or coverage error; empty means valid."""
 
     contributors, errors = _json_trailers(message, "Contributor")
@@ -502,6 +591,9 @@ def validate_message(message: str, changes: Sequence[ChangedFile]) -> list[str]:
         )
     for path in sorted(set(expected) & set(seen)):
         if seen[path] != expected[path]:
+            record = (errata or {}).get(_display_path(path))
+            if _errata_excuses(record, seen[path], expected[path]):
+                continue
             errors.append(
                 f"operation mismatch for {_display_path(path)!r}: "
                 f"message={seen[path]!r}, git={expected[path]!r}"
@@ -728,7 +820,12 @@ def validate_commit(
     correction = _load_corrections(repo, policy).get(resolved)
     if correction is not None:
         message, correction_errors = _apply_correction(message, resolved, correction)
-    return "checked", correction_errors + validate_message(message, commit_changes(resolved, repo))
+    # Errata are resolved by FULL commit sha, so a correction recorded for one
+    # commit can never silently apply to another.
+    errata = load_errata(repo).get(resolved)
+    return "checked", correction_errors + validate_message(
+        message, commit_changes(resolved, repo), errata
+    )
 
 
 def validate_gitlink_range(

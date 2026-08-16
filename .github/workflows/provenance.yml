@@ -1,0 +1,112 @@
+name: Commit provenance
+
+# This repository carried the policy, the checker, the corrections record and a
+# local commit-msg hook, but nothing that ran on a server -- so the gate only
+# bound clones that had the hook installed. `--no-verify`, a fresh clone, or a
+# web-UI merge all bypassed it silently. This job is the enforcement half.
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel an earlier run: a later push range starts after the prior SHA,
+# so cancellation could permanently leave that prior commit unchecked.
+concurrency:
+  group: provenance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: human + AI + per-file attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Validate introduced commits
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request)
+              revision_range="$BASE_SHA..$HEAD_SHA"
+              activation_ref="$BASE_SHA"
+              ;;
+            push)
+              activation_ref="$BEFORE_SHA"
+              default_ref="refs/remotes/origin/$DEFAULT_BRANCH"
+              default_has_policy=0
+              if [[ -n "$DEFAULT_BRANCH" ]]; then
+                git fetch --no-tags origin \
+                  "refs/heads/$DEFAULT_BRANCH:$default_ref"
+                if git rev-parse --verify -q "$default_ref^{commit}" >/dev/null && \
+                   [[ -n "$(git rev-list -n 1 "$default_ref" -- .provenance-policy.json)" ]]; then
+                  default_has_policy=1
+                fi
+              fi
+              if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+                revision_range="$HEAD_SHA"
+                if [[ "$default_has_policy" -eq 1 ]]; then
+                  # A newly created branch has no BEFORE_SHA. Anchor its
+                  # checker and policy to the already-protected default branch.
+                  activation_ref="$default_ref"
+                  revision_range="$default_ref..$HEAD_SHA"
+                else
+                  # One-time bootstrap for a repository whose default branch
+                  # does not contain the policy yet.
+                  activation_commit="$(git rev-list --reverse "$HEAD_SHA" -- .provenance-policy.json | head -n 1)"
+                  if [[ -n "$activation_commit" ]] && \
+                     git rev-parse --verify -q "$activation_commit^" >/dev/null; then
+                    activation_ref="$activation_commit^"
+                  else
+                    activation_ref=""
+                  fi
+                fi
+              else
+                revision_range="$BEFORE_SHA..$HEAD_SHA"
+                if [[ -z "$(git rev-list -n 1 "$BEFORE_SHA" -- .provenance-policy.json)" ]] && \
+                   [[ "$default_has_policy" -eq 1 ]]; then
+                  # A long-lived pre-policy branch still uses the trusted
+                  # default-branch checker for newly pushed commits.
+                  activation_ref="$default_ref"
+                fi
+              fi
+              ;;
+            *)
+              activation_ref="$HEAD_SHA^"
+              revision_range="$HEAD_SHA^!"
+              ;;
+          esac
+          enforcement=()
+          if [[ -n "$activation_ref" ]] && \
+             [[ -n "$(git rev-list -n 1 "$activation_ref" -- .provenance-policy.json)" ]]; then
+            enforcement=(--enforce-all)
+          fi
+          # Run the checker and policy as of the BASE commit, never the pushed
+          # one: otherwise a change may weaken the gate that judges it.
+          checker="tools/check_commit_provenance.py"
+          policy_args=()
+          if [[ -n "$activation_ref" ]] && \
+             git cat-file -e "$activation_ref:tools/check_commit_provenance.py" 2>/dev/null && \
+             git cat-file -e "$activation_ref:.provenance-policy.json" 2>/dev/null; then
+            git show "$activation_ref:tools/check_commit_provenance.py" > /tmp/check_commit_provenance.py
+            git show "$activation_ref:.provenance-policy.json" > /tmp/provenance-policy.json
+            checker="/tmp/check_commit_provenance.py"
+            policy_args=(--policy /tmp/provenance-policy.json)
+          fi
+          python3 "$checker" "${policy_args[@]}" range "$revision_range" "${enforcement[@]}"
