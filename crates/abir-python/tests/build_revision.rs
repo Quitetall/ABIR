@@ -195,6 +195,7 @@ fn warmed_cargo_build_rechecks_new_untracked_paths() {
     let lock_status = Command::new(
         std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo")),
     )
+    .current_dir(&repository)
     .arg("generate-lockfile")
     .arg("--manifest-path")
     .arg(manifest_dir.join("Cargo.toml"))
@@ -248,10 +249,15 @@ fn cargo_build_output(manifest_dir: &Path) -> std::process::Output {
 }
 
 fn cargo_build_command(manifest_dir: &Path) -> Command {
+    let repository = manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("fixture manifest must be nested under repository/crates");
     let mut command = Command::new(
         std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo")),
     );
     command
+        .current_dir(repository)
         .arg("build")
         .arg("--quiet")
         .arg("--manifest-path")
