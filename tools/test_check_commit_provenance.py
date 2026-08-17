@@ -261,6 +261,46 @@ class MergeAuthorshipTests(unittest.TestCase):
             self.assertNotIn("from_side.txt", paths)
             self.assertEqual(paths, set())
 
+    def test_octopus_merge_drops_every_inherited_side(self) -> None:
+        """Comparing against parents[1] alone missed the third side onward."""
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init", "-q", "-b", "main")
+            (repo / "base.txt").write_text("base\n", encoding="utf-8")
+            self._git(repo, "add", "base.txt")
+            self._git(repo, "commit", "-q", "-m", "base")
+
+            for name in ("one", "two"):
+                self._git(repo, "checkout", "-q", "-b", f"side_{name}", "main")
+                (repo / f"from_{name}.txt").write_text(name, encoding="utf-8")
+                self._git(repo, "add", f"from_{name}.txt")
+                self._git(repo, "commit", "-q", "-m", f"{name} adds a file")
+
+            # main must advance first: without a commit of its own, git
+            # fast-forwards to side_one and the result has only two parents,
+            # which would silently not exercise this case at all.
+            self._git(repo, "checkout", "-q", "main")
+            (repo / "from_main.txt").write_text("main", encoding="utf-8")
+            self._git(repo, "add", "from_main.txt")
+            self._git(repo, "commit", "-q", "-m", "main advances")
+
+            self._git(
+                repo, "merge", "-q", "-m", "octopus", "side_one", "side_two"
+            )
+            merge_sha = self._git(repo, "rev-parse", "HEAD")
+            self.assertEqual(
+                len(self._git(repo, "rev-list", "--parents", "-n", "1", merge_sha).split()),
+                4,
+                "expected a genuine three-parent octopus merge",
+            )
+
+            paths = {
+                change.path.decode() for change in PROVENANCE.commit_changes(merge_sha, repo)
+            }
+            # from_two.txt comes from the THIRD parent -- the case parents[1]
+            # alone could not see.
+            self.assertEqual(paths, set())
+
     def test_non_merge_commit_is_unaffected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

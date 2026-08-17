@@ -262,7 +262,10 @@ def commit_changes(commit: str, repo: Path | str = Path(".")) -> list[ChangedFil
     if len(parents) < 2:
         return changes
 
-    second = parents[1].decode("ascii")
+    # Every non-first parent, not just the second: an octopus merge inherits
+    # from all of them, and comparing against parents[1] alone would demand a
+    # trailer for whatever arrived verbatim from the third side onward.
+    others = [parent.decode("ascii") for parent in parents[1:]]
 
     def _blob(ref: str, path: bytes) -> bytes | None:
         try:
@@ -278,7 +281,10 @@ def commit_changes(commit: str, repo: Path | str = Path(".")) -> list[ChangedFil
     return [
         change
         for change in changes
-        if _blob(commit, change.path) != _blob(second, change.path)
+        if all(
+            _blob(commit, change.path) != _blob(other, change.path)
+            for other in others
+        )
     ]
 
 
