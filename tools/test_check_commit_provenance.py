@@ -301,6 +301,68 @@ class MergeAuthorshipTests(unittest.TestCase):
             # alone could not see.
             self.assertEqual(paths, set())
 
+    def test_declaring_an_inherited_path_is_tolerated_but_a_stranger_is_not(
+        self,
+    ) -> None:
+        """The merge rule must not turn a declared trailer into an error.
+
+        Dropping inherited paths empties `expected`, so a merge that documents
+        what it carried across read as "unexpected File-Contribution" for every
+        one -- the rule converted one failure mode into another. Declaring what
+        you merged is informative; a trailer for a path the commit never touched
+        is still false, and that distinction is what this pins.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._git(repo, "init", "-q", "-b", "main")
+            (repo / "base.txt").write_text("base\n", encoding="utf-8")
+            self._git(repo, "add", "base.txt")
+            self._git(repo, "commit", "-q", "-m", "base")
+
+            self._git(repo, "checkout", "-q", "-b", "side")
+            (repo / "from_side.txt").write_text("side\n", encoding="utf-8")
+            self._git(repo, "add", "from_side.txt")
+            self._git(repo, "commit", "-q", "-m", "side adds a file")
+
+            self._git(repo, "checkout", "-q", "main")
+            (repo / "from_main.txt").write_text("main\n", encoding="utf-8")
+            self._git(repo, "add", "from_main.txt")
+            self._git(repo, "commit", "-q", "-m", "main adds a file")
+
+            self._git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+            merge_sha = self._git(repo, "rev-parse", "HEAD")
+
+            authored, inherited = PROVENANCE.commit_changes_split(merge_sha, repo)
+            self.assertEqual(authored, [])
+            self.assertEqual(inherited, {b"from_side.txt"})
+
+            def message(path: str) -> str:
+                return (
+                    "merge side\n\n"
+                    'AI-Assisted-By: {"actor": "claude", "roles": ["author"]}\n'
+                    'File-Contribution: {"path": "%s", "operation": "add", '
+                    '"actors": [{"actor": "claude", "role": "author"}]}\n' % path
+                )
+
+            tolerated = PROVENANCE.validate_message(
+                message("from_side.txt"), authored, None, inherited
+            )
+            self.assertEqual(
+                [error for error in tolerated if "unexpected" in error],
+                [],
+                "a trailer for an inherited path must not be reported",
+            )
+
+            # The tolerance is scoped to what the merge actually carried: a
+            # path in neither set is still a false claim.
+            stranger = PROVENANCE.validate_message(
+                message("never_touched.txt"), authored, None, inherited
+            )
+            self.assertTrue(
+                any("unexpected" in error for error in stranger),
+                "a trailer for an untouched path must still fail",
+            )
+
     def test_non_merge_commit_is_unaffected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

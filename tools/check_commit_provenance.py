@@ -138,7 +138,29 @@ def parse_raw_diff(raw: bytes) -> list[ChangedFile]:
     return changes
 
 
+def _inherited_paths(
+    parsed: Sequence[ChangedFile], authored: Sequence[ChangedFile]
+) -> set[bytes]:
+    """Paths the merge rule removed: present in the raw diff, not authored.
+
+    Declaring provenance for content you merged is informative rather than
+    false, so these are tolerated when they appear as trailers. A trailer for a
+    path in NEITHER set is still an error -- that names a file the commit does
+    not touch at all, which is the case the check exists to catch.
+    """
+
+    return {change.path for change in parsed} - {change.path for change in authored}
+
+
 def staged_changes(repo: Path | str = Path(".")) -> list[ChangedFile]:
+    return staged_changes_split(repo)[0]
+
+
+def staged_changes_split(
+    repo: Path | str = Path("."),
+) -> tuple[list[ChangedFile], set[bytes]]:
+    """Staged changes as (authored, inherited-by-merge)."""
+
     repo_path = Path(repo)
     has_head = subprocess.run(
         ["git", "rev-parse", "--verify", "HEAD"],
@@ -162,7 +184,9 @@ def staged_changes(repo: Path | str = Path(".")) -> list[ChangedFile]:
             "--no-renames",
             empty_tree,
         )
-    return _drop_inherited_merge_paths(repo_path, parse_raw_diff(raw))
+    parsed = parse_raw_diff(raw)
+    authored = _drop_inherited_merge_paths(repo_path, parsed)
+    return authored, _inherited_paths(parsed, authored)
 
 
 def _drop_inherited_merge_paths(
@@ -241,7 +265,15 @@ def _commit_raw_diff(repo: Path, commit: str) -> bytes:
 
 
 def commit_changes(commit: str, repo: Path | str = Path(".")) -> list[ChangedFile]:
-    """Files a commit authored -- for a merge, only what it reconciled.
+    """Files a commit authored -- see `commit_changes_split`."""
+
+    return commit_changes_split(commit, repo)[0]
+
+
+def commit_changes_split(
+    commit: str, repo: Path | str = Path(".")
+) -> tuple[list[ChangedFile], set[bytes]]:
+    """A commit's files as (authored, inherited-by-merge).
 
     `_drop_inherited_merge_paths` already applies this rule to the staged path,
     but that is only the half the hook sees: the hook checks the index before a
@@ -260,7 +292,7 @@ def commit_changes(commit: str, repo: Path | str = Path(".")) -> list[ChangedFil
     changes = parse_raw_diff(_commit_raw_diff(repo_path, commit))
     parents = _run_git(repo_path, "rev-list", "--parents", "-n", "1", commit).split()[1:]
     if len(parents) < 2:
-        return changes
+        return changes, set()
 
     # Every non-first parent, not just the second: an octopus merge inherits
     # from all of them, and comparing against parents[1] alone would demand a
@@ -278,7 +310,7 @@ def commit_changes(commit: str, repo: Path | str = Path(".")) -> list[ChangedFil
             return None
 
     # Absence counts as agreement, so an inherited deletion is inherited too.
-    return [
+    authored = [
         change
         for change in changes
         if all(
@@ -286,6 +318,7 @@ def commit_changes(commit: str, repo: Path | str = Path(".")) -> list[ChangedFil
             for other in others
         )
     ]
+    return authored, _inherited_paths(changes, authored)
 
 
 def _json_trailers(message: str, key: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -501,8 +534,15 @@ def validate_message(
     message: str,
     changes: Sequence[ChangedFile],
     errata: dict[str, dict[str, str]] | None = None,
+    inherited: Sequence[bytes] | set[bytes] | None = None,
 ) -> list[str]:
-    """Return every schema or coverage error; empty means valid."""
+    """Return every schema or coverage error; empty means valid.
+
+    `inherited` names paths a merge took verbatim from a non-first parent. They
+    are excluded from `changes` on purpose -- a clean merge authors nothing --
+    but a commit that DECLARES them is being informative, not making a false
+    claim, so they are tolerated here rather than reported as unexpected.
+    """
 
     contributors, errors = _json_trailers(message, "Contributor")
     errors.extend(_validate_trailer_placement(message))
@@ -584,7 +624,7 @@ def validate_message(
             errors.append(f"{label}: generated_by must be a non-empty command")
 
     missing = sorted(set(expected) - set(seen))
-    unexpected = sorted(set(seen) - set(expected))
+    unexpected = sorted(set(seen) - set(expected) - set(inherited or ()))
     if missing:
         errors.append(
             "missing File-Contribution for: "
@@ -829,8 +869,9 @@ def validate_commit(
     # Errata are resolved by FULL commit sha, so a correction recorded for one
     # commit can never silently apply to another.
     errata = load_errata(repo).get(resolved)
+    authored, inherited = commit_changes_split(resolved, repo)
     return "checked", correction_errors + validate_message(
-        message, commit_changes(resolved, repo), errata
+        message, authored, errata, inherited
     )
 
 
@@ -940,7 +981,8 @@ def _print_errors(errors: Sequence[str]) -> None:
 def _cmd_staged(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     message = Path(args.message_file).read_text(encoding="utf-8")
-    errors = validate_message(message, staged_changes(repo))
+    staged, staged_inherited = staged_changes_split(repo)
+    errors = validate_message(message, staged, None, staged_inherited)
     if errors:
         _print_errors(errors)
         return 1
