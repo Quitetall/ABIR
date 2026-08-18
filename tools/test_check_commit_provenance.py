@@ -337,11 +337,17 @@ class MergeAuthorshipTests(unittest.TestCase):
             self.assertEqual(inherited, {b"from_side.txt"})
 
             def message(path: str) -> str:
+                # `by`, not `actors`: the real schema key, so this exercises a
+                # WELL-FORMED trailer. With the wrong key the path still lands
+                # in `seen` and the assertions below still hold, which is
+                # exactly why it would go unnoticed -- the test would be
+                # measuring the unexpected-path logic through a trailer no
+                # commit hook would ever accept.
                 return (
                     "merge side\n\n"
-                    'AI-Assisted-By: {"actor": "claude", "roles": ["author"]}\n'
+                    'AI-Assisted-By: {"id": "ai:test", "roles": ["author"]}\n'
                     'File-Contribution: {"path": "%s", "operation": "add", '
-                    '"actors": [{"actor": "claude", "role": "author"}]}\n' % path
+                    '"by": [{"actor": "ai:test", "role": "author"}]}\n' % path
                 )
 
             tolerated = PROVENANCE.validate_message(
